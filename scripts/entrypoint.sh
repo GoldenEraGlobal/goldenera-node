@@ -15,20 +15,24 @@ APP_JAR="${APP_HOME}/app.jar"
 DATA_DIR="${APP_HOME}/node_data"
 LOG_DIR="${APP_HOME}/node_logs"
 
-JAVA_BIN="${JAVA_HOME:-/opt/java/openjdk}/bin/java"
+JAVA_BIN=$(which java)
+
+if [ -z "$JAVA_BIN" ]; then
+    echo ">>> [ERROR] Java not found in PATH! Falling back to likely path..."
+    JAVA_BIN="/opt/java/openjdk/bin/java"
+fi
 
 ARCH=$(uname -m)
 
 echo ">>> [BOOT] GoldenEra Node Initialization"
 echo ">>> [INFO] CPU: $ARCH"
+echo ">>> [INFO] Java executable: $JAVA_BIN"
 
 # ==============================================================================
 # PERMISSION FIX
 # ==============================================================================
-echo ">>> [INIT] Fixing permissions for: $DATA_DIR and $LOG_DIR"
-
+echo ">>> [INIT] Enforcing permissions..."
 mkdir -p "$DATA_DIR" "$LOG_DIR" "$OVERRIDES_DIR"
-
 chown -R blockchain:blockchain "$DATA_DIR"
 chown -R blockchain:blockchain "$LOG_DIR"
 chown -R blockchain:blockchain "$OVERRIDES_DIR"
@@ -52,8 +56,8 @@ fi
 
 echo ">>> [INFO] Total Memory: ${MEM_TOTAL_MB} MB"
 
-# Reserve: RandomX (2.5GB) + Postgres (1GB) + OS (1GB) = 4.5 GB
-RESERVED_MB=4608
+# Reserve: RandomX (2.5GB)
+RESERVED_MB=3072
 
 if [ "$MEM_TOTAL_MB" -lt 5500 ]; then
     echo ">>> [WARN] Low Memory. Using minimal Heap."
@@ -134,5 +138,5 @@ exec su -s /bin/bash blockchain -c "$JAVA_BIN \
   -Djava.net.preferIPv4Stack=true \
   -DAPP_DATA_DIR=$DATA_DIR \
   -Djava.security.egd=file:/dev/./urandom \
-  -cp ${OVERRIDES_DIR}:${APP_JAR} \
+  -cp ${OVERRIDE_DIR}:${APP_JAR} \
   org.springframework.boot.loader.launch.JarLauncher"
