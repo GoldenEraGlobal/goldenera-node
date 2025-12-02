@@ -301,9 +301,21 @@
 
     <build>
         <resources>
+            <!-- Enable filtering only for version.properties -->
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
+                <includes>
+                    <include>version.properties</include>
+                </includes>
+            </resource>
+            <!-- Disable filtering for all other resources -->
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>version.properties</exclude>
+                </excludes>
             </resource>
         </resources>
         <plugins>
