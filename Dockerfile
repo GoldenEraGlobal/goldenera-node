@@ -7,23 +7,30 @@ ARG GITHUB_ACTOR
 
 WORKDIR /app
 
+# Copy Maven wrapper first
 COPY .mvn/ .mvn
 COPY mvnw pom.xml ./
 RUN chmod +x mvnw
 
-RUN mkdir -p /root/.m2 && \
-    echo "<settings><servers>" > /root/.m2/settings.xml && \
-    echo "  <server><id>github-merkletrie</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
-    echo "  <server><id>github-rlp</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
-    echo "  <server><id>github-cryptoj</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
-    echo "  <server><id>github</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
-    echo "</servers></settings>" >> /root/.m2/settings.xml
+# Settings XML generation
+RUN echo "<settings><servers>" > settings.xml && \
+    echo "  <server><id>github-merkletrie</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
+    echo "  <server><id>github-rlp</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
+    echo "  <server><id>github-cryptoj</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
+    echo "  <server><id>github</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
+    echo "</servers></settings>" >> settings.xml
 
-# Secure Dependency Download
-COPY src ./src
+# Download Dependencies (Permanent Layer)
 RUN --mount=type=secret,id=github_token \
     export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    ./mvnw clean package -DskipTests -s /root/.m2/settings.xml
+    ./mvnw dependency:resolve dependency:resolve-plugins -s settings.xml || true
+
+# Build Application
+COPY src ./src
+
+RUN --mount=type=secret,id=github_token \
+    export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
+    ./mvnw clean package -DskipTests -s settings.xml
 
 # ==============================================================================
 # STAGE 2: Production Runtime (Ubuntu 24.04 + RandomX JIT)
