@@ -5,7 +5,7 @@ set -e
 # CONFIG
 # ==============================================================================
 WRAPPER_SRC="/usr/src/goldenera-randomx"
-RANDOMX_SRC="${WRAPPER_SRC}/randomx"
+RANDOMX_SRC="${WRAPPER_SRC}/RandomX"
 
 APP_HOME="/app"
 OVERRIDES_DIR="${APP_HOME}/overrides"
