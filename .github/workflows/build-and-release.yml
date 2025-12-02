@@ -96,7 +96,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   # ==============================================================================
-  # JOB 2: BUILD IMAGES (NATIVE MATRIX: AMD64 + ARM64)
+  # JOB 2: BUILD IMAGES (MATRIX)
   # ==============================================================================
   build-images:
     needs: build-and-release

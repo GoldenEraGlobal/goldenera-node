@@ -16,9 +16,7 @@ DATA_DIR="${APP_HOME}/node_data"
 LOG_DIR="${APP_HOME}/node_logs"
 
 JAVA_BIN=$(which java)
-
 if [ -z "$JAVA_BIN" ]; then
-    echo ">>> [ERROR] Java not found in PATH! Falling back to likely path..."
     JAVA_BIN="/opt/java/openjdk/bin/java"
 fi
 
@@ -26,13 +24,13 @@ ARCH=$(uname -m)
 
 echo ">>> [BOOT] GoldenEra Node Initialization"
 echo ">>> [INFO] CPU: $ARCH"
-echo ">>> [INFO] Java executable: $JAVA_BIN"
 
 # ==============================================================================
 # PERMISSION FIX
 # ==============================================================================
-echo ">>> [INIT] Enforcing permissions..."
+echo ">>> [INIT] Enforcing permissions for persistence layers..."
 mkdir -p "$DATA_DIR" "$LOG_DIR" "$OVERRIDES_DIR"
+
 chown -R blockchain:blockchain "$DATA_DIR"
 chown -R blockchain:blockchain "$LOG_DIR"
 chown -R blockchain:blockchain "$OVERRIDES_DIR"
@@ -56,7 +54,7 @@ fi
 
 echo ">>> [INFO] Total Memory: ${MEM_TOTAL_MB} MB"
 
-# Reserve: RandomX (2.5GB)
+# RandomX (2.5GB)
 RESERVED_MB=3072
 
 if [ "$MEM_TOTAL_MB" -lt 5500 ]; then
@@ -85,7 +83,7 @@ mkdir -p "$NATIVE_PKG_DIR"
 FINAL_LIB_PATH="${NATIVE_PKG_DIR}/${TARGET_FILENAME}"
 
 if [ -f "$FINAL_LIB_PATH" ]; then
-    echo ">>> [SKIP] Optimized library found. Skipping build."
+    echo ">>> [SKIP] Native library found. Skipping build."
 else
     echo ">>> [BUILD] Compiling RandomX optimized for THIS CPU..."
     
@@ -110,7 +108,7 @@ else
     if [ -f "librandomx.so" ]; then
         cp librandomx.so "$FINAL_LIB_PATH"
         chown blockchain:blockchain "$FINAL_LIB_PATH"
-        echo ">>> [SUCCESS] Library compiled and installed."
+        echo ">>> [SUCCESS] Library compiled."
     else
         echo ">>> [FATAL] Build failed."
         exit 1
@@ -129,14 +127,7 @@ exec su -s /bin/bash blockchain -c "$JAVA_BIN \
   -XX:+UseZGC \
   -XX:+ZGenerational \
   ${JAVA_MEM_OPTS} \
-  -XX:MaxMetaspaceSize=384m \
-  -Xss512k \
-  -XX:+UseStringDeduplication \
-  -XX:+ExitOnOutOfMemoryError \
-  -XX:CICompilerCount=2 \
-  -Djava.awt.headless=true \
-  -Djava.net.preferIPv4Stack=true \
   -DAPP_DATA_DIR=$DATA_DIR \
   -Djava.security.egd=file:/dev/./urandom \
-  -cp ${OVERRIDE_DIR}:${APP_JAR} \
+  -cp ${OVERRIDES_DIR}:${APP_JAR} \
   org.springframework.boot.loader.launch.JarLauncher"

@@ -11,32 +11,24 @@ COPY .mvn/ .mvn
 COPY mvnw pom.xml ./
 RUN chmod +x mvnw
 
-# Settings XML generation
-RUN echo "<settings><servers>" > settings.xml && \
-    echo "  <server><id>github-merkletrie</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
-    echo "  <server><id>github-rlp</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
-    echo "  <server><id>github-cryptoj</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
-    echo "  <server><id>github</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
-    echo "</servers></settings>" >> settings.xml
+RUN mkdir -p /root/.m2 && \
+    echo "<settings><servers>" > /root/.m2/settings.xml && \
+    echo "  <server><id>github-merkletrie</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
+    echo "  <server><id>github-rlp</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
+    echo "  <server><id>github-cryptoj</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
+    echo "  <server><id>github</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> /root/.m2/settings.xml && \
+    echo "</servers></settings>" >> /root/.m2/settings.xml
 
-# Resolve dependencies
-RUN --mount=type=secret,id=github_token \
-    --mount=type=cache,target=/root/.m2 \
-    export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    ./mvnw dependency:go-offline -s settings.xml || true
-
-# Build Package
+# Secure Dependency Download
 COPY src ./src
-
 RUN --mount=type=secret,id=github_token \
-    --mount=type=cache,target=/root/.m2 \
     export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    ./mvnw clean package -DskipTests -s settings.xml
+    ./mvnw clean package -DskipTests -s /root/.m2/settings.xml
 
 # ==============================================================================
-# STAGE 2: Production Runtime (Ubuntu + RandomX JIT)
+# STAGE 2: Production Runtime (Ubuntu 24.04 + RandomX JIT)
 # ==============================================================================
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
@@ -54,7 +46,7 @@ RUN wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee
     && echo "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list \
     && apt-get update && apt-get install -y temurin-21-jdk && rm -rf /var/lib/apt/lists/*
 
-# 3. Clone RandomX
+# 3. Clone RandomX Fork
 WORKDIR /usr/src
 RUN git clone https://github.com/GoldenEraGlobal/goldenera-randomx.git \
     && cd goldenera-randomx \
@@ -70,13 +62,13 @@ COPY --from=app-builder /app/target/*.jar ${APP_HOME}/app.jar
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# 6. Structure & Permissions (Initial setup)
+# 6. Structure & Permissions
 RUN mkdir -p ${APP_HOME}/overrides/native \
     && mkdir -p ${APP_HOME}/node_logs \
     && mkdir -p ${APP_HOME}/node_data \
     && chown -R blockchain:blockchain ${APP_HOME}
 
-EXPOSE 8080 9000 443 80
+EXPOSE 8080 9000 80 443
 VOLUME ["/app/node_data", "/app/node_logs"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
