@@ -1,0 +1,61 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.shared.enums.state;
+
+import static lombok.AccessLevel.PRIVATE;
+
+import java.util.Arrays;
+import java.util.Comparator;
+
+import global.goldenera.node.shared.exceptions.GEFailedException;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.experimental.FieldDefaults;
+
+@AllArgsConstructor
+@Getter
+@FieldDefaults(level = PRIVATE, makeFinal = true)
+public enum NetworkParamsStateVersion {
+	V1(1);
+
+	int code;
+
+	public static NetworkParamsStateVersion fromCode(int code) {
+		for (NetworkParamsStateVersion version : values()) {
+			if (version.getCode() == code) {
+				return version;
+			}
+		}
+		throw new GEFailedException("Unknown NetworkParamsStateVersion code: " + code);
+	}
+
+	/**
+	 * Returns the version with the highest code value (logically the newest).
+	 */
+	public static NetworkParamsStateVersion getLatest() {
+		return Arrays.stream(values())
+				.max(Comparator.comparingInt(NetworkParamsStateVersion::getCode))
+				.orElseThrow(() -> new GEFailedException("No NetworkParamsStateVersion defined"));
+	}
+}

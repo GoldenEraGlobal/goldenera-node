@@ -1,0 +1,60 @@
+services:
+  # ==============================================================================
+  # GOLDENERA NODE
+  # ==============================================================================
+  node:
+    image: goldenera-node:local
+    container_name: goldenera_node_local
+    restart: unless-stopped
+    pull_policy: never
+
+    env_file:
+      - .env
+
+    environment:
+      - POSTGRESQL_HOST=db
+      - LOGGING_FILE=${LOGGING_FILE:-node.log}
+
+    ports:
+      - "${LISTEN_PORT:-8080}:8080"
+      - "${P2P_PORT:-9000}:9000"
+
+    volumes:
+      - ./node_data:/app/node_data
+      - ${LOGGING_DIR:-./node_logs}:/app/node_logs
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    deploy:
+      resources:
+        reservations:
+          memory: 4G
+
+  # ==============================================================================
+  # DATABASE
+  # ==============================================================================
+  db:
+    image: postgres:18.1-alpine
+    container_name: goldenera_db
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    command: postgres -c shared_buffers=512MB -c max_connections=100
+
+    environment:
+      POSTGRES_DB: ${POSTGRESQL_DB_NAME:-node_db}
+      POSTGRES_USER: ${POSTGRESQL_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:-password}
+
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USERNAME:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

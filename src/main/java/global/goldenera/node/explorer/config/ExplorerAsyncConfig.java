@@ -1,0 +1,73 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.explorer.config;
+
+import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+
+@Configuration
+@EnableAsync
+public class ExplorerAsyncConfig {
+
+	public static final String EXPLORER_EXECUTOR = "explorerTaskExecutor";
+	public static final String EXPLORER_SCHEDULER = "explorerTaskScheduler";
+
+	public static final String EXPLORER_WEBHOOK_SCHEDULER = "explorerWebhookTaskScheduler";
+
+	@Bean(name = EXPLORER_EXECUTOR)
+	public Executor explorerTaskExecutor() {
+		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(4);
+		executor.setMaxPoolSize(8);
+		executor.setQueueCapacity(1000);
+		executor.setThreadNamePrefix("Explorer-Worker-");
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+		executor.initialize();
+		return executor;
+	}
+
+	@Bean(name = EXPLORER_SCHEDULER)
+	public ThreadPoolTaskScheduler explorerTaskScheduler() {
+		ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+		scheduler.setPoolSize(2);
+		scheduler.setThreadNamePrefix("Explorer-Sched-");
+		scheduler.initialize();
+		return scheduler;
+	}
+
+	@Bean(name = EXPLORER_WEBHOOK_SCHEDULER)
+	public ThreadPoolTaskScheduler explorerWebhookTaskScheduler() {
+		ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+		scheduler.setPoolSize(2);
+		scheduler.setThreadNamePrefix("Explorer-Webhook-Sched-");
+		scheduler.initialize();
+		return scheduler;
+	}
+}

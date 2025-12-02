@@ -1,0 +1,62 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.explorer.enums;
+
+import static lombok.AccessLevel.PRIVATE;
+
+import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.node.shared.exceptions.GEFailedException;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.experimental.FieldDefaults;
+
+@AllArgsConstructor
+@FieldDefaults(level = PRIVATE, makeFinal = true)
+@Getter
+public enum TransferType {
+	TRANSFER(0), BLOCK_FEES(1), BLOCK_REWARD(2), MINT(3), BURN(4);
+
+	int code;
+
+	public static TransferType fromCode(int code) {
+		for (TransferType type : values()) {
+			if (type.getCode() == code) {
+				return type;
+			}
+		}
+		throw new GEFailedException("Unknown TransferType code: " + code + " in TransferType.fromCode");
+	}
+
+	public static TransferType resolveFromTx(Tx tx) {
+		if (tx.getType() == TxType.TRANSFER) {
+			if (Address.ZERO.equals(tx.getRecipient())) {
+				return BURN;
+			}
+			return TRANSFER;
+		}
+		return TRANSFER;
+	}
+}
