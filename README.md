@@ -16,6 +16,19 @@ To run a node successfully, your system **must** meet the following minimum requ
 
 ---
 
+## 🛠️ Prerequisites
+
+Before proceeding with the installation, ensure that **Docker** and the **Docker Compose** plugin are installed on your system.
+
+* **Install Docker Engine:** Follow the official instructions for your operating system (Ubuntu, Debian, CentOS, etc.) here: [Install Docker Engine](https://docs.docker.com/engine/install/)
+* **Verify Installation:** Run the following commands to ensure Docker is running correctly:
+    ```bash
+    docker --version
+    docker compose version
+    ```
+
+---
+
 ## 🚀 Installation & Setup
 
 ### 1. Optimize Linux Kernel (Recommended)
