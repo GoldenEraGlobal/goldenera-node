@@ -33,6 +33,8 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.explorer.entities.ExStatus;
 import global.goldenera.node.explorer.exceptions.AlreadyIndexedException;
 import global.goldenera.node.explorer.exceptions.ChainSplitException;
@@ -56,6 +58,8 @@ import lombok.extern.slf4j.Slf4j;
 public class ExIndexerService {
 
 	MeterRegistry registry;
+	ChainQuery chainQueryService;
+	ExIndexerEventReconstructionService eventReconstructionService;
 
 	ExIndexerStatusCoreService exStatusCoreService;
 	ExIndexerRevertService exRevertService;
@@ -71,7 +75,6 @@ public class ExIndexerService {
 	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
 	public void handleBlockConnected(BlockConnectedEvent event) {
 		Timer.Sample sample = Timer.start(registry);
-		long start = System.currentTimeMillis();
 		Block block = event.getBlock();
 
 		int attempts = 0;
@@ -99,6 +102,12 @@ public class ExIndexerService {
 			}
 		}
 
+		processBlock(block, event);
+		sample.stop(registry.timer("explorer.block.index_time"));
+	}
+
+	private void processBlock(Block block, BlockConnectedEvent event) {
+		long start = System.currentTimeMillis();
 		if (block.getHeight() % 10000 == 0) {
 			postgrePartitionService.ensurePartitionsExist(block.getHeight());
 		}
@@ -125,8 +134,6 @@ public class ExIndexerService {
 		} catch (Exception e) {
 			log.error("CRITICAL: Failed to index block #{}. Rolling back.", block.getHeight(), e);
 			throw new GEFailedException("Block indexing failed", e);
-		} finally {
-			sample.stop(registry.timer("explorer.block.index_time"));
 		}
 	}
 
@@ -161,9 +168,8 @@ public class ExIndexerService {
 			throw new AlreadyIndexedException("Block " + incomingHeight + " already indexed");
 		}
 		if (incomingHeight > height + 1) {
-			throw new GEFailedException(String.format(
-					"INTEGRITY ERROR: Gap detected! Explorer Head: #%d, Received: #%d. Missing blocks in between.",
-					height, incomingHeight));
+			log.warn("Gap detected! Explorer Head: #%d, Received: #%d. Healing...", height, incomingHeight);
+			healGap(height + 1, incomingHeight - 1);
 		}
 		if (!block.getHeader().getPreviousHash().equals(hash)) {
 			throw new ChainSplitException(String.format(
@@ -185,6 +191,22 @@ public class ExIndexerService {
 
 		if (!block.getHash().equals(status.getSyncedBlockHash())) {
 			throw new GEFailedException("REVERT ERROR: Hash mismatch trying to revert HEAD.");
+		}
+	}
+
+	private void healGap(long startHeight, long endHeight) {
+		log.info("Healing gap from #{} to #{}", startHeight, endHeight);
+		for (long h = startHeight; h <= endHeight; h++) {
+			final long currentHeight = h;
+			try {
+				StoredBlock storedBlock = chainQueryService.getStoredBlockByHeight(currentHeight)
+						.orElseThrow(() -> new GEFailedException("Missing block in chain query: " + currentHeight));
+
+				BlockConnectedEvent event = eventReconstructionService.reconstructEvent(storedBlock);
+				processBlock(storedBlock.getBlock(), event);
+			} catch (Exception e) {
+				throw new GEFailedException("Failed to heal gap at block " + h, e);
+			}
 		}
 	}
 
