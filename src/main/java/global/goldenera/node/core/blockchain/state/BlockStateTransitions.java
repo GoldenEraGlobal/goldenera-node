@@ -28,8 +28,10 @@ import static lombok.AccessLevel.PRIVATE;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.units.ethereum.Wei;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
@@ -43,19 +45,27 @@ import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
-@AllArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class BlockStateTransitions {
 
 	BlockRepository blockRepository;
 	ApplicationEventPublisher applicationEventPublisher;
+	ReentrantLock masterChainLock;
+
+	public BlockStateTransitions(
+			BlockRepository blockRepository,
+			ApplicationEventPublisher applicationEventPublisher,
+			@Qualifier("masterChainLock") ReentrantLock masterChainLock) {
+		this.blockRepository = blockRepository;
+		this.applicationEventPublisher = applicationEventPublisher;
+		this.masterChainLock = masterChainLock;
+	}
 
 	public void connectBlock(
 			@NonNull Block block,
@@ -64,97 +74,103 @@ public class BlockStateTransitions {
 			StateProcessor.ExecutionResult executionResult,
 			Address receivedFrom,
 			Instant receivedAt) {
-		long start = System.currentTimeMillis();
-		long height = block.getHeight();
-		BigInteger cumulativeDifficulty;
-
-		if (source == ConnectedSource.GENESIS) {
-			cumulativeDifficulty = block.getHeader().getDifficulty();
-		} else {
-			StoredBlock parentStored = blockRepository
-					.getStoredBlockByHash(block.getHeader().getPreviousHash())
-					.orElseThrow(() -> new GEFailedException(
-							"Parent block not found: " + block.getHeader().getPreviousHash()));
-
-			cumulativeDifficulty = parentStored.getCumulativeDifficulty()
-					.add(block.getHeader().getDifficulty());
-		}
-
-		StoredBlock storedBlockToSave = StoredBlock.builder()
-				.block(block)
-				.cumulativeDifficulty(cumulativeDifficulty)
-				.receivedFrom(receivedFrom)
-				.receivedAt(receivedAt)
-				.connectedSource(source)
-				.build();
-
-		boolean isNewHead = false;
-
-		if (source == ConnectedSource.GENESIS) {
-			isNewHead = true;
-		} else {
-			StoredBlock currentHead = blockRepository.getLatestStoredBlock().orElse(null);
-			if (currentHead == null || cumulativeDifficulty.compareTo(currentHead.getCumulativeDifficulty()) > 0) {
-				isNewHead = true;
-			}
-		}
-
-		final boolean performFullConnect = isNewHead;
-
+		masterChainLock.lock();
 		try {
-			blockRepository.getRepository().executeAtomicBatch(batch -> {
-				worldState.persistToBatch(batch);
-				if (performFullConnect) {
-					blockRepository.addBlockToBatch(batch, storedBlockToSave);
-				} else {
-					try {
-						blockRepository.saveBlockDataToBatch(batch, storedBlockToSave);
-					} catch (Exception e) {
-						throw new RuntimeException(e);
-					}
+			long start = System.currentTimeMillis();
+			long height = block.getHeight();
+			BigInteger cumulativeDifficulty;
+
+			if (source == ConnectedSource.GENESIS) {
+				cumulativeDifficulty = block.getHeader().getDifficulty();
+			} else {
+				StoredBlock parentStored = blockRepository
+						.getStoredBlockByHash(block.getHeader().getPreviousHash())
+						.orElseThrow(() -> new GEFailedException(
+								"Parent block not found: " + block.getHeader().getPreviousHash()));
+
+				cumulativeDifficulty = parentStored.getCumulativeDifficulty()
+						.add(block.getHeader().getDifficulty());
+			}
+
+			StoredBlock storedBlockToSave = StoredBlock.builder()
+					.block(block)
+					.cumulativeDifficulty(cumulativeDifficulty)
+					.receivedFrom(receivedFrom)
+					.receivedAt(receivedAt)
+					.connectedSource(source)
+					.build();
+
+			boolean isNewHead = false;
+
+			if (source == ConnectedSource.GENESIS) {
+				isNewHead = true;
+			} else {
+				StoredBlock currentHead = blockRepository.getLatestStoredBlock().orElse(null);
+				if (currentHead == null || cumulativeDifficulty.compareTo(currentHead.getCumulativeDifficulty()) > 0) {
+					isNewHead = true;
 				}
-			});
-		} catch (RuntimeException e) {
-			log.error("Atomic commit failed for block {}: {}", block.getHeight(), e.getMessage(), e);
-			worldState.rollback();
-			throw new GEFailedException("Atomic commit failed for block " + block.getHeight() + ": " + e.getMessage(),
-					e.getCause() != null ? e.getCause() : e);
-		}
+			}
 
-		long end = System.currentTimeMillis();
+			final boolean performFullConnect = isNewHead;
 
-		if (performFullConnect) {
-			log.info("Block connected as NEW HEAD at height {} (TD: {}) in {}s",
-					block.getHeight(), cumulativeDifficulty, String.format("%.2f", (end - start) / 1000.0));
+			try {
+				blockRepository.getRepository().executeAtomicBatch(batch -> {
+					worldState.persistToBatch(batch);
+					if (performFullConnect) {
+						blockRepository.addBlockToBatch(batch, storedBlockToSave);
+					} else {
+						try {
+							blockRepository.saveBlockDataToBatch(batch, storedBlockToSave);
+						} catch (Exception e) {
+							throw new RuntimeException(e);
+						}
+					}
+				});
+			} catch (RuntimeException e) {
+				log.error("Atomic commit failed for block {}: {}", block.getHeight(), e.getMessage(), e);
+				worldState.rollback();
+				throw new GEFailedException(
+						"Atomic commit failed for block " + block.getHeight() + ": " + e.getMessage(),
+						e.getCause() != null ? e.getCause() : e);
+			}
 
-			Wei totalFees = height == 0 ? Wei.ZERO : executionResult.getTotalFeesCollected();
-			Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
-			Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
+			long end = System.currentTimeMillis();
 
-			BlockConnectedEvent event = new BlockConnectedEvent(
-					this,
-					source,
-					block,
-					worldState.getBalanceDiffs(),
-					worldState.getNonceDiffs(),
-					worldState.getTokenDiffs(),
-					worldState.getBipDiffs(),
-					worldState.getParamsDiff(),
-					worldState.getDirtyAuthorities(),
-					worldState.getAuthoritiesRemovedWithState(),
-					worldState.getDirtyAddressAliases(),
-					worldState.getAliasesRemovedWithState(),
-					totalFees,
-					actualRewardPaid,
-					cumulativeDifficulty,
-					actualBurnAmounts,
-					receivedFrom,
-					receivedAt);
+			if (performFullConnect) {
+				log.info("Block connected as NEW HEAD at height {} (TD: {}) in {}s",
+						block.getHeight(), cumulativeDifficulty, String.format("%.2f", (end - start) / 1000.0));
 
-			applicationEventPublisher.publishEvent(event);
-		} else {
-			log.info("Block {} stored as FORK (TD: {} <= Current Head). No event emitted.",
-					block.getHeight(), cumulativeDifficulty);
+				Wei totalFees = height == 0 ? Wei.ZERO : executionResult.getTotalFeesCollected();
+				Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
+				Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
+
+				BlockConnectedEvent event = new BlockConnectedEvent(
+						this,
+						source,
+						block,
+						worldState.getBalanceDiffs(),
+						worldState.getNonceDiffs(),
+						worldState.getTokenDiffs(),
+						worldState.getBipDiffs(),
+						worldState.getParamsDiff(),
+						worldState.getDirtyAuthorities(),
+						worldState.getAuthoritiesRemovedWithState(),
+						worldState.getDirtyAddressAliases(),
+						worldState.getAliasesRemovedWithState(),
+						totalFees,
+						actualRewardPaid,
+						cumulativeDifficulty,
+						actualBurnAmounts,
+						receivedFrom,
+						receivedAt);
+
+				applicationEventPublisher.publishEvent(event);
+			} else {
+				log.info("Block {} stored as FORK (TD: {} <= Current Head). No event emitted.",
+						block.getHeight(), cumulativeDifficulty);
+			}
+		} finally {
+			masterChainLock.unlock();
 		}
 	}
 }

@@ -163,6 +163,9 @@ public class StateProcessor {
 	 */
 	private Wei processRewardDistribution(WorldState state, SimpleBlock block, NetworkParamsState params, Wei totalFees,
 			Wei feeInflation) {
+		if (block.getHeight() == 0) {
+			return Wei.ZERO;
+		}
 		Wei targetBlockReward = params.getBlockReward();
 		Wei actualBlockRewardPayload = Wei.ZERO; // The actual block reward paid to miner
 		Wei amountToMint = feeInflation; // Start with system fees (inflation)
