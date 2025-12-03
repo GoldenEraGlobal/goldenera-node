@@ -60,7 +60,7 @@ public class Constants {
             .fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76");
     public static final long GENESIS_NETWORK_TARGET_MINING_TIME_MS = 30000; // 30 seconds
     public static final long GENESIS_NETWORK_ASERT_HALF_LIFE_BLOCKS = 20;
-    public static final BigInteger GENESIS_NETWORK_MIN_DIFFICULTY = BigInteger.valueOf(800);
+    public static final BigInteger GENESIS_NETWORK_MIN_DIFFICULTY = BigInteger.valueOf(10000);
     public static final Wei GENESIS_NETWORK_MIN_TX_BASE_FEE = Amounts.tokensDecimal("0.0001");
     public static final Wei GENESIS_NETWORK_MIN_TX_BYTE_FEE = Amounts.tokensDecimal("0.000001");
 
@@ -69,7 +69,7 @@ public class Constants {
             Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"));
 
     // Block
-    public static final long GENESIS_BLOCK_TIMESTAMP = 1764710290434L;
+    public static final long GENESIS_BLOCK_TIMESTAMP = 1764773067365L;
     public static final BigInteger GENESIS_BLOCK_DIFFICULTY = GENESIS_NETWORK_MIN_DIFFICULTY;
 
     // Native token

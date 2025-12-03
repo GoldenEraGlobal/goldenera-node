@@ -25,7 +25,7 @@ package global.goldenera.node.core.state;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -99,20 +99,20 @@ public class WorldState {
 	MerkleTrie<Bytes, TokenState> tokenTrie;
 
 	// Dirty Caches (Mutable state overlay)
-	Map<BalanceKey, AccountBalanceState> dirtyBalances = new HashMap<>();
-	Map<Address, AccountNonceState> dirtyNonces = new HashMap<>();
-	Map<Address, AuthorityState> dirtyAuthorities = new HashMap<>();
-	Map<String, AddressAliasState> dirtyAddressAliases = new HashMap<>();
-	Map<Hash, BipState> dirtyBipStates = new HashMap<>();
-	Map<Address, TokenState> dirtyTokens = new HashMap<>();
+	Map<BalanceKey, AccountBalanceState> dirtyBalances = new LinkedHashMap<>();
+	Map<Address, AccountNonceState> dirtyNonces = new LinkedHashMap<>();
+	Map<Address, AuthorityState> dirtyAuthorities = new LinkedHashMap<>();
+	Map<String, AddressAliasState> dirtyAddressAliases = new LinkedHashMap<>();
+	Map<Hash, BipState> dirtyBipStates = new LinkedHashMap<>();
+	Map<Address, TokenState> dirtyTokens = new LinkedHashMap<>();
 
 	// Initial States (Only populated if isMining == false)
-	Map<BalanceKey, AccountBalanceState> initialBalances = new HashMap<>();
-	Map<Address, AccountNonceState> initialNonces = new HashMap<>();
-	Map<Address, AuthorityState> initialAuthorities = new HashMap<>();
-	Map<String, AddressAliasState> initialAddressAliases = new HashMap<>();
-	Map<Hash, BipState> initialBipStates = new HashMap<>();
-	Map<Address, TokenState> initialTokens = new HashMap<>();
+	Map<BalanceKey, AccountBalanceState> initialBalances = new LinkedHashMap<>();
+	Map<Address, AccountNonceState> initialNonces = new LinkedHashMap<>();
+	Map<Address, AuthorityState> initialAuthorities = new LinkedHashMap<>();
+	Map<String, AddressAliasState> initialAddressAliases = new LinkedHashMap<>();
+	Map<Hash, BipState> initialBipStates = new LinkedHashMap<>();
+	Map<Address, TokenState> initialTokens = new LinkedHashMap<>();
 	NetworkParamsState[] initialNetworkParams = new NetworkParamsState[1];
 
 	// Set of changes for validation logic & deletions
@@ -252,9 +252,9 @@ public class WorldState {
 	private <K, V> Map<K, StateDiff<V>> computeDiff(Map<K, V> dirtyMap, Map<K, V> initialMap, V zeroValue) {
 		// Safety check: Diffs are only available in Validation Mode
 		if (isMining)
-			return new HashMap<>();
+			return new LinkedHashMap<>();
 
-		Map<K, StateDiff<V>> diffs = new HashMap<>(dirtyMap.size());
+		Map<K, StateDiff<V>> diffs = new LinkedHashMap<>(dirtyMap.size());
 		dirtyMap.forEach((key, newValue) -> {
 			V oldValue = initialMap.getOrDefault(key, zeroValue);
 			diffs.put(key, new WorldStateDiff<>(oldValue, newValue));
@@ -572,8 +572,8 @@ public class WorldState {
 
 	public Map<String, AddressAliasState> getAliasesRemovedWithState() {
 		if (isMining)
-			return new HashMap<>();
-		Map<String, AddressAliasState> result = new HashMap<>();
+			return new LinkedHashMap<>();
+		Map<String, AddressAliasState> result = new LinkedHashMap<>();
 		for (String alias : aliasesRemoved) {
 			AddressAliasState oldState = initialAddressAliases.get(alias);
 			if (oldState != null) {
@@ -585,8 +585,8 @@ public class WorldState {
 
 	public Map<Address, AuthorityState> getAuthoritiesRemovedWithState() {
 		if (isMining)
-			return new HashMap<>();
-		Map<Address, AuthorityState> result = new HashMap<>();
+			return new LinkedHashMap<>();
+		Map<Address, AuthorityState> result = new LinkedHashMap<>();
 		for (Address addr : authoritiesRemoved) {
 			AuthorityState oldState = initialAuthorities.get(addr);
 			if (oldState != null) {

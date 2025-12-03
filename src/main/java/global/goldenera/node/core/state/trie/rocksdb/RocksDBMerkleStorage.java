@@ -25,7 +25,7 @@ package global.goldenera.node.core.state.trie.rocksdb;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 
@@ -53,7 +53,7 @@ public class RocksDBMerkleStorage implements MerkleStorage {
 	ColumnFamilyHandle cfHandle;
 	Cache<Hash, Bytes> cache;
 
-	Map<Hash, Bytes> pendingPuts = new HashMap<>();
+	Map<Hash, Bytes> pendingPuts = new LinkedHashMap<>();
 
 	public RocksDBMerkleStorage(RocksDB db, RocksDbColumnFamilies columnFamilies, Cache<Hash, Bytes> cache) {
 		this.db = db;
