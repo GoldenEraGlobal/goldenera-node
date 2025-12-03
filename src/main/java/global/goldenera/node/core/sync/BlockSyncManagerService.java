@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -144,6 +145,8 @@ public class BlockSyncManagerService {
 
 	final Map<Long, CompletableFuture<List<BlockHeader>>> pendingHeaderRequests = new ConcurrentHashMap<>();
 	final Map<Long, CompletableFuture<List<List<Tx>>>> pendingBodyRequests = new ConcurrentHashMap<>();
+
+	final Set<Hash> pendingBroadcastDownloads = ConcurrentHashMap.newKeySet();
 
 	public void start() {
 		if (isRunning.getAndSet(true))
@@ -407,6 +410,12 @@ public class BlockSyncManagerService {
 		if (blockIngestionService.isOrphan(header.getHash())) {
 			return;
 		}
+		// Check if we are already downloading this block
+		if (!pendingBroadcastDownloads.add(header.getHash())) {
+			log.debug("Already downloading broadcast block #{}", header.getHeight());
+			return;
+		}
+
 		try {
 			Block localBest = chainQueryService.getLatestBlockOrThrow();
 
@@ -463,10 +472,17 @@ public class BlockSyncManagerService {
 							}
 							pendingBodyRequests.remove(reqId);
 							return null;
+						})
+						.whenComplete((v, e) -> {
+							pendingBroadcastDownloads.remove(header.getHash());
 						});
+			} else {
+				// If we didn't need to download it (e.g. old block), remove from pending
+				pendingBroadcastDownloads.remove(header.getHash());
 			}
 		} catch (Exception e) {
 			log.error("Failed to handle broadcast header", e);
+			pendingBroadcastDownloads.remove(header.getHash());
 		}
 	}
 

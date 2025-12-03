@@ -41,6 +41,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.p2p.netty.client.NettyClientService;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.p2p.services.DirectoryService;
@@ -70,15 +71,19 @@ public class NodeConnectionManager {
 	AtomicInteger connectedPeersGauge = new AtomicInteger(0);
 	AtomicInteger bannedPeersGauge = new AtomicInteger(0);
 
+	IdentityService identityService;
+
 	public NodeConnectionManager(@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler,
 			MeterRegistry registry,
 			DirectoryService directoryService,
-			PeerRegistry peerRegistry, PeerReputationService reputationService, NettyClientService nettyClient) {
+			PeerRegistry peerRegistry, PeerReputationService reputationService, NettyClientService nettyClient,
+			IdentityService identityService) {
 		this.coreScheduler = coreScheduler;
 		this.directoryService = directoryService;
 		this.peerRegistry = peerRegistry;
 		this.reputationService = reputationService;
 		this.nettyClient = nettyClient;
+		this.identityService = identityService;
 		registry.gauge("p2p.peers.count", Tags.of("state", "connected"), connectedPeersGauge);
 		registry.gauge("p2p.peers.count", Tags.of("state", "banned"), bannedPeersGauge);
 	}
@@ -118,10 +123,28 @@ public class NodeConnectionManager {
 		Instant now = Instant.now();
 		Set<Address> connectedIdentities = new HashSet<>();
 		Set<String> connectedIps = new HashSet<>();
+		Address myIdentity = identityService.getNodeIdentityAddress();
+
+		// First pass: Collect info and disconnect self/duplicates
 		for (RemotePeer p : peerRegistry.getAll()) {
 			String rawAddr = p.getChannel().remoteAddress().toString();
 			connectedIps.add(rawAddr.replace("/", ""));
+
 			if (p.getIdentity() != null) {
+				// 1. Check for Self-Connection
+				if (p.getIdentity().equals(myIdentity)) {
+					log.warn("Detected self-connection to {}. Disconnecting.", rawAddr);
+					p.disconnect("Self-connection detected");
+					continue;
+				}
+
+				// 2. Check for Duplicates
+				if (connectedIdentities.contains(p.getIdentity())) {
+					log.warn("Duplicate connection to {}. Disconnecting.", p.getIdentity());
+					p.disconnect("Duplicate connection");
+					continue;
+				}
+
 				connectedIdentities.add(p.getIdentity());
 			}
 		}
@@ -129,6 +152,11 @@ public class NodeConnectionManager {
 		int disconnectedCount = 0;
 
 		for (RemotePeer activePeer : peerRegistry.getAll()) {
+			// Skip if already disconnected in the previous pass
+			if (!activePeer.getChannel().isActive()) {
+				continue;
+			}
+
 			boolean shouldDisconnect = false;
 			String reason = "";
 
@@ -171,6 +199,7 @@ public class NodeConnectionManager {
 		List<DirectoryService.P2PClient> allKnown = directoryService.getP2PClientList();
 		List<DirectoryService.P2PClient> candidates = allKnown.stream()
 				.filter(c -> !connectedIdentities.contains(c.getIdentity()))
+				.filter(c -> !c.getIdentity().equals(myIdentity)) // Filter out self
 				.filter(c -> !reputationService.isBanned(c.getIdentity()))
 				.sorted(Comparator
 						.comparingInt((DirectoryService.P2PClient c) -> reputationService.score(c.getIdentity()))
