@@ -47,10 +47,14 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExIndexerQueueService {
 
+	private static final int MAX_QUEUE_CAPACITY = 2000;
+
 	MeterRegistry registry;
-	Deque<ExIndexerTask> queue = new ArrayDeque<>();
-	ReentrantLock lock = new ReentrantLock();
+	Deque<ExIndexerTask> queue = new ArrayDeque<>(MAX_QUEUE_CAPACITY);
+
+	ReentrantLock lock = new ReentrantLock(true);
 	Condition notEmpty = lock.newCondition();
+	Condition notFull = lock.newCondition();
 
 	@PostConstruct
 	public void initMetrics() {
@@ -60,19 +64,33 @@ public class ExIndexerQueueService {
 	public void pushConnect(BlockConnectedEvent event) {
 		lock.lock();
 		try {
+			// Optimization: Remove immediate Disconnect-Connect flicker
 			ExIndexerTask lastTask = queue.peekLast();
 			if (lastTask != null
 					&& lastTask.getType() == ExIndexerTask.Type.DISCONNECT
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
-				log.info("Optimization: Skipped flickering (Disconnect->Connect) for block #{} in queue",
+				// Signal notFull because we removed an item
+				notFull.signal();
+				log.debug("Optimization: Skipped flickering (Disconnect->Connect) for block #{}",
 						event.getBlock().getHeight());
 				return;
 			}
 
+			// Backpressure: Wait if queue is full
+			while (queue.size() >= MAX_QUEUE_CAPACITY) {
+				registry.counter("explorer.queue.blocked").increment();
+				log.warn("Explorer Queue FULL ({}). Blocking producer until space is available.", queue.size());
+				notFull.await();
+			}
+
 			queue.addLast(new ExIndexerTask.ConnectTask(event));
 			notEmpty.signal();
+
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			log.warn("Interrupted while pushing Connect task");
 		} finally {
 			lock.unlock();
 		}
@@ -81,19 +99,33 @@ public class ExIndexerQueueService {
 	public void pushDisconnect(BlockDisconnectedEvent event) {
 		lock.lock();
 		try {
+			// Optimization: Remove immediate Connect-Disconnect flicker
 			ExIndexerTask lastTask = queue.peekLast();
 			if (lastTask != null
 					&& lastTask.getType() == ExIndexerTask.Type.CONNECT
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
-				log.info("Optimization: Skipped indexing/reverting block #{} (cancelled in queue)",
+				// Signal notFull because we removed an item
+				notFull.signal();
+				log.debug("Optimization: Skipped indexing/reverting block #{} (cancelled in queue)",
 						event.getBlock().getHeight());
 				return;
 			}
 
+			// Backpressure: Wait if queue is full
+			while (queue.size() >= MAX_QUEUE_CAPACITY) {
+				registry.counter("explorer.queue.blocked").increment();
+				log.warn("Explorer Queue FULL ({}). Blocking producer until space is available.", queue.size());
+				notFull.await();
+			}
+
 			queue.addLast(new ExIndexerTask.DisconnectTask(event));
 			notEmpty.signal();
+
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			log.warn("Interrupted while pushing Disconnect task");
 		} finally {
 			lock.unlock();
 		}
@@ -105,7 +137,9 @@ public class ExIndexerQueueService {
 			while (queue.isEmpty()) {
 				notEmpty.await();
 			}
-			return queue.pollFirst();
+			ExIndexerTask task = queue.pollFirst();
+			notFull.signal();
+			return task;
 		} finally {
 			lock.unlock();
 		}

@@ -48,7 +48,7 @@ public class ExIndexerRevertService {
 
 	JdbcTemplate jdbcTemplate;
 
-	@Transactional(propagation = Propagation.MANDATORY)
+	@Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
 	public void revertBlock(Hash blockHash, long blockHeight) {
 		log.info("Reverting block {} at height {}", blockHash, blockHeight);
 

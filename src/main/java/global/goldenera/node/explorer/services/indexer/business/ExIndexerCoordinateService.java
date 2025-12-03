@@ -25,8 +25,13 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.springframework.stereotype.Service;
 
+import global.goldenera.node.shared.exceptions.GEFailedException;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -39,50 +44,133 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE)
 public class ExIndexerCoordinateService {
 
+	private static final int MAX_RETRIES = 5;
+	private static final long BASE_DELAY_MS = 1000;
+	private static final long MAX_DELAY_MS = 10000;
+
+	final MeterRegistry registry;
 	final ExIndexerQueueService queueService;
 	final ExIndexerService indexer;
 
 	final Thread worker = new Thread(this::processQueue, "Explorer-Coordinator");
-	volatile boolean running = true;
+	final AtomicBoolean running = new AtomicBoolean(true);
+	final AtomicBoolean panicMode = new AtomicBoolean(false);
 
 	@PostConstruct
 	public void start() {
+		worker.setUncaughtExceptionHandler((t, e) -> log.error("Uncaught exception in Explorer Coordinator", e));
 		worker.start();
 	}
 
 	@PreDestroy
 	public void stop() {
-		running = false;
+		running.set(false);
 		worker.interrupt();
+		try {
+			worker.join(5000);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			log.warn("Explorer Coordinator forced stop.");
+		}
 	}
 
 	private void processQueue() {
 		log.info("Explorer Coordinator started.");
-		while (running) {
+		while (running.get()) {
+			if (panicMode.get()) {
+				log.error("Explorer is in PANIC MODE due to previous fatal errors. Processing suspended.");
+				sleep(5000);
+				continue;
+			}
+
 			try {
+				// Blocking call, waits for a task
 				ExIndexerTask task = queueService.take();
-				processTask(task);
-				if (queueService.size() > 1000) {
-					log.warn("Explorer Queue is lagging! Pending blocks: {}", queueService.size());
+
+				if (task == null)
+					continue; // Should not happen with blocking take, but safety check
+
+				boolean success = processTaskWithRetryStrategy(task);
+				if (!success) {
+					triggerPanicMode(task);
 				}
+
+				logQueueLag();
+
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
+				log.info("Explorer Coordinator interrupted, stopping.");
 				break;
 			} catch (Exception e) {
 				log.error("Unexpected error in Explorer Coordinator loop", e);
 			}
 		}
+		log.info("Explorer Coordinator stopped.");
+	}
+
+	private boolean processTaskWithRetryStrategy(ExIndexerTask task) {
+		int attempt = 0;
+		long currentDelay = BASE_DELAY_MS;
+
+		while (attempt < MAX_RETRIES && running.get()) {
+			try {
+				processTask(task);
+				return true;
+			} catch (Exception e) {
+				attempt++;
+				registry.counter("explorer.coordinator.retry").increment();
+				log.error("Failed to process block #{} (Hash: {}). Attempt {}/{}. Error: {}",
+						task.getHeight(), task.getHash(), attempt, MAX_RETRIES, e.getMessage());
+
+				if (attempt >= MAX_RETRIES) {
+					log.error("Max retries exhausted for block #{}.", task.getHeight(), e);
+					return false;
+				}
+
+				sleep(currentDelay);
+				currentDelay = Math.min(currentDelay * 2, MAX_DELAY_MS);
+			}
+		}
+		return false;
 	}
 
 	private void processTask(ExIndexerTask task) {
+		if (task instanceof ExIndexerTask.ConnectTask ct) {
+			indexer.handleBlockConnected(ct.getEvent());
+		} else if (task instanceof ExIndexerTask.DisconnectTask dt) {
+			indexer.handleBlockDisconnected(dt.getEvent());
+		} else {
+			throw new IllegalArgumentException("Unknown task type: " + task.getClass().getName());
+		}
+	}
+
+	private void triggerPanicMode(ExIndexerTask task) {
+		panicMode.set(true);
+		registry.counter("explorer.coordinator.panic").increment();
+		log.error("################################################################");
+		log.error("CRITICAL EXPLORER FAILURE: POISON BLOCK DETECTED");
+		log.error("Block Height: {}", task.getHeight());
+		log.error("Block Hash:   {}", task.getHash());
+		log.error("Action:       {}", task.getType());
+		log.error("The Explorer has stopped processing to prevent database corruption.");
+		log.error("Manual intervention required. Check logs, fix the issue, and restart.");
+		log.error("################################################################");
+		throw new GEFailedException("Explorer entered PANIC MODE at block " + task.getHeight());
+	}
+
+	private void logQueueLag() {
+		int size = queueService.size();
+		if (size > 1000 && size % 500 == 0) {
+			log.warn("Explorer Queue is lagging! Pending blocks: {}", size);
+			sleep(300);
+		}
+	}
+
+	private void sleep(long millis) {
 		try {
-			if (task instanceof ExIndexerTask.ConnectTask ct) {
-				indexer.handleBlockConnected(ct.getEvent());
-			} else if (task instanceof ExIndexerTask.DisconnectTask dt) {
-				indexer.handleBlockDisconnected(dt.getEvent());
-			}
-		} catch (Exception e) {
-			log.error("Failed to process task for block #{}", task.getHeight(), e);
+			TimeUnit.MILLISECONDS.sleep(millis);
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
 	}
 }

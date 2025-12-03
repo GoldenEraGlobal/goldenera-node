@@ -29,7 +29,6 @@ import java.util.List;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
@@ -51,7 +50,7 @@ public class ExIndexerPartitionService {
 
 	JdbcTemplate jdbcTemplate;
 
-	@Transactional(propagation = Propagation.NOT_SUPPORTED)
+	@Transactional
 	public void ensurePartitionsExist(long currentHeight) {
 		long currentPartitionIndex = currentHeight / PARTITION_SIZE;
 		createPartitionsForIndex(currentPartitionIndex);

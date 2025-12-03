@@ -89,6 +89,7 @@ public class ExIndexerService {
 				log.warn("Block #{} already indexed. Skipping.", block.getHeight());
 				return;
 			} catch (ChainSplitException e) {
+				registry.counter("explorer.reorg.detected").increment();
 				log.warn("REORG DETECTED at Block #{}. Reverting HEAD to resolve split... (Attempt {})",
 						block.getHeight() - 1, attempts);
 				try {
@@ -167,10 +168,15 @@ public class ExIndexerService {
 			}
 			throw new AlreadyIndexedException("Block " + incomingHeight + " already indexed");
 		}
+
 		if (incomingHeight > height + 1) {
 			log.warn("Gap detected! Explorer Head: #%d, Received: #%d. Healing...", height, incomingHeight);
 			healGap(height + 1, incomingHeight - 1);
+			status = exStatusCoreService.getStatusOrThrow();
+			height = status.getSyncedBlockHeight();
+			hash = status.getSyncedBlockHash();
 		}
+
 		if (!block.getHeader().getPreviousHash().equals(hash)) {
 			throw new ChainSplitException(String.format(
 					"Chain split: Explorer Head %s != Block Prev %s",
@@ -195,6 +201,7 @@ public class ExIndexerService {
 	}
 
 	private void healGap(long startHeight, long endHeight) {
+		registry.counter("explorer.gap.healing").increment();
 		log.info("Healing gap from #{} to #{}", startHeight, endHeight);
 		for (long h = startHeight; h <= endHeight; h++) {
 			final long currentHeight = h;
