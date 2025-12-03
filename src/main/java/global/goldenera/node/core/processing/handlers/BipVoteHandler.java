@@ -92,10 +92,20 @@ public class BipVoteHandler implements TxHandler {
 				block.getHeight(),
 				block.getTimestamp());
 
-		if (updatedBip.getStatus() == BipStatus.PENDING &&
-				updatedBip.getApprovalCount() >= updatedBip.getNumberOfRequiredVotes()) {
+		if (updatedBip.getStatus() == BipStatus.PENDING) {
+			long totalAuthorities = state.getParams().getCurrentAuthorityCount();
+			long currentApprovals = updatedBip.getApprovalCount();
+			long currentDisapprovals = updatedBip.getDisapprovalCount();
+			long requiredVotes = updatedBip.getNumberOfRequiredVotes();
 
-			updatedBip = updatedBip.updateStatus(BipStatus.APPROVED, block.getHeight(), block.getTimestamp());
+			// Calculate max possible approvals assuming all remaining voters approve
+			long maxPossibleApprovals = totalAuthorities - currentDisapprovals;
+
+			if (currentApprovals >= requiredVotes) {
+				updatedBip = updatedBip.updateStatus(BipStatus.APPROVED, block.getHeight(), block.getTimestamp());
+			} else if (maxPossibleApprovals < requiredVotes) {
+				updatedBip = updatedBip.updateStatus(BipStatus.DISAPPROVED, block.getHeight(), block.getTimestamp());
+			}
 		}
 
 		state.setBip(bipHash, updatedBip);

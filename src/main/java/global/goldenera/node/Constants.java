@@ -58,9 +58,9 @@ public class Constants {
     public static final Wei GENESIS_NETWORK_BLOCK_REWARD = Amounts.tokens(1);
     public static final Address GENESIS_NETWORK_BLOCK_REWARD_POOL_ADDRESS = Address
             .fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76");
-    public static final long GENESIS_NETWORK_TARGET_MINING_TIME_MS = 30000; // 30 seconds
-    public static final long GENESIS_NETWORK_ASERT_HALF_LIFE_BLOCKS = 20;
-    public static final BigInteger GENESIS_NETWORK_MIN_DIFFICULTY = BigInteger.valueOf(10000);
+    public static final long GENESIS_NETWORK_TARGET_MINING_TIME_MS = 15000; // 15 seconds
+    public static final long GENESIS_NETWORK_ASERT_HALF_LIFE_BLOCKS = 15;
+    public static final BigInteger GENESIS_NETWORK_MIN_DIFFICULTY = BigInteger.valueOf(1000);
     public static final Wei GENESIS_NETWORK_MIN_TX_BASE_FEE = Amounts.tokensDecimal("0.0001");
     public static final Wei GENESIS_NETWORK_MIN_TX_BYTE_FEE = Amounts.tokensDecimal("0.000001");
 

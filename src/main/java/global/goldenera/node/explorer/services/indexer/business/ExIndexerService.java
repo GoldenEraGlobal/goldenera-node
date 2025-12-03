@@ -119,10 +119,10 @@ public class ExIndexerService {
 			exTokenService.processTokens(block, event.getTokenDiffs());
 			exConsensusService.processBips(block, event.getBipDiffs());
 			exConsensusService.processNetworkParams(block, event.getNetworkParamsDiff());
-			exConsensusService.processAliases(block, event.getAddressAliasesToRemove(),
-					event.getAddressAliasesToAdd());
-			exConsensusService.processAuthorities(block, event.getAuthoritiesToRemove(),
-					event.getAuthoritiesToAdd());
+			exConsensusService.processAliases(block, event.getAddressAliasesToAdd(),
+					event.getAddressAliasesToRemove());
+			exConsensusService.processAuthorities(block, event.getAuthoritiesToAdd(),
+					event.getAuthoritiesToRemove());
 
 			exBlockDataCoreService.insertBlockHeader(block, event.getCumulativeDifficulty(),
 					event.getMinerTotalFees().toBigInteger(), event.getMinerActualRewardPaid().toBigInteger());

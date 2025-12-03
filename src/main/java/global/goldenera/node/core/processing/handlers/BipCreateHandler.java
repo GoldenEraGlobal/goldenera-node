@@ -62,8 +62,7 @@ public class BipCreateHandler implements TxHandler {
 		SimpleBlock block = context.getBlock();
 		NetworkParamsState params = context.getParams();
 		// Authority Check
-		checkArgument(state.getAuthority(tx.getSender()).getCreatedAtBlockHeight() != Long.MIN_VALUE,
-				"Sender is not an authority");
+		checkArgument(state.getAuthority(tx.getSender()).exists(), "Sender is not an authority");
 
 		Hash bipHash = tx.getHash();
 

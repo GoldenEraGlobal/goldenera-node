@@ -149,8 +149,8 @@ public class ExIndexerConsensusHelperService {
 
 	public void processAuthorities(
 			Block block,
-			Map<Address, AuthorityState> authoritiesToRemove,
-			Map<Address, AuthorityState> authoritiesToAdd) {
+			Map<Address, AuthorityState> authoritiesToAdd,
+			Map<Address, AuthorityState> authoritiesToRemove) {
 		List<Object[]> logBatch = new ArrayList<>();
 		authoritiesToRemove.forEach((address, oldState) -> {
 			AuthorityRevertDto dto = AuthorityRevertDto.from(
