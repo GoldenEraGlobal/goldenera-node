@@ -36,7 +36,6 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.serialization.tx.TxDecoder;
 import global.goldenera.node.core.api.v1.mempool.dtos.MempoolSubmitTxDtoV1;
 import global.goldenera.node.core.mempool.MempoolManager;
-import global.goldenera.node.core.mempool.MempoolManager.MempoolAddResult;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
@@ -49,10 +48,10 @@ public class MempoolApiV1 {
 	MempoolManager mempoolManager;
 
 	@PostMapping("submit")
-	public ResponseEntity<MempoolAddResult> submitTx(@RequestBody MempoolSubmitTxDtoV1 input) {
+	public ResponseEntity<MempoolManager.MempoolResult> submitTx(@RequestBody MempoolSubmitTxDtoV1 input) {
 		Bytes rawTxDataInBytes = Bytes.fromHexString(input.getRawTxDataInHex());
 		Tx tx = TxDecoder.INSTANCE.decode(rawTxDataInBytes);
-		MempoolAddResult result = mempoolManager.addTx(tx);
+		MempoolManager.MempoolResult result = mempoolManager.addTx(tx);
 		return ResponseEntity.ok(result);
 	}
 }

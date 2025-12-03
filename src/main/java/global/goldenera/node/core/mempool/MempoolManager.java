@@ -63,19 +63,19 @@ public class MempoolManager {
 	MempoolStore mempoolStore;
 	MempoolValidator mempoolValidator;
 
-	public MempoolAddResult addTx(@NonNull Tx tx) {
+	public MempoolResult addTx(@NonNull Tx tx) {
 		return addTx(tx, null, MempoolTxAddEvent.AddReason.NEW, false);
 	}
 
-	public MempoolAddResult addTx(@NonNull Tx tx, Address receivedFrom) {
+	public MempoolResult addTx(@NonNull Tx tx, Address receivedFrom) {
 		return addTx(tx, receivedFrom, MempoolTxAddEvent.AddReason.NEW, false);
 	}
 
-	public MempoolAddResult addTx(@NonNull Tx tx, boolean skipValidation) {
+	public MempoolResult addTx(@NonNull Tx tx, boolean skipValidation) {
 		return addTx(tx, null, MempoolTxAddEvent.AddReason.NEW, skipValidation);
 	}
 
-	public MempoolAddResult addTx(@NonNull Tx tx, Address receivedFrom, boolean skipValidation) {
+	public MempoolResult addTx(@NonNull Tx tx, Address receivedFrom, boolean skipValidation) {
 		return addTx(tx, receivedFrom, MempoolTxAddEvent.AddReason.NEW, skipValidation);
 	}
 
@@ -87,7 +87,7 @@ public class MempoolManager {
 	 *            The new transaction.
 	 * @return A result indicating success or the reason for failure.
 	 */
-	public MempoolAddResult addTx(@NonNull Tx tx, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
+	public MempoolResult addTx(@NonNull Tx tx, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
 			boolean skipValidation) {
 		// 1. Validate the tx against the *confirmed state* AND *mempool state*
 		MempoolEntry entry = new MempoolEntry(tx);
@@ -99,7 +99,8 @@ public class MempoolManager {
 		if (!validationResult.isValid()) {
 			log.warn("Mempool: Rejecting tx {}: {}", txHash.toShortLogString(),
 					validationResult.getErrorMessage());
-			return MempoolAddResult.fromValidation(validationResult.getStatus());
+			return new MempoolResult(MempoolAddResult.fromValidation(validationResult.getStatus()),
+					validationResult.getErrorMessage());
 		}
 
 		// 2. Add the tx to the internal storage
@@ -110,46 +111,55 @@ public class MempoolManager {
 
 		// 3. Translate storage result to API result
 		MempoolAddResult result;
+		String message;
 		switch (storageResult) {
 			case ADDED_EXECUTABLE:
 				log.debug("Mempool: Added executable tx {}", txHash.toShortLogString());
 				result = MempoolAddResult.SUCCESS;
+				message = "Transaction added to mempool.";
 				break;
 			case ADDED_FUTURE:
 				log.debug("Mempool: Added future tx {}", txHash.toShortLogString());
 				result = MempoolAddResult.QUEUED;
+				message = "Transaction queued (future nonce).";
 				break;
 			case FAILED_FEE_TOO_LOW:
 				log.warn("Mempool: Rejecting tx {}: Fee too low to replace existing (RBF).",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_RBF;
+				message = "Fee too low to replace existing transaction (RBF).";
 				break;
 			case DUPLICATE_HASH:
 				log.warn("Mempool: Rejecting tx {}: Duplicate hash.", txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_DUPLICATE;
+				message = "Transaction already exists in mempool.";
 				break;
 			case STALE:
 				log.warn("Mempool: Rejecting tx {}: Stale (nonce mismatch in storage).",
 						txHash.toShortLogString());
 				result = MempoolAddResult.STALE;
+				message = "Transaction is stale (nonce mismatch).";
 				break;
 			case NONCE_TOO_FAR_FUTURE:
 				log.warn("Mempool: Rejecting tx {}: Nonce too far in the future.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_NONCE_TOO_FAR_FUTURE;
+				message = "Nonce is too far in the future.";
 				break;
 			case MEMPOOL_FULL:
 				log.warn("Mempool: Rejecting tx {}: Mempool full and fee insufficient to evict.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_MEMPOOL_FULL;
+				message = "Mempool is full and fee is insufficient to evict existing transactions.";
 				break;
 			default:
 				result = MempoolAddResult.REJECTED_OTHER;
+				message = "Unknown error during storage addition.";
 				break;
 		}
 		registry.counter("blockchain.mempool.add_result", "status", result.name())
 				.increment();
-		return result;
+		return new MempoolResult(result, message);
 	}
 
 	public void addTxs(@NonNull List<Tx> txs, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
@@ -261,6 +271,9 @@ public class MempoolManager {
 	/**
 	 * Public-facing result enum for addTransaction.
 	 */
+	public record MempoolResult(MempoolAddResult status, String message) {
+	}
+
 	public enum MempoolAddResult {
 		SUCCESS, // Added as executable
 		QUEUED, // Added as future
