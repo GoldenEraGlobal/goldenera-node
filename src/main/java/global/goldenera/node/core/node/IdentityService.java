@@ -65,6 +65,10 @@ public class IdentityService {
 			} else {
 				log.info("No identity found. Generating new node identity...");
 				tempMnemonic = PrivateKey.generateMnemonic();
+				Path parentDir = identityPath.getParent();
+				if (parentDir != null) {
+					Files.createDirectories(parentDir);
+				}
 				Files.writeString(identityPath, tempMnemonic);
 				log.info("New node identity saved to: {}", identityPath.toAbsolutePath());
 			}
