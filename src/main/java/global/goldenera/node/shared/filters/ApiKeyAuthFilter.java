@@ -73,25 +73,40 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 		apiKeyHeader = apiKeyHeader.trim().replace("Bearer ", "");
-		if (apiKeyHeader.isBlank() || !apiKeyHeader.contains("_") || !apiKeyHeader.startsWith("sk_")) {
+		if (apiKeyHeader.isBlank() || !apiKeyHeader.startsWith("sk_")) {
 			sendError(response, "Invalid API Key format");
 			return;
 		}
 
-		int firstUnderscore = apiKeyHeader.indexOf('_');
-		if (firstUnderscore == -1 || firstUnderscore == apiKeyHeader.length() - 1) {
-			sendError(response, "Invalid API Key format");
-			return;
-		}
+		String prefix;
+		String secret;
 
-		int separatorIndex = apiKeyHeader.indexOf('_', firstUnderscore + 1);
-		if (separatorIndex == -1 || separatorIndex + 1 == apiKeyHeader.length()) {
-			sendError(response, "Invalid API Key format, separator not found or no secret part");
-			return;
-		}
+		// Standard format: sk_ + 11 chars (8 bytes base64) + _ + secret
+		// Prefix length = 14
+		// We check if the key matches the standard length structure to avoid ambiguity
+		// with underscores in prefix/secret
+		if (apiKeyHeader.length() > 15 && apiKeyHeader.charAt(14) == '_') {
+			prefix = apiKeyHeader.substring(0, 14);
+			secret = apiKeyHeader.substring(15);
+		} else {
+			// Fallback logic: split by the second underscore
+			// This is risky if the prefix contains underscores, but necessary for
+			// legacy/custom keys
+			int firstUnderscore = apiKeyHeader.indexOf('_');
+			if (firstUnderscore == -1) {
+				sendError(response, "Invalid API Key format");
+				return;
+			}
 
-		String prefix = apiKeyHeader.substring(0, separatorIndex);
-		String secret = apiKeyHeader.substring(separatorIndex + 1);
+			int separatorIndex = apiKeyHeader.indexOf('_', firstUnderscore + 1);
+			if (separatorIndex == -1) {
+				sendError(response, "Invalid API Key format");
+				return;
+			}
+
+			prefix = apiKeyHeader.substring(0, separatorIndex);
+			secret = apiKeyHeader.substring(separatorIndex + 1);
+		}
 
 		if (secret.isBlank()) {
 			sendError(response, "Invalid API Key format, secret part is blank");
