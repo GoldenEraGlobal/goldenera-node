@@ -168,7 +168,7 @@ public class MempoolValidator {
 			case BIP_VOTE:
 				// Inflationary fee. No balance check needed for fee.
 				// But we must check if sender is an authority.
-				if (worldstate.getAuthority(sender).getCreatedAtBlockHeight() == -1L) {
+				if (!worldstate.getAuthority(sender).exists()) {
 					return MempoolValidationResult.invalid("Sender is not an authority.");
 				}
 				// Check for L4+ governance duplicates
@@ -196,7 +196,7 @@ public class MempoolValidator {
 			if (payload instanceof TxBipAuthorityAddPayload) {
 				Address addr = ((TxBipAuthorityAddPayload) payload).getAddress();
 				// Check chain
-				if (worldstate.getAuthority(addr).getCreatedAtBlockHeight() != -1L) {
+				if (worldstate.getAuthority(addr).exists()) {
 					return MempoolValidationResult.invalid("Authority already exists on-chain.");
 				}
 				// Check mempool
@@ -206,7 +206,7 @@ public class MempoolValidator {
 			} else if (payload instanceof TxBipAuthorityRemovePayload) {
 				Address addr = ((TxBipAuthorityRemovePayload) payload).getAddress();
 				// Check chain
-				if (worldstate.getAuthority(addr).getCreatedAtBlockHeight() == -1L) {
+				if (!worldstate.getAuthority(addr).exists()) {
 					return MempoolValidationResult.invalid("Authority does not exist on-chain.");
 				}
 				// Check mempool
@@ -216,7 +216,7 @@ public class MempoolValidator {
 			} else if (payload instanceof TxBipAddressAliasAddPayload) {
 				String alias = ((TxBipAddressAliasAddPayload) payload).getAlias();
 				// Check chain
-				if (worldstate.getAddressAlias(alias).getCreatedAtBlockHeight() != -1L) {
+				if (worldstate.getAddressAlias(alias).exists()) {
 					return MempoolValidationResult.invalid("Address alias already exists on-chain.");
 				}
 				// Check mempool
@@ -226,7 +226,7 @@ public class MempoolValidator {
 			} else if (payload instanceof TxBipAddressAliasRemovePayload) {
 				String alias = ((TxBipAddressAliasRemovePayload) payload).getAlias();
 				// Check chain
-				if (worldstate.getAddressAlias(alias).getCreatedAtBlockHeight() == -1L) {
+				if (!worldstate.getAddressAlias(alias).exists()) {
 					return MempoolValidationResult.invalid("Address alias does not exist on-chain.");
 				}
 				// Check mempool
@@ -247,7 +247,7 @@ public class MempoolValidator {
 
 			// Check L4 state (from chain)
 			BipState bipState = worldstate.getBip(bipHash);
-			if (bipState.getUpdatedAtBlockHeight() == -1L) {
+			if (!bipState.exists()) {
 				return MempoolValidationResult.invalid("Cannot vote on non-existent BIP.");
 			}
 			if (bipState.getStatus() != BipStatus.PENDING) {
