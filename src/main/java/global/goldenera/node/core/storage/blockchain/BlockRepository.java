@@ -79,6 +79,19 @@ public class BlockRepository {
 		}
 	}
 
+	public boolean hasBlockData(Hash hash) {
+		if (blockCache.getIfPresent(hash) != null)
+			return true;
+		try {
+			// Optimization: Read bytes but DO NOT decode/deserialize
+			byte[] data = repository.get(cf.blocks(), hash.toArray());
+			return data != null;
+		} catch (RocksDBException e) {
+			log.error("Failed to check block existence for {}", hash, e);
+			return false;
+		}
+	}
+
 	public StoredBlock getStoredBlockByHashOrThrow(Hash hash) {
 		return getStoredBlockByHash(hash)
 				.orElseThrow(() -> new GENotFoundException("Block not found: " + hash));
@@ -234,6 +247,15 @@ public class BlockRepository {
 			throws RocksDBException {
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, newTip.getHash().toArray());
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(blockToDisconnect.getHeight()).toArray());
+	}
+
+	public void forceDisconnectBlockIndex(WriteBatch batch, long height, Hash newTipHash) throws RocksDBException {
+		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, newTipHash.toArray());
+		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(height).toArray());
+	}
+
+	public void removeBlockIndexFromBatch(WriteBatch batch, long height) throws RocksDBException {
+		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(height).toArray());
 	}
 
 	public void executeAtomicBatch(RocksDBRepository.BatchOperation operation) {

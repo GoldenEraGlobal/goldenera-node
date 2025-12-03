@@ -158,6 +158,7 @@ public class ChainQuery {
                 .map(blockRepository::getBlockHashByHeight)
                 .filter(Optional::isPresent)
                 .map(Optional::get)
+                .filter(blockRepository::hasBlockData)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 

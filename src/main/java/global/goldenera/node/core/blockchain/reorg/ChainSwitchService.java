@@ -106,12 +106,22 @@ public class ChainSwitchService {
                 blockRepository.getRepository().executeAtomicBatch(batch -> {
                     for (Block blockToDisconnect : oldChain) {
                         StoredBlock storedBlockToDisconnect = chainQueryService
-                                .getStoredBlockByHashOrThrow(blockToDisconnect.getHash());
+                                .getStoredBlockByHash(blockToDisconnect.getHash())
+                                .orElse(null);
+
                         StoredBlock parent = chainQueryService
                                 .getStoredBlockByHash(blockToDisconnect.getHeader().getPreviousHash())
                                 .orElseThrow(() -> new GEFailedException("Reorg parent not found"));
 
-                        blockRepository.addDisconnectBlockIndexToBatch(batch, storedBlockToDisconnect, parent);
+                        if (storedBlockToDisconnect == null) {
+                            log.warn(
+                                    "Corruption detected! Block {} to disconnect not found in DB. Forcing index removal.",
+                                    blockToDisconnect.getHash());
+                            blockRepository.forceDisconnectBlockIndex(batch, blockToDisconnect.getHeight(),
+                                    parent.getHash());
+                        } else {
+                            blockRepository.addDisconnectBlockIndexToBatch(batch, storedBlockToDisconnect, parent);
+                        }
 
                         blockDisconnectedEvents.add(new BlockDisconnectedEvent(this, blockToDisconnect));
                     }
