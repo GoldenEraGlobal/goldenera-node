@@ -67,6 +67,7 @@ public class BlockStateTransitions {
 		long start = System.currentTimeMillis();
 		long height = block.getHeight();
 		BigInteger cumulativeDifficulty;
+
 		if (source == ConnectedSource.GENESIS) {
 			cumulativeDifficulty = block.getHeader().getDifficulty();
 		} else {
@@ -86,10 +87,32 @@ public class BlockStateTransitions {
 				.receivedAt(receivedAt)
 				.connectedSource(source)
 				.build();
+
+		boolean isNewHead = false;
+
+		if (source == ConnectedSource.GENESIS) {
+			isNewHead = true;
+		} else {
+			StoredBlock currentHead = blockRepository.getLatestStoredBlock().orElse(null);
+			if (currentHead == null || cumulativeDifficulty.compareTo(currentHead.getCumulativeDifficulty()) > 0) {
+				isNewHead = true;
+			}
+		}
+
+		final boolean performFullConnect = isNewHead;
+
 		try {
 			blockRepository.getRepository().executeAtomicBatch(batch -> {
 				worldState.persistToBatch(batch);
-				blockRepository.addBlockToBatch(batch, storedBlockToSave);
+				if (performFullConnect) {
+					blockRepository.addBlockToBatch(batch, storedBlockToSave);
+				} else {
+					try {
+						blockRepository.saveBlockDataToBatch(batch, storedBlockToSave);
+					} catch (Exception e) {
+						throw new RuntimeException(e);
+					}
+				}
 			});
 		} catch (RuntimeException e) {
 			log.error("Atomic commit failed for block {}: {}", block.getHeight(), e.getMessage(), e);
@@ -99,38 +122,39 @@ public class BlockStateTransitions {
 		}
 
 		long end = System.currentTimeMillis();
-		log.debug("Block committed at height {} in {}s", block.getHeight(),
-				String.format("%.2f", (end - start) / 1000.0));
 
-		// Genesis or real
-		Wei totalFees = height == 0 ? Wei.ZERO : executionResult.getTotalFeesCollected();
-		Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
-		Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
+		if (performFullConnect) {
+			log.info("Block connected as NEW HEAD at height {} (TD: {}) in {}s",
+					block.getHeight(), cumulativeDifficulty, String.format("%.2f", (end - start) / 1000.0));
 
-		BlockConnectedEvent event = new BlockConnectedEvent(
-				this,
-				source,
-				block,
+			Wei totalFees = height == 0 ? Wei.ZERO : executionResult.getTotalFeesCollected();
+			Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
+			Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
 
-				worldState.getBalanceDiffs(),
-				worldState.getNonceDiffs(),
-				worldState.getTokenDiffs(),
-				worldState.getBipDiffs(),
-				worldState.getParamsDiff(),
+			BlockConnectedEvent event = new BlockConnectedEvent(
+					this,
+					source,
+					block,
+					worldState.getBalanceDiffs(),
+					worldState.getNonceDiffs(),
+					worldState.getTokenDiffs(),
+					worldState.getBipDiffs(),
+					worldState.getParamsDiff(),
+					worldState.getDirtyAuthorities(),
+					worldState.getAuthoritiesRemovedWithState(),
+					worldState.getDirtyAddressAliases(),
+					worldState.getAliasesRemovedWithState(),
+					totalFees,
+					actualRewardPaid,
+					cumulativeDifficulty,
+					actualBurnAmounts,
+					receivedFrom,
+					receivedAt);
 
-				worldState.getDirtyAuthorities(),
-				worldState.getAuthoritiesRemovedWithState(),
-
-				worldState.getDirtyAddressAliases(),
-				worldState.getAliasesRemovedWithState(),
-
-				totalFees,
-				actualRewardPaid,
-				cumulativeDifficulty,
-				actualBurnAmounts,
-				receivedFrom,
-				receivedAt);
-
-		applicationEventPublisher.publishEvent(event);
+			applicationEventPublisher.publishEvent(event);
+		} else {
+			log.info("Block {} stored as FORK (TD: {} <= Current Head). No event emitted.",
+					block.getHeight(), cumulativeDifficulty);
+		}
 	}
 }

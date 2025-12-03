@@ -60,9 +60,9 @@ public class CoreAsyncConfig {
 		int cores = Runtime.getRuntime().availableProcessors();
 		executor.setCorePoolSize(Math.max(2, cores / 2));
 		executor.setMaxPoolSize(cores);
-		executor.setQueueCapacity(2000);
+		executor.setQueueCapacity(3000);
 		executor.setThreadNamePrefix("P2P-In-");
-		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 		executor.initialize();
 		return executor;
 	}

@@ -148,18 +148,26 @@ public class BlockRepository {
 				return Optional.empty();
 
 			Hash blockHash = Hash.wrap(blockHashBytes);
-			return getBlockByHash(blockHash)
-					.flatMap(block -> {
-						// Optimization: Use loop instead of stream for better performance
-						List<Tx> txs = block.getTxs();
-						for (int i = 0; i < txs.size(); i++) {
-							Tx tx = txs.get(i);
-							if (tx.getHash().equals(txHash)) {
-								return Optional.of(tx);
-							}
-						}
-						return Optional.empty();
-					});
+
+			Optional<StoredBlock> storedBlockOpt = getStoredBlockByHash(blockHash);
+			if (storedBlockOpt.isEmpty())
+				return Optional.empty();
+
+			StoredBlock storedBlock = storedBlockOpt.get();
+			Block block = storedBlock.getBlock();
+			Optional<Hash> mainChainHashAtHeight = getBlockHashByHeight(block.getHeight());
+			if (mainChainHashAtHeight.isEmpty() || !mainChainHashAtHeight.get().equals(blockHash)) {
+				return Optional.empty();
+			}
+
+			List<Tx> txs = block.getTxs();
+			for (int i = 0; i < txs.size(); i++) {
+				Tx tx = txs.get(i);
+				if (tx.getHash().equals(txHash)) {
+					return Optional.of(tx);
+				}
+			}
+			return Optional.empty();
 		} catch (RocksDBException e) {
 			throw new RuntimeException("Failed to read TxIndex " + txHash, e);
 		}
@@ -202,6 +210,7 @@ public class BlockRepository {
 		// 1. Save StoredBlock
 		Bytes encoded = StoredBlockEncoder.INSTANCE.encode(storedBlock, StoredBlockVersion.V1);
 		batch.put(cf.blocks(), hashBytes, encoded.toArray());
+		blockCache.invalidate(block.getHash());
 
 		// 2. Index Transactions (TxHash -> BlockHash)
 		for (Tx tx : block.getTxs()) {

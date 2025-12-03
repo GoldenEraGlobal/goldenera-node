@@ -25,7 +25,6 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import java.math.BigInteger;
 import java.time.Instant;
-import java.util.Collections;
 import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
@@ -34,6 +33,7 @@ import org.springframework.stereotype.Service;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -63,16 +63,13 @@ public class ExIndexerEventReconstructionService {
         Instant receivedAt = storedBlock.getReceivedAt();
         ConnectedSource connectedSource = storedBlock.getConnectedSource();
 
-        // --- GENESIS HANDLING ---
-        if (height == 0) {
-            return createGenesisEvent(block, receivedFrom, receivedAt);
-        }
-
         // --- NORMAL BLOCK RECONSTRUCTION ---
-        Block prevBlock = chainQuery.getBlockByHash(block.getHeader().getPreviousHash())
-                .orElseThrow(() -> new IllegalStateException("Parent block not found for reconstruction: " + height));
+        Block prevBlock = height != 0 ? chainQuery.getBlockByHash(block.getHeader().getPreviousHash())
+                .orElseThrow(() -> new IllegalStateException("Parent block not found for reconstruction: " + height))
+                : null;
 
-        Hash startStateRoot = prevBlock.getHeader().getStateRootHash();
+        Hash startStateRoot = prevBlock == null ? MerkleTrie.EMPTY_TRIE_NODE_HASH
+                : prevBlock.getHeader().getStateRootHash();
 
         // 1. Create WorldState (Validation Mode = No Journal, Initial State Capture ON)
         WorldState worldState = worldStateFactory.createForValidation(startStateRoot);
@@ -110,28 +107,6 @@ public class ExIndexerEventReconstructionService {
                 actualRewardPaid,
                 cumulativeDifficulty,
                 actualBurnAmounts,
-                receivedFrom,
-                receivedAt);
-    }
-
-    private BlockConnectedEvent createGenesisEvent(Block block, Address receivedFrom, Instant receivedAt) {
-        return new BlockConnectedEvent(
-                this,
-                ConnectedSource.GENESIS,
-                block,
-                Collections.emptyMap(), // Balances
-                Collections.emptyMap(), // Nonces
-                Collections.emptyMap(), // Tokens
-                Collections.emptyMap(), // Bips
-                null, // Params diff
-                Collections.emptyMap(), // Authorities
-                Collections.emptyMap(), // Auth removed
-                Collections.emptyMap(), // Aliases
-                Collections.emptyMap(), // Aliases removed
-                Wei.ZERO, // Fees
-                Wei.ZERO, // Reward
-                block.getHeader().getDifficulty(), // Cumulative = Own difficulty for Genesis
-                Collections.emptyMap(), // Burn
                 receivedFrom,
                 receivedAt);
     }
