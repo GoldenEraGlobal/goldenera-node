@@ -29,6 +29,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
@@ -67,7 +68,7 @@ public class ExIndexerStatusCoreService {
 			return Optional.ofNullable(jdbcTemplate.queryForObject(
 					"SELECT synced_block_height, synced_block_hash, last_updated_at, app_version FROM explorer_status WHERE id = 1",
 					STATUS_ROW_MAPPER));
-		} catch (Exception e) {
+		} catch (EmptyResultDataAccessException e) {
 			return Optional.empty();
 		}
 	}

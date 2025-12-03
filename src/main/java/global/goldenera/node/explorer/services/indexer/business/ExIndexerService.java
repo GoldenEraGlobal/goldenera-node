@@ -146,6 +146,7 @@ public class ExIndexerService {
 
 	private void checkContinuity(Block block) throws ChainSplitException, AlreadyIndexedException {
 		long incomingHeight = block.getHeight();
+
 		// --- GENESIS HANDLING ---
 		if (incomingHeight == 0) {
 			ExStatus status = exStatusCoreService.getStatus().orElse(null);
@@ -162,6 +163,7 @@ public class ExIndexerService {
 		ExStatus status = exStatusCoreService.getStatusOrThrow();
 		Long height = status.getSyncedBlockHeight();
 		Hash hash = status.getSyncedBlockHash();
+
 		if (incomingHeight <= height) {
 			if (incomingHeight == height && !block.getHash().equals(hash)) {
 				throw new ChainSplitException("Reorg at HEAD: DB=" + hash + ", New=" + block.getHash());
@@ -169,8 +171,9 @@ public class ExIndexerService {
 			throw new AlreadyIndexedException("Block " + incomingHeight + " already indexed");
 		}
 
+		// --- GAP DETECTION & HEALING ---
 		if (incomingHeight > height + 1) {
-			final Long finalHeight = height;
+			Long finalHeight = height;
 			StoredBlock nextCoreBlock = chainQueryService.getStoredBlockByHeight(height + 1)
 					.orElseThrow(() -> new GEFailedException("Missing block in chain query: " + (finalHeight + 1)));
 
@@ -182,7 +185,6 @@ public class ExIndexerService {
 			}
 
 			log.warn("Gap detected! Explorer Head: #%d, Received: #%d. Healing...", height, incomingHeight);
-
 			registry.counter("explorer.gap.healing").increment();
 
 			healGap(height + 1, incomingHeight - 1);
@@ -190,8 +192,18 @@ public class ExIndexerService {
 			status = exStatusCoreService.getStatusOrThrow();
 			height = status.getSyncedBlockHeight();
 			hash = status.getSyncedBlockHash();
+
+			if (!block.getHeader().getPreviousHash().equals(hash)) {
+				log.warn(
+						"Gap healed to #{}, but incoming block #{} (Prev: {}) STILL does not attach to Head (Hash: {}). "
+								+
+								"Incoming block is likely an orphan/stale event. Skipping processing to preserve healed chain.",
+						height, incomingHeight, block.getHeader().getPreviousHash(), hash);
+				throw new AlreadyIndexedException("Incoming block mismatch after heal - skipping as orphan");
+			}
 		}
 
+		// Standard check
 		if (!block.getHeader().getPreviousHash().equals(hash)) {
 			throw new ChainSplitException(String.format(
 					"Chain split: Explorer Head %s != Block Prev %s",
