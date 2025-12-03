@@ -28,4 +28,5 @@
     <springProperty scope="context" name="GOLDENERA_LEVEL" source="LOGGING_LEVEL_GLOBAL_GOLDENERA"
         defaultValue="INFO" />
     <logger name="global.goldenera" level="${GOLDENERA_LEVEL}" />
+    <logger name="global.goldenera.randomx" level="WARN" />
 </configuration>
