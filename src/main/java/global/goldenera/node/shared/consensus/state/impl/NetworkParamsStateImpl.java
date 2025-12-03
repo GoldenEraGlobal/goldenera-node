@@ -100,7 +100,8 @@ public class NetworkParamsStateImpl implements NetworkParamsState {
 
 		return this.toBuilder()
 				.blockReward(p.getBlockReward() != null ? p.getBlockReward() : this.blockReward)
-				.blockRewardPoolAddress(p.getBlockRewardPoolAddress() != null ? p.getBlockRewardPoolAddress() : null)
+				.blockRewardPoolAddress(p.getBlockRewardPoolAddress() != null ? p.getBlockRewardPoolAddress()
+						: this.blockRewardPoolAddress)
 				.targetMiningTimeMs(
 						p.getTargetMiningTimeMs() != null ? p.getTargetMiningTimeMs() : this.targetMiningTimeMs)
 				.asertHalfLifeBlocks(
