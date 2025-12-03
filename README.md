@@ -41,11 +41,11 @@ For optimal mining performance (RandomX), huge pages must be enabled on the host
     ```
 2.  Add the following line to the end of the file:
     ```properties
-    vm.nr_hugepages=1300
+    vm.nr_hugepages=2000
     ```
 3.  Apply the changes immediately:
     ```bash
-    sudo sysctl -w vm.nr_hugepages=1300
+    sudo sysctl -w vm.nr_hugepages=2000
     ```
 
 ### 2. Project Setup
@@ -85,7 +85,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
-
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         reservations:
