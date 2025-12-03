@@ -111,8 +111,13 @@ public class TxValidator {
 				break;
 			case BIP_TOKEN_UPDATE:
 				if (tx.getPayload() instanceof TxBipTokenUpdatePayload p) {
-					validateTokenName(p.getName());
-					validateTokenName(p.getSmallestUnitName());
+					// null values during update mean the old value is kept
+					if (p.getName() != null) {
+						validateTokenName(p.getName());
+					}
+					if (p.getSmallestUnitName() != null) {
+						validateTokenName(p.getSmallestUnitName());
+					}
 					ValidatorUtil.Url.url(p.getWebsiteUrl());
 					ValidatorUtil.Url.url(p.getLogoUrl());
 				}
@@ -224,13 +229,13 @@ public class TxValidator {
 	}
 
 	private void validateBlockReward(Wei blockReward) {
-		if (blockReward == null || blockReward.compareTo(Wei.ZERO) < 0) {
+		if (blockReward != null && blockReward.compareTo(Wei.ZERO) < 0) {
 			throw new GEValidationException("Block reward must be positive");
 		}
 	}
 
 	private void validateMiningTargetTime(Long miningTargetTime) {
-		if (miningTargetTime == null || miningTargetTime < 5000) { // Min 5 seconds
+		if (miningTargetTime != null && miningTargetTime < 5000) { // Min 5 seconds
 			throw new GEValidationException("Mining target time too low.");
 		}
 	}
