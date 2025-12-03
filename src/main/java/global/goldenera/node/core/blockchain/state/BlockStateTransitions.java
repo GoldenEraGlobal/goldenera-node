@@ -27,6 +27,9 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -40,6 +43,8 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.reorg.ChainSwitchService;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -55,14 +60,20 @@ import lombok.extern.slf4j.Slf4j;
 public class BlockStateTransitions {
 
 	BlockRepository blockRepository;
+	ChainQuery chainQueryService;
+	ChainSwitchService chainSwitchService;
 	ApplicationEventPublisher applicationEventPublisher;
 	ReentrantLock masterChainLock;
 
 	public BlockStateTransitions(
 			BlockRepository blockRepository,
+			ChainQuery chainQueryService,
+			ChainSwitchService chainSwitchService,
 			ApplicationEventPublisher applicationEventPublisher,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock) {
 		this.blockRepository = blockRepository;
+		this.chainQueryService = chainQueryService;
+		this.chainSwitchService = chainSwitchService;
 		this.applicationEventPublisher = applicationEventPublisher;
 		this.masterChainLock = masterChainLock;
 	}
@@ -101,16 +112,62 @@ public class BlockStateTransitions {
 					.build();
 
 			boolean isNewHead = false;
+			StoredBlock currentHead = null;
 
 			if (source == ConnectedSource.GENESIS) {
 				isNewHead = true;
 			} else {
-				StoredBlock currentHead = blockRepository.getLatestStoredBlock().orElse(null);
+				currentHead = blockRepository.getLatestStoredBlock().orElse(null);
 				if (currentHead == null || cumulativeDifficulty.compareTo(currentHead.getCumulativeDifficulty()) > 0) {
 					isNewHead = true;
 				}
 			}
 
+			// --- REORG DETECTION ---
+			if (isNewHead && currentHead != null
+					&& !block.getHeader().getPreviousHash().equals(currentHead.getHash())) {
+				log.info("Reorg detected in connectBlock! New Head: {} (TD: {}), Current Head: {} (TD: {})",
+						block.getHeight(), cumulativeDifficulty, currentHead.getHeight(),
+						currentHead.getCumulativeDifficulty());
+
+				try {
+					// 1. Find Common Ancestor
+					StoredBlock commonAncestor = null;
+					List<StoredBlock> forkChain = new ArrayList<>();
+					forkChain.add(storedBlockToSave);
+
+					StoredBlock cursor = blockRepository.getStoredBlockByHash(block.getHeader().getPreviousHash())
+							.orElseThrow(() -> new GEFailedException("Broken link in reorg chain"));
+
+					while (cursor != null) {
+						StoredBlock mainChainBlock = chainQueryService.getStoredBlockByHeight(cursor.getHeight())
+								.orElse(null);
+						if (mainChainBlock != null && mainChainBlock.getHash().equals(cursor.getHash())) {
+							commonAncestor = cursor;
+							break;
+						}
+						forkChain.add(cursor);
+						cursor = blockRepository.getStoredBlockByHash(cursor.getBlock().getHeader().getPreviousHash())
+								.orElse(null);
+					}
+
+					if (commonAncestor == null) {
+						throw new GEFailedException("Could not find common ancestor for reorg!");
+					}
+
+					Collections.reverse(forkChain); // Now it's Ancestor -> ... -> NewBlock
+
+					// 2. Execute Switch
+					chainSwitchService.executeAtomicReorgSwap(commonAncestor, forkChain, true);
+					return; // Done, reorg service handled everything
+
+				} catch (Exception e) {
+					log.error("Failed to execute reorg in connectBlock", e);
+					throw new GEFailedException("Reorg failed", e);
+				}
+			}
+
+			// --- STANDARD CONNECT ---
 			final boolean performFullConnect = isNewHead;
 
 			try {
