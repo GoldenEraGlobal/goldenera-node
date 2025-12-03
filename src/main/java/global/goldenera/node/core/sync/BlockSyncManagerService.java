@@ -269,6 +269,16 @@ public class BlockSyncManagerService {
 
 				Hash expectedPrev = (allHeaders.isEmpty()) ? null
 						: allHeaders.get(allHeaders.size() - 1).getHash();
+
+				// Validate first header connects to something we have
+				if (allHeaders.isEmpty() && !batch.isEmpty()) {
+					Hash firstParent = batch.get(0).getPreviousHash();
+					if (!blockRepository.hasBlockData(firstParent)) {
+						throw new GEValidationException("Peer sent header " + batch.get(0).getHash()
+								+ " whose parent " + firstParent + " is missing from our DB");
+					}
+				}
+
 				for (BlockHeader h : batch) {
 					if (expectedPrev != null && !h.getPreviousHash().equals(expectedPrev)) {
 						throw new GEValidationException("Broken header linkage");
