@@ -30,7 +30,7 @@ services:
     deploy:
       resources:
         reservations:
-          memory: 4G
+          memory: 5G
 
   # ==============================================================================
   # DATABASE
