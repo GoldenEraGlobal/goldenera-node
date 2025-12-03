@@ -79,8 +79,8 @@ public class ExIndexerService {
 
 		int attempts = 0;
 		while (true) {
-			if (attempts++ > 100) {
-				throw new GEFailedException("Too many reorg attempts (100+). Aborting to prevent infinite loop.");
+			if (attempts++ > 3000) {
+				throw new GEFailedException("Too many reorg attempts (3000+). Aborting to prevent infinite loop.");
 			}
 			try {
 				checkContinuity(block);
@@ -170,8 +170,23 @@ public class ExIndexerService {
 		}
 
 		if (incomingHeight > height + 1) {
+			final Long finalHeight = height;
+			StoredBlock nextCoreBlock = chainQueryService.getStoredBlockByHeight(height + 1)
+					.orElseThrow(() -> new GEFailedException("Missing block in chain query: " + (finalHeight + 1)));
+
+			if (!nextCoreBlock.getBlock().getHeader().getPreviousHash().equals(hash)) {
+				log.warn(
+						"Deep Reorg detected! Core block #{} (Prev: {}) does not attach to Explorer Head #{} (Hash: {}). Triggering revert.",
+						height + 1, nextCoreBlock.getBlock().getHeader().getPreviousHash(), height, hash);
+				throw new ChainSplitException("Deep Chain Split detected at gap start: " + height);
+			}
+
 			log.warn("Gap detected! Explorer Head: #%d, Received: #%d. Healing...", height, incomingHeight);
+
+			registry.counter("explorer.gap.healing").increment();
+
 			healGap(height + 1, incomingHeight - 1);
+
 			status = exStatusCoreService.getStatusOrThrow();
 			height = status.getSyncedBlockHeight();
 			hash = status.getSyncedBlockHash();
