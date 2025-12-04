@@ -274,10 +274,8 @@ public class BlockSyncManagerService {
 	}
 
 	private List<BlockHeader> downloadHeaders(RemotePeer peer, Block localBest) throws Exception {
-		long methodStart = System.currentTimeMillis();
 		List<BlockHeader> allHeaders = new ArrayList<>();
 		Hash stopHash = peer.getHeadHash();
-
 		long locatorStart = System.currentTimeMillis();
 		List<Hash> currentLocators = new ArrayList<>(chainQueryService.getLocatorHashes());
 		long locatorTime = System.currentTimeMillis() - locatorStart;
@@ -342,8 +340,6 @@ public class BlockSyncManagerService {
 			}
 		}
 
-		// Validate the entire sequence of headers we just downloaded
-		// We do this here because we have the full context (allHeaders)
 		if (!allHeaders.isEmpty()) {
 			validateBatch(allHeaders);
 		}
@@ -356,10 +352,9 @@ public class BlockSyncManagerService {
 		for (BlockHeader h : headers) {
 			contextMap.put(h.getHeight(), h.getHash());
 		}
-
-		for (BlockHeader h : headers) {
+		headers.parallelStream().forEach(h -> {
 			blockValidationService.validateHeader(h, contextMap);
-		}
+		});
 	}
 
 	private List<StoredBlock> downloadAndPersistBodies(RemotePeer peer, List<BlockHeader> headers) throws Exception {
