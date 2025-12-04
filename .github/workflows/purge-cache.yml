@@ -30,19 +30,33 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Execute Cache Purge
+      - name: Execute Cache Purge Loop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           echo "Starting cache cleanup for repository: $REPO"
 
-          # List caches before deletion for audit log clarity
-          echo "Current cache status:"
-          gh actions-cache list -R $REPO || echo "No cache list available or empty."
+          while : ; do
+            echo "Fetching list of cache keys..."
+            
+            CACHE_KEYS=$(gh actions-cache list -R $REPO --limit 100 | cut -f 1)
+            
+            if [ -z "$CACHE_KEYS" ]; then
+              echo "No more cache entries found. Cleanup complete."
+              break
+            fi
 
-          # Execute deletion
-          # The --confirm flag bypasses the interactive prompt since we handled safety via inputs
-          gh actions-cache delete --all --confirm -R $REPO
+            echo "Found batch of keys. Deleting..."
+            
+            echo "$CACHE_KEYS" | while read -r KEY; do
+              if [ -n "$KEY" ]; then
+                echo "Deleting cache key: $KEY"
+                gh actions-cache delete "$KEY" -R $REPO --confirm || echo "Failed to delete $KEY, continuing..."
+              fi
+            done
+            
+            echo "Batch finished. Checking for remaining entries..."
+          done
 
           echo "::notice::All cache entries have been successfully removed."
