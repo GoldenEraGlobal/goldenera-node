@@ -29,14 +29,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
@@ -82,6 +85,34 @@ public class RandomXManager {
 	private boolean isShuttingDown = false;
 
 	final AtomicBoolean initializationInProgress = new AtomicBoolean(false);
+
+	// Cache for temporary VMs during sync (key = seed bytes as hex string)
+	final Map<Bytes, CachedRandomXVM> epochVMCache = new ConcurrentHashMap<>();
+	private static final int MAX_CACHED_EPOCHS = 3;
+
+	private static class CachedRandomXVM {
+		final RandomXCache cache;
+		final Set<RandomXFlag> flags;
+		final Bytes seed;
+		volatile long lastUsed;
+
+		CachedRandomXVM(RandomXCache cache, Set<RandomXFlag> flags, Bytes seed) {
+			this.cache = cache;
+			this.flags = flags;
+			this.seed = seed;
+			this.lastUsed = System.currentTimeMillis();
+		}
+
+		void close() {
+			if (cache != null) {
+				try {
+					cache.close();
+				} catch (Exception e) {
+					// ignore
+				}
+			}
+		}
+	}
 
 	public boolean isInitializationInProgress() {
 		return initializationInProgress.get();
@@ -213,40 +244,78 @@ public class RandomXManager {
 		}
 
 		// Scenario 2: Different Epoch (Syncing/Old Block)
-		// We do this OUTSIDE the lock to avoid blocking the miner.
-		log.debug("Creating temporary RandomX VM for height {} (Different Epoch)", height);
-		return createTemporaryVM(requiredSeed);
+		// Use cached VM if available to avoid expensive re-initialization
+		return getOrCreateCachedVM(requiredSeed, height);
 	}
 
 	public RandomXVM getLightVMForVerification(long height) {
 		return getLightVMForVerification(height, h -> chainQuery.getBlockHashByHeight(h).map(Hash::toArray));
 	}
 
-	private RandomXVM createTemporaryVM(byte[] seed) {
-		// For temporary/light VMs, we MUST NOT use FULL_MEM as we don't have a dataset
-		Set<RandomXFlag> lightFlags = EnumSet.copyOf(flags);
-		lightFlags.remove(RandomXFlag.FULL_MEM);
+	/**
+	 * Get or create a cached RandomX VM for the given seed.
+	 * This dramatically speeds up sync across epochs by reusing the cache.
+	 */
+	private RandomXVM getOrCreateCachedVM(byte[] seed, long height) {
+		Bytes seedKey = Bytes.wrap(seed);
 
-		RandomXCache tempCache = new RandomXCache(lightFlags);
-		boolean success = false;
+		CachedRandomXVM cached = epochVMCache.computeIfAbsent(seedKey, k -> {
+			log.info("Creating cached RandomX VM for epoch at height {} (will be reused for all blocks in this epoch)",
+					height);
+			Set<RandomXFlag> lightFlags = EnumSet.copyOf(flags);
+			lightFlags.remove(RandomXFlag.FULL_MEM);
+			lightFlags.remove(RandomXFlag.LARGE_PAGES);
+
+			RandomXCache tempCache = new RandomXCache(lightFlags);
+			try {
+				tempCache.init(seed);
+				return new CachedRandomXVM(tempCache, lightFlags, seedKey);
+			} catch (Exception e) {
+				tempCache.close();
+				throw e;
+			}
+		});
+
+		cached.lastUsed = System.currentTimeMillis();
+
+		// Evict old caches if we have too many
+		if (epochVMCache.size() > MAX_CACHED_EPOCHS) {
+			evictOldestCache();
+		}
+
+		// Create a VM using the cached cache (VM creation is cheap, cache init is
+		// expensive)
+		activeVMs.incrementAndGet();
 		try {
-			tempCache.init(seed);
-			// Return a wrapper that closes the internal cache when VM is closed
-			RandomXVM vm = new RandomXVM(lightFlags, tempCache, null) {
+			return new RandomXVM(cached.flags, cached.cache, null) {
 				@Override
 				public void close() {
-					try {
-						super.close();
-					} finally {
-						tempCache.close(); // Crucial: Release native memory
-					}
+					super.close();
+					activeVMs.decrementAndGet();
 				}
 			};
-			success = true;
-			return vm;
-		} finally {
-			if (!success) {
-				tempCache.close();
+		} catch (Exception e) {
+			activeVMs.decrementAndGet();
+			throw e;
+		}
+	}
+
+	private void evictOldestCache() {
+		Bytes oldestKey = null;
+		long oldestTime = Long.MAX_VALUE;
+
+		for (Map.Entry<Bytes, CachedRandomXVM> entry : epochVMCache.entrySet()) {
+			if (entry.getValue().lastUsed < oldestTime) {
+				oldestTime = entry.getValue().lastUsed;
+				oldestKey = entry.getKey();
+			}
+		}
+
+		if (oldestKey != null) {
+			CachedRandomXVM removed = epochVMCache.remove(oldestKey);
+			if (removed != null) {
+				log.debug("Evicting old RandomX epoch cache");
+				removed.close();
 			}
 		}
 	}
