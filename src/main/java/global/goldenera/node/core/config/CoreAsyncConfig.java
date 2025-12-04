@@ -70,9 +70,10 @@ public class CoreAsyncConfig {
 	@Bean(name = P2P_SEND_EXECUTOR)
 	public Executor p2pSendExecutor() {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-		executor.setCorePoolSize(2);
-		executor.setMaxPoolSize(6);
-		executor.setQueueCapacity(500);
+		int cores = Runtime.getRuntime().availableProcessors();
+		executor.setCorePoolSize(Math.max(4, cores / 2));
+		executor.setMaxPoolSize(Math.max(8, cores));
+		executor.setQueueCapacity(1000);
 		executor.setThreadNamePrefix("P2P-Out-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 		executor.initialize();

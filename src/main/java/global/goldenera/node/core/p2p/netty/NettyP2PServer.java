@@ -62,7 +62,11 @@ public class NettyP2PServer implements CommandLineRunner {
 						.channel(NioServerSocketChannel.class)
 						.childHandler(channelInitializer)
 						.option(ChannelOption.SO_BACKLOG, 128)
-						.childOption(ChannelOption.SO_KEEPALIVE, true);
+						.option(ChannelOption.SO_REUSEADDR, true)
+						.childOption(ChannelOption.SO_KEEPALIVE, true)
+						.childOption(ChannelOption.TCP_NODELAY, true)
+						.childOption(ChannelOption.SO_SNDBUF, 1024 * 1024)
+						.childOption(ChannelOption.SO_RCVBUF, 1024 * 1024);
 				b.bind(p2pProperties.getPort()).sync().channel().closeFuture().sync();
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();

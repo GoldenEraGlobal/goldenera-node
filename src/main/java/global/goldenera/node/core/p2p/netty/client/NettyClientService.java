@@ -69,7 +69,9 @@ public class NettyClientService implements DisposableBean {
 				.handler(p2pChannelInitializer)
 				.option(ChannelOption.SO_KEEPALIVE, true)
 				.option(ChannelOption.TCP_NODELAY, true)
-				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000);
+				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
+				.option(ChannelOption.SO_SNDBUF, 1024 * 1024)
+				.option(ChannelOption.SO_RCVBUF, 1024 * 1024);
 
 		ChannelFuture f = b.connect(host, port);
 		f.addListener(future -> {

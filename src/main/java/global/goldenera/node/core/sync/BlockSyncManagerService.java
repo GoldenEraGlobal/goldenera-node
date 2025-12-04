@@ -474,67 +474,96 @@ public class BlockSyncManagerService {
 		try {
 			Block localBest = chainQueryService.getLatestBlockOrThrow();
 
-			if (header.getHeight() > localBest.getHeight() ||
-					chainQueryService.getStoredBlockByHash(header.getPreviousHash()).isEmpty()) {
-
-				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
-
-				long reqId = peer.reserveRequestId();
-				pendingBodyRequests.put(reqId, future);
-
-				log.debug("Headers-First: Requesting body for #{} from {}", header.getHeight(), peer.getIdentity());
-
-				peer.sendGetBlockBodies(new ArrayList<>(List.of(header.getHash())), reqId);
-
-				future.orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-						.thenAcceptAsync(bodies -> {
-							pendingBodyRequests.remove(reqId);
-
-							if (bodies == null || bodies.isEmpty()) {
-								log.warn("Peer {} sent empty body response for #{}", peer.getIdentity(),
-										header.getHeight());
-								return;
-							}
-
-							List<Tx> txs = bodies.get(0);
-							if (!TxRootUtil.txRootHash(txs).equals(header.getTxRootHash())) {
-								log.warn("Invalid Merkle Root for broadcast block #{} from {}", header.getHeight(),
-										peer.getIdentity());
-								peerReputationService.recordFailure(peer.getIdentity());
-								return;
-							}
-
-							Block block = BlockImpl.builder()
-									.header(header)
-									.txs(txs)
-									.build();
-
-							blockIngestionService.processBlock(
-									block,
-									ConnectedSource.BROADCAST,
-									peer.getIdentity(),
-									Instant.now());
-
-						}, coreTaskExecutor)
-						.exceptionally(e -> {
-							if (e instanceof TimeoutException) {
-								log.warn("Timeout waiting for body of block #{} from {}", header.getHeight(),
-										peer.getIdentity());
-								peerReputationService.recordFailure(peer.getIdentity()); // Penalty for slowness
-							} else {
-								log.warn("Failed to download/process broadcast body for #{} - {}", header.getHeight(),
-										e.getMessage());
-							}
-							pendingBodyRequests.remove(reqId);
-							return null;
-						})
-						.whenComplete((v, e) -> {
-							pendingBroadcastDownloads.remove(header.getHash());
-						});
-			} else {
-				// If we didn't need to download it (e.g. old block), remove from pending
+			// Skip blocks that are too old - they can't possibly extend our chain
+			// Only process if:
+			// 1. Block extends our tip (height > localBest)
+			// 2. OR block is at same height as tip (potential uncle/reorg)
+			// 3. OR block is slightly behind but parent exists (potential short reorg)
+			if (header.getHeight() < localBest.getHeight() - 10) {
+				// Block is more than 10 blocks behind - too old to care about
+				log.debug("Ignoring old broadcast block #{} (local tip: {})",
+						header.getHeight(), localBest.getHeight());
 				pendingBroadcastDownloads.remove(header.getHash());
+				return;
 			}
+
+			// Check if parent exists (must exist to process this block)
+			boolean parentExists = chainQueryService.getStoredBlockByHash(header.getPreviousHash()).isPresent();
+
+			if (header.getHeight() > localBest.getHeight()) {
+				// This block extends our chain - definitely want it
+				// If parent is missing, we'll need to sync anyway
+				if (!parentExists) {
+					// Gap detected - trigger sync instead of trying to download single block
+					log.debug("Broadcast block #{} has missing parent, will sync", header.getHeight());
+					signalQueue.offer(new Object());
+					pendingBroadcastDownloads.remove(header.getHash());
+					return;
+				}
+			} else if (!parentExists) {
+				// Block is at or below our height AND parent doesn't exist
+				// This is an orphan on a different chain - ignore it
+				log.debug("Ignoring broadcast block #{} - no parent and not extending tip", header.getHeight());
+				pendingBroadcastDownloads.remove(header.getHash());
+				return;
+			}
+
+			// At this point: either block extends tip with valid parent,
+			// or is a potential reorg block we should evaluate
+			CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
+
+			long reqId = peer.reserveRequestId();
+			pendingBodyRequests.put(reqId, future);
+
+			log.debug("Headers-First: Requesting body for #{} from {}", header.getHeight(), peer.getIdentity());
+
+			peer.sendGetBlockBodies(new ArrayList<>(List.of(header.getHash())), reqId);
+
+			future.orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+					.thenAcceptAsync(bodies -> {
+						pendingBodyRequests.remove(reqId);
+
+						if (bodies == null || bodies.isEmpty()) {
+							log.warn("Peer {} sent empty body response for #{}", peer.getIdentity(),
+									header.getHeight());
+							return;
+						}
+
+						List<Tx> txs = bodies.get(0);
+						if (!TxRootUtil.txRootHash(txs).equals(header.getTxRootHash())) {
+							log.warn("Invalid Merkle Root for broadcast block #{} from {}", header.getHeight(),
+									peer.getIdentity());
+							peerReputationService.recordFailure(peer.getIdentity());
+							return;
+						}
+
+						Block block = BlockImpl.builder()
+								.header(header)
+								.txs(txs)
+								.build();
+
+						blockIngestionService.processBlock(
+								block,
+								ConnectedSource.BROADCAST,
+								peer.getIdentity(),
+								Instant.now());
+
+					}, coreTaskExecutor)
+					.exceptionally(e -> {
+						if (e instanceof TimeoutException) {
+							log.warn("Timeout waiting for body of block #{} from {}", header.getHeight(),
+									peer.getIdentity());
+							peerReputationService.recordFailure(peer.getIdentity()); // Penalty for slowness
+						} else {
+							log.warn("Failed to download/process broadcast body for #{} - {}", header.getHeight(),
+									e.getMessage());
+						}
+						pendingBodyRequests.remove(reqId);
+						return null;
+					})
+					.whenComplete((v, e) -> {
+						pendingBroadcastDownloads.remove(header.getHash());
+					});
 		} catch (Exception e) {
 			log.error("Failed to handle broadcast header", e);
 			pendingBroadcastDownloads.remove(header.getHash());
