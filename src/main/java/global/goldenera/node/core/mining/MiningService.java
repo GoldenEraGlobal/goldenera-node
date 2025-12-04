@@ -213,6 +213,12 @@ public class MiningService {
 	 */
 	public void stopCurrentNonceSearch() {
 		if (isMining.get() && miningThread != null) {
+			// CRITICAL: Do NOT interrupt during RandomX initialization!
+			// This can cause SIGSEGV as native memory is being allocated.
+			if (randomXService.isInitializationInProgress()) {
+				log.debug("RandomX init in progress - skipping interrupt to avoid native crash");
+				return;
+			}
 			log.debug("Interrupting current mining job (New Block / Event)");
 			miningThread.interrupt();
 		}
