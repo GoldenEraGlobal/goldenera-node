@@ -274,18 +274,37 @@ public class BlockSyncManagerService {
 	}
 
 	private List<BlockHeader> downloadHeaders(RemotePeer peer, Block localBest) throws Exception {
+		long methodStart = System.currentTimeMillis();
 		List<BlockHeader> allHeaders = new ArrayList<>();
 		Hash stopHash = peer.getHeadHash();
+
+		long locatorStart = System.currentTimeMillis();
 		List<Hash> currentLocators = new ArrayList<>(chainQueryService.getLocatorHashes());
+		long locatorTime = System.currentTimeMillis() - locatorStart;
+		if (locatorTime > 100) {
+			log.warn("SLOW getLocatorHashes: {}ms for {} locators at height {}",
+					locatorTime, currentLocators.size(), localBest.getHeight());
+		}
 
 		while (allHeaders.size() < SYNC_CHUNK_SIZE_HEADERS) {
 			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
 			long reqId = peer.reserveRequestId();
 			pendingHeaderRequests.put(reqId, future);
 			int remaining = SYNC_CHUNK_SIZE_HEADERS - allHeaders.size();
+
+			long sendStart = System.currentTimeMillis();
 			peer.sendGetBlockHeaders(currentLocators, stopHash, remaining, reqId);
+			log.debug("Sent GetHeaders request {} for {} headers from height {}", reqId, remaining,
+					localBest.getHeight());
+
 			try {
 				List<BlockHeader> batch = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+				long waitTime = System.currentTimeMillis() - sendStart;
+				if (waitTime > 2000) {
+					log.warn("SLOW header response: {}ms for {} headers (reqId: {})",
+							waitTime, batch != null ? batch.size() : 0, reqId);
+				}
+
 				if (batch == null || batch.isEmpty())
 					break;
 
