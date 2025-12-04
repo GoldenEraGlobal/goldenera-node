@@ -38,13 +38,16 @@ import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
 @Configuration
 @EnableJpaRepositories(value = {
         "global.goldenera.node.explorer.repositories",
-        "global.goldenera.node.shared.repositories"
+        "global.goldenera.node.shared.repositories",
+        "global.goldenera.node.core.webhook.repositories",
 }, repositoryBaseClass = BaseJpaRepositoryImpl.class)
 @EntityScan(basePackages = {
         "global.goldenera.node.explorer.entities",
         "global.goldenera.node.explorer.converters",
         "global.goldenera.node.shared.converters",
-        "global.goldenera.node.shared.entities"
+        "global.goldenera.node.shared.entities",
+        "global.goldenera.node.core.webhook.entities",
+        "global.goldenera.node.core.webhook.converters"
 })
 public class Application {
 
