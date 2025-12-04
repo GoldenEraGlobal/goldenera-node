@@ -116,6 +116,10 @@ public class ChainQuery {
         return blockRepository.findByHeightRange(fromHeight, toHeight);
     }
 
+    public List<Block> getBlocksByHashes(List<Hash> hashes) {
+        return blockRepository.getBlocksByHashes(hashes);
+    }
+
     public Optional<BlockHeader> getBlockHeaderByHash(Hash hash) {
         return blockRepository.getBlockHeaderByHash(hash);
     }

@@ -100,16 +100,30 @@ public class BlockSyncResponderService {
 	@EventListener
 	@Async(P2P_SEND_EXECUTOR)
 	public void handleGetBodies(P2PBlockBodiesRequestedEvent event) {
+		long start = System.currentTimeMillis();
 		List<Hash> hashes = event.getHashes();
-		List<List<Tx>> bodies = new ArrayList<>();
-		for (Hash blockHash : hashes) {
-			Optional<Block> blockOpt = chainQueryService.getBlockByHash(blockHash);
-			if (blockOpt.isPresent()) {
-				bodies.add(blockOpt.get().getTxs());
+
+		// Batch fetch all blocks at once (uses multiGet internally)
+		List<Block> blocks = chainQueryService.getBlocksByHashes(hashes);
+
+		// Extract transaction lists, maintaining order
+		List<List<Tx>> bodies = new ArrayList<>(hashes.size());
+		int blockIdx = 0;
+		for (Hash hash : hashes) {
+			if (blockIdx < blocks.size() && blocks.get(blockIdx).getHash().equals(hash)) {
+				bodies.add(blocks.get(blockIdx).getTxs());
+				blockIdx++;
 			} else {
+				// Block not found, add empty list
 				bodies.add(new ArrayList<>());
 			}
 		}
+
+		long totalTime = System.currentTimeMillis() - start;
+		if (totalTime > 500) { // Only log slow requests
+			log.warn("SLOW GetBodies: {} blocks in {}ms", hashes.size(), totalTime);
+		}
+
 		event.getPeer().sendBlockBodies(bodies, event.getRequestId());
 	}
 }
