@@ -85,9 +85,12 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE)
 public class BlockSyncManagerService {
 
-	static final int SYNC_CHUNK_SIZE_HEADERS = 100;
+	static final int SYNC_CHUNK_SIZE_HEADERS = 500;
+	// Max 4 bodies per request due to MAX_FRAME_SIZE (32MB) and blocks up to 6MB
+	// each
 	static final int BODY_DOWNLOAD_BATCH_SIZE = 4;
-	static final long TIMEOUT_SECONDS = 30;
+	static final long TIMEOUT_SECONDS = 10;
+	static final long SYNC_POLL_DELAY_MS = 100;
 
 	final MeterRegistry registry;
 	final ReentrantLock masterChainLock;
@@ -168,7 +171,9 @@ public class BlockSyncManagerService {
 	private void syncLoop() {
 		while (isRunning.get()) {
 			try {
-				signalQueue.poll(10, TimeUnit.SECONDS);
+				// Use short poll during active sync, longer when synced
+				long pollDelay = synced ? 5000 : SYNC_POLL_DELAY_MS;
+				signalQueue.poll(pollDelay, TimeUnit.MILLISECONDS);
 				checkAndSync();
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
@@ -218,12 +223,23 @@ public class BlockSyncManagerService {
 		Timer.Sample sample = Timer.start(registry);
 		try {
 			log.debug("Starting sync with peer {}", peer.getIdentity());
+
+			long headerStart = System.currentTimeMillis();
 			List<BlockHeader> headersToSync = downloadHeaders(peer, localBest);
+			long headerTime = System.currentTimeMillis() - headerStart;
+
 			if (headersToSync.isEmpty()) {
 				log.debug("No new headers found from peer");
 				return true;
 			}
+
+			log.info("Downloaded {} headers in {}ms", headersToSync.size(), headerTime);
+
+			long bodyStart = System.currentTimeMillis();
 			List<StoredBlock> newChainBlocks = downloadAndPersistBodies(peer, headersToSync);
+			long bodyTime = System.currentTimeMillis() - bodyStart;
+
+			log.info("Downloaded and persisted {} block bodies in {}ms", newChainBlocks.size(), bodyTime);
 
 			if (!newChainBlocks.isEmpty()) {
 				miningService.pauseMining();
@@ -231,8 +247,13 @@ public class BlockSyncManagerService {
 						.getStoredBlockByHashOrThrow(headersToSync.get(0).getPreviousHash());
 				masterChainLock.lock();
 				try {
+					long reorgStart = System.currentTimeMillis();
 					blockReorgService.executeAtomicReorgSwap(commonAncestor, newChainBlocks);
-					log.info("Sync batch completed, new tip at height {}",
+					long reorgTime = System.currentTimeMillis() - reorgStart;
+
+					log.info(
+							"Sync batch completed, {} blocks connected in {}ms (total batch: {}ms), new tip at height {}",
+							newChainBlocks.size(), reorgTime, headerTime + bodyTime + reorgTime,
 							newChainBlocks.get(newChainBlocks.size() - 1).getBlock().getHeight());
 				} finally {
 					masterChainLock.unlock();
@@ -330,26 +351,42 @@ public class BlockSyncManagerService {
 		BigInteger currentCumulativeDifficulty = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash)
 				.getCumulativeDifficulty();
 
-		for (int i = 0; i < headers.size(); i += BODY_DOWNLOAD_BATCH_SIZE) {
-			List<BlockHeader> batchHeaders = headers.subList(i, Math.min(i + BODY_DOWNLOAD_BATCH_SIZE, headers.size()));
-			List<Hash> hashes = batchHeaders.stream().map(h -> h.getHash()).collect(Collectors.toList());
+		// Pipeline: Keep up to PIPELINE_DEPTH requests in flight simultaneously
+		final int PIPELINE_DEPTH = 3;
+		List<PendingBodyRequest> pendingRequests = new ArrayList<>();
+		int nextBatchIndex = 0;
 
-			CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
+		while (nextBatchIndex < headers.size() || !pendingRequests.isEmpty()) {
+			// Send new requests up to pipeline depth
+			while (pendingRequests.size() < PIPELINE_DEPTH && nextBatchIndex < headers.size()) {
+				int startIdx = nextBatchIndex;
+				int endIdx = Math.min(nextBatchIndex + BODY_DOWNLOAD_BATCH_SIZE, headers.size());
+				List<BlockHeader> batchHeaders = headers.subList(startIdx, endIdx);
+				List<Hash> hashes = batchHeaders.stream().map(h -> h.getHash()).collect(Collectors.toList());
 
-			long reqId = peer.reserveRequestId();
-			pendingBodyRequests.put(reqId, future);
+				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
+				long reqId = peer.reserveRequestId();
+				pendingBodyRequests.put(reqId, future);
+				peer.sendGetBlockBodies(hashes, reqId);
 
-			peer.sendGetBlockBodies(hashes, reqId);
+				pendingRequests.add(new PendingBodyRequest(reqId, batchHeaders, future, startIdx));
+				nextBatchIndex = endIdx;
+			}
 
+			if (pendingRequests.isEmpty())
+				break;
+
+			// Wait for the oldest request in the pipeline
+			PendingBodyRequest oldest = pendingRequests.remove(0);
 			try {
-				List<List<Tx>> bodies = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+				List<List<Tx>> bodies = oldest.future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-				if (bodies == null || bodies.size() != batchHeaders.size()) {
+				if (bodies == null || bodies.size() != oldest.batchHeaders.size()) {
 					throw new GEValidationException("Mismatch body count from peer");
 				}
 
-				for (int j = 0; j < batchHeaders.size(); j++) {
-					BlockHeader header = batchHeaders.get(j);
+				for (int j = 0; j < oldest.batchHeaders.size(); j++) {
+					BlockHeader header = oldest.batchHeaders.get(j);
 					Long height = header.getHeight();
 					List<Tx> txs = bodies.get(j);
 
@@ -378,7 +415,11 @@ public class BlockSyncManagerService {
 				}
 
 			} catch (Exception e) {
-				pendingBodyRequests.remove(reqId);
+				pendingBodyRequests.remove(oldest.reqId);
+				// Cancel remaining requests
+				for (PendingBodyRequest req : pendingRequests) {
+					pendingBodyRequests.remove(req.reqId);
+				}
 				throw e;
 			}
 		}
@@ -392,6 +433,10 @@ public class BlockSyncManagerService {
 		}
 
 		return allDownloadedBlocks;
+	}
+
+	private record PendingBodyRequest(long reqId, List<BlockHeader> batchHeaders,
+			CompletableFuture<List<List<Tx>>> future, int startIndex) {
 	}
 
 	// --- EVENT LISTENERS ---

@@ -136,6 +136,9 @@ public class ChainSwitchService {
                     WorldState worldState = worldStateFactory
                             .createForValidation(previousBlock.getHeader().getStateRootHash());
 
+                    long batchStart = System.currentTimeMillis();
+                    int progressInterval = Math.max(50, newChainHeaders.size() / 10); // Log every 10% or 50 blocks
+
                     for (int i = 0; i < newChainHeaders.size(); i++) {
                         StoredBlock storedBlockToConnect = newChainHeaders.get(i);
                         Block blockToConnect = storedBlockToConnect.getBlock();
@@ -196,6 +199,16 @@ public class ChainSwitchService {
                         blockConnectedEvents.add(event);
                         worldState.prepareForNextBlock();
                         previousBlock = blockToConnect;
+
+                        // Progress logging
+                        if ((i + 1) % progressInterval == 0 || i == newChainHeaders.size() - 1) {
+                            long elapsed = System.currentTimeMillis() - batchStart;
+                            double blocksPerSec = (i + 1) * 1000.0 / elapsed;
+                            log.info("REORG PROGRESS: {}/{} blocks processed ({}%) - {} blocks/sec",
+                                    i + 1, newChainHeaders.size(),
+                                    (i + 1) * 100 / newChainHeaders.size(),
+                                    String.format("%.1f", blocksPerSec));
+                        }
                     }
                 });
                 entityIndexRepository.invalidateCaches();
