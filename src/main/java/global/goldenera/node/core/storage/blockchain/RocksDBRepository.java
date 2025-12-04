@@ -23,6 +23,9 @@
  */
 package global.goldenera.node.core.storage.blockchain;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
@@ -44,6 +47,21 @@ public class RocksDBRepository {
 
 	public byte[] get(ColumnFamilyHandle cf, byte[] key) throws RocksDBException {
 		return blockchainDB.get(cf, key);
+	}
+
+	/**
+	 * Batch get multiple keys from a column family.
+	 * Much more efficient than calling get() in a loop.
+	 */
+	public List<byte[]> multiGet(ColumnFamilyHandle cf, List<byte[]> keys) throws RocksDBException {
+		if (keys.isEmpty()) {
+			return new ArrayList<>();
+		}
+		List<ColumnFamilyHandle> cfHandles = new ArrayList<>(keys.size());
+		for (int i = 0; i < keys.size(); i++) {
+			cfHandles.add(cf);
+		}
+		return blockchainDB.multiGetAsList(cfHandles, keys);
 	}
 
 	public void write(WriteBatch batch, boolean sync) throws RocksDBException {

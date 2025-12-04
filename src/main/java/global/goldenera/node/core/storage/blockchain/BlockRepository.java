@@ -125,6 +125,55 @@ public class BlockRepository {
 				.orElseThrow(() -> new GENotFoundException("Block not found: " + hash));
 	}
 
+	/**
+	 * Batch get multiple blocks by their hashes using multiGet.
+	 * Much more efficient than calling getBlockByHash() in a loop.
+	 */
+	public List<Block> getBlocksByHashes(List<Hash> hashes) {
+		if (hashes.isEmpty())
+			return new ArrayList<>();
+
+		List<Block> blocks = new ArrayList<>(hashes.size());
+		List<Integer> missingIndices = new ArrayList<>();
+		List<byte[]> missingKeys = new ArrayList<>();
+
+		// Check cache first
+		for (int i = 0; i < hashes.size(); i++) {
+			Hash hash = hashes.get(i);
+			StoredBlock cached = blockCache.getIfPresent(hash);
+			if (cached != null) {
+				blocks.add(cached.getBlock());
+			} else {
+				blocks.add(null); // Placeholder
+				missingIndices.add(i);
+				missingKeys.add(hash.toArray());
+			}
+		}
+
+		// MultiGet for cache misses
+		if (!missingKeys.isEmpty()) {
+			try {
+				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
+				for (int j = 0; j < values.size(); j++) {
+					byte[] data = values.get(j);
+					if (data != null) {
+						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
+						if (!storedBlock.isPartial()) {
+							blockCache.put(hashes.get(missingIndices.get(j)), storedBlock);
+						}
+						blocks.set(missingIndices.get(j), storedBlock.getBlock());
+					}
+				}
+			} catch (RocksDBException e) {
+				log.error("MultiGet failed in getBlocksByHashes", e);
+			}
+		}
+
+		// Remove nulls
+		blocks.removeIf(b -> b == null);
+		return blocks;
+	}
+
 	public Optional<Block> getCanonicalBlockByHash(Hash hash) {
 		return getStoredBlockByHash(hash).flatMap(storedBlock -> {
 			Optional<Hash> canonicalHash = getBlockHashByHeight(storedBlock.getBlock().getHeight());
@@ -247,19 +296,63 @@ public class BlockRepository {
 	public List<Block> findByHeightRange(long fromHeight, long toHeight) {
 		if (fromHeight > toHeight)
 			return new ArrayList<>();
-		int estimatedSize = (int) Math.min(toHeight - fromHeight + 1, 1000);
-		List<Block> blocks = new ArrayList<>(estimatedSize);
+
+		// Step 1: Collect all hashes using iterator (fast - just reading index)
+		List<Hash> hashes = new ArrayList<>();
 		try (RocksIterator iterator = repository.newIterator(cf.hashByHeight())) {
 			iterator.seek(longToBytes(fromHeight));
 			while (iterator.isValid()) {
 				long currentHeight = bytesToLong(iterator.key());
 				if (currentHeight > toHeight)
 					break;
-
-				getBlockByHash(Hash.wrap(iterator.value())).ifPresent(blocks::add);
+				Hash hash = Hash.wrap(iterator.value());
+				heightCache.put(currentHeight, hash);
+				hashes.add(hash);
 				iterator.next();
 			}
 		}
+
+		if (hashes.isEmpty())
+			return new ArrayList<>();
+
+		// Step 2: Check cache first, then batch fetch missing from DB
+		List<Block> blocks = new ArrayList<>(hashes.size());
+		List<Integer> missingIndices = new ArrayList<>();
+		List<byte[]> missingKeys = new ArrayList<>();
+
+		for (int i = 0; i < hashes.size(); i++) {
+			Hash hash = hashes.get(i);
+			StoredBlock cached = blockCache.getIfPresent(hash);
+			if (cached != null) {
+				blocks.add(cached.getBlock());
+			} else {
+				blocks.add(null); // Placeholder
+				missingIndices.add(i);
+				missingKeys.add(hash.toArray());
+			}
+		}
+
+		// Step 3: MultiGet for cache misses
+		if (!missingKeys.isEmpty()) {
+			try {
+				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
+				for (int j = 0; j < values.size(); j++) {
+					byte[] data = values.get(j);
+					if (data != null) {
+						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
+						if (!storedBlock.isPartial()) {
+							blockCache.put(hashes.get(missingIndices.get(j)), storedBlock);
+						}
+						blocks.set(missingIndices.get(j), storedBlock.getBlock());
+					}
+				}
+			} catch (RocksDBException e) {
+				log.error("MultiGet failed in findByHeightRange", e);
+			}
+		}
+
+		// Remove nulls (blocks that weren't found)
+		blocks.removeIf(b -> b == null);
 		return blocks;
 	}
 
@@ -285,18 +378,64 @@ public class BlockRepository {
 	public List<BlockHeader> findHeadersByHeightRange(long fromHeight, long toHeight) {
 		if (fromHeight > toHeight)
 			return new ArrayList<>();
-		int estimatedSize = (int) Math.min(toHeight - fromHeight + 1, 1000);
-		List<BlockHeader> headers = new ArrayList<>(estimatedSize);
+
+		// Step 1: Collect all hashes using iterator (fast - just reading index)
+		List<Hash> hashes = new ArrayList<>();
+		List<Long> heights = new ArrayList<>();
 		try (RocksIterator iterator = repository.newIterator(cf.hashByHeight())) {
 			iterator.seek(longToBytes(fromHeight));
 			while (iterator.isValid()) {
 				long currentHeight = bytesToLong(iterator.key());
 				if (currentHeight > toHeight)
 					break;
-				getBlockHeaderByHash(Hash.wrap(iterator.value())).ifPresent(headers::add);
+				Hash hash = Hash.wrap(iterator.value());
+				heightCache.put(currentHeight, hash);
+				hashes.add(hash);
+				heights.add(currentHeight);
 				iterator.next();
 			}
 		}
+
+		if (hashes.isEmpty())
+			return new ArrayList<>();
+
+		// Step 2: Check header cache first, then batch fetch missing from DB
+		List<BlockHeader> headers = new ArrayList<>(hashes.size());
+		List<Integer> missingIndices = new ArrayList<>();
+		List<byte[]> missingKeys = new ArrayList<>();
+
+		for (int i = 0; i < hashes.size(); i++) {
+			Hash hash = hashes.get(i);
+			BlockHeader cached = headerCache.getIfPresent(hash);
+			if (cached != null) {
+				headers.add(cached);
+			} else {
+				headers.add(null); // Placeholder
+				missingIndices.add(i);
+				missingKeys.add(hash.toArray());
+			}
+		}
+
+		// Step 3: MultiGet for cache misses (using withoutBody=true for efficiency)
+		if (!missingKeys.isEmpty()) {
+			try {
+				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
+				for (int j = 0; j < values.size(); j++) {
+					byte[] data = values.get(j);
+					if (data != null) {
+						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
+						BlockHeader header = storedBlock.getBlock().getHeader();
+						headerCache.put(hashes.get(missingIndices.get(j)), header);
+						headers.set(missingIndices.get(j), header);
+					}
+				}
+			} catch (RocksDBException e) {
+				log.error("MultiGet failed in findHeadersByHeightRange", e);
+			}
+		}
+
+		// Remove nulls (headers that weren't found)
+		headers.removeIf(h -> h == null);
 		return headers;
 	}
 

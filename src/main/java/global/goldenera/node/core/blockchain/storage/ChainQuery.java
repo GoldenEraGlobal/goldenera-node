@@ -129,23 +129,38 @@ public class ChainQuery {
     }
 
     public List<Block> findChainFrom(Hash commonAncestorHash, Hash currentBestBlockHash) {
-        List<Block> chain = new ArrayList<>();
+        // First pass: collect all hashes we need (walking backwards)
+        List<Hash> hashesToFetch = new ArrayList<>();
         Hash currentHash = currentBestBlockHash;
 
+        // We need to walk backwards to find the chain, but we'll do it in batches
         while (currentHash != null && !currentHash.equals(commonAncestorHash)) {
-            final Hash hashForThisIteration = currentHash;
-            Block currentBlock = blockRepository.getBlockByHash(hashForThisIteration)
-                    .orElseThrow(() -> new GENotFoundException("Chain break at: " + hashForThisIteration));
+            hashesToFetch.add(currentHash);
 
-            chain.add(currentBlock);
-            if (currentBlock.getHeight() == 0) {
-                if (!currentBlock.getHash().equals(commonAncestorHash)) {
+            // Get just the header to find parent hash (much faster than full block)
+            Optional<BlockHeader> headerOpt = blockRepository.getBlockHeaderByHash(currentHash);
+            if (headerOpt.isEmpty()) {
+                throw new GENotFoundException("Chain break at: " + currentHash);
+            }
+
+            BlockHeader header = headerOpt.get();
+            if (header.getHeight() == 0) {
+                if (!currentHash.equals(commonAncestorHash)) {
                     throw new GEFailedException("Reached genesis without finding ancestor " + commonAncestorHash);
                 }
                 break;
             }
-            currentHash = currentBlock.getHeader().getPreviousHash();
+            currentHash = header.getPreviousHash();
         }
+
+        if (hashesToFetch.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // Second pass: batch fetch all blocks using multiGet
+        List<Block> chain = blockRepository.getBlocksByHashes(hashesToFetch);
+
+        // Reverse because we collected backwards
         Collections.reverse(chain);
         return chain;
     }

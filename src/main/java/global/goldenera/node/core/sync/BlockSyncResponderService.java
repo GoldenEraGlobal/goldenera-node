@@ -57,12 +57,17 @@ public class BlockSyncResponderService {
 	@EventListener
 	@Async(P2P_SEND_EXECUTOR)
 	public void handleGetHeaders(P2PHeadersRequestedEvent event) {
+		long start = System.currentTimeMillis();
 		List<Hash> locators = event.getLocators();
 		Hash stopHash = event.getStopHash();
 		int batchSize = event.getBatchSize();
 		List<BlockHeader> headersToSend = new ArrayList<>();
+
+		long findAncestorStart = System.currentTimeMillis();
 		Optional<Block> commonAncestorOpt = chainQueryService
 				.findCommonAncestor(new LinkedHashSet<>(locators));
+		long findAncestorTime = System.currentTimeMillis() - findAncestorStart;
+
 		if (commonAncestorOpt.isPresent()) {
 			Block ancestor = commonAncestorOpt.get();
 			long startHeight = ancestor.getHeight() + 1;
@@ -78,7 +83,16 @@ public class BlockSyncResponderService {
 			}
 			long myTipHeight = chainQueryService.getLatestBlockOrThrow().getHeight();
 			endHeight = Math.min(endHeight, myTipHeight);
+
+			long headersStart = System.currentTimeMillis();
 			headersToSend = chainQueryService.findHeadersByHeightRange(startHeight, endHeight);
+			long headersTime = System.currentTimeMillis() - headersStart;
+
+			long totalTime = System.currentTimeMillis() - start;
+			if (totalTime > 1000) { // Only log slow requests
+				log.warn("SLOW GetHeaders: {} headers in {}ms (ancestor: {}ms, headers: {}ms) range [{}-{}]",
+						headersToSend.size(), totalTime, findAncestorTime, headersTime, startHeight, endHeight);
+			}
 		}
 		event.getPeer().sendBlockHeaders(headersToSend, event.getRequestId());
 	}
