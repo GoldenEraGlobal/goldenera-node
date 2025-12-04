@@ -127,6 +127,7 @@ services:
 
 #### `.env` Configuration
 
+
 Create a file named `.env`. You **must** configure the variables marked as required below.
 
 ```dotenv
