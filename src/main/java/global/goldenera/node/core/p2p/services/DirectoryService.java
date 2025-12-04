@@ -179,7 +179,7 @@ public class DirectoryService {
 			if (peerIdentity.equals(selfAddress)) {
 				continue;
 			}
-			if (!ValidatorUtil.IpAddress.isSafe(peer.getP2pListenHost())) {
+			if (!ValidatorUtil.HostValidator.isSafe(peer.getP2pListenHost())) {
 				log.debug("Directory: Peer {} has unsafe IP address {}", peerIdentity, peer.getP2pListenHost());
 				continue;
 			}
