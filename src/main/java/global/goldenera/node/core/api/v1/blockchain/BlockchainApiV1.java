@@ -127,37 +127,62 @@ public class BlockchainApiV1 {
     @GetMapping("worldstate/account/{address}/{tokenAddress}/balance")
     public ResponseEntity<AccountBalanceState> getWorldStateAccountBalance(@PathVariable Address address,
             @PathVariable Address tokenAddress) {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getBalance(address, tokenAddress));
+        AccountBalanceState accountBalanceState = chainHeadStateCache.getHeadState().getBalance(address, tokenAddress);
+        if (!accountBalanceState.exists()) {
+            throw new GENotFoundException("Account balance not found");
+        }
+        return ResponseEntity.ok(accountBalanceState);
     }
 
     @GetMapping("worldstate/account/{address}/nonce")
     public ResponseEntity<AccountNonceState> getWorldStateAccountNonce(@PathVariable Address address) {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getNonce(address));
+        AccountNonceState accountNonceState = chainHeadStateCache.getHeadState().getNonce(address);
+        if (!accountNonceState.exists()) {
+            throw new GENotFoundException("Account nonce not found");
+        }
+        return ResponseEntity.ok(accountNonceState);
     }
 
     @GetMapping("worldstate/address-alias/{alias}")
     public ResponseEntity<AddressAliasState> getWorldStateAddressAlias(@PathVariable String alias) {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getAddressAlias(alias));
+        AddressAliasState addressAliasState = chainHeadStateCache.getHeadState().getAddressAlias(alias);
+        if (!addressAliasState.exists()) {
+            throw new GENotFoundException("Address alias not found");
+        }
+        return ResponseEntity.ok(addressAliasState);
     }
 
     @GetMapping("worldstate/authority/{address}")
     public ResponseEntity<AuthorityState> getWorldStateAuthority(@PathVariable Address address) {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getAuthority(address));
+        AuthorityState authorityState = chainHeadStateCache.getHeadState().getAuthority(address);
+        if (!authorityState.exists()) {
+            throw new GENotFoundException("Authority not found");
+        }
+        return ResponseEntity.ok(authorityState);
     }
 
     @GetMapping("worldstate/bip-state/{hash}")
     public ResponseEntity<BipState> getWorldStateBipState(@PathVariable Hash hash) {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getBip(hash));
+        BipState bipState = chainHeadStateCache.getHeadState().getBip(hash);
+        if (!bipState.exists()) {
+            throw new GENotFoundException("BIP state not found");
+        }
+        return ResponseEntity.ok(bipState);
     }
 
     @GetMapping("worldstate/network-params")
     public ResponseEntity<NetworkParamsState> getWorldStateNetworkParams() {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getParams());
+        NetworkParamsState networkParamsState = chainHeadStateCache.getHeadState().getParams();
+        return ResponseEntity.ok(networkParamsState);
     }
 
     @GetMapping("worldstate/token/{address}")
     public ResponseEntity<TokenState> getWorldStateToken(@PathVariable Address address) {
-        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getToken(address));
+        TokenState tokenState = chainHeadStateCache.getHeadState().getToken(address);
+        if (!tokenState.exists()) {
+            throw new GENotFoundException("Token not found");
+        }
+        return ResponseEntity.ok(tokenState);
     }
 
     @GetMapping("worldstate/tokens")
