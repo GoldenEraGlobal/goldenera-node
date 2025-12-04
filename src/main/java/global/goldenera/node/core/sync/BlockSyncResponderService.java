@@ -73,14 +73,19 @@ public class BlockSyncResponderService {
 			long startHeight = ancestor.getHeight() + 1;
 			if (startHeight == 0)
 				startHeight = 1;
-			long limit = batchSize > 0 ? Math.min(batchSize, 2000) : 500;
-			long endHeight = startHeight + limit;
+
+			int limit = batchSize > 0 ? Math.min(batchSize, 2000) : 500;
+			long endHeight = startHeight + limit - 1; // -1 because range is inclusive
+
+			// Use header instead of full block for stopHash check
 			if (stopHash != null) {
-				Optional<Block> stopBlock = chainQueryService.getBlockByHash(stopHash);
-				if (stopBlock.isPresent()) {
-					endHeight = Math.min(endHeight, stopBlock.get().getHeight());
+				Optional<BlockHeader> stopHeader = chainQueryService.getBlockHeaderByHash(stopHash);
+				if (stopHeader.isPresent()) {
+					endHeight = Math.min(endHeight, stopHeader.get().getHeight());
 				}
 			}
+
+			// Use latest stored block height (already cached)
 			long myTipHeight = chainQueryService.getLatestBlockOrThrow().getHeight();
 			endHeight = Math.min(endHeight, myTipHeight);
 
@@ -89,7 +94,7 @@ public class BlockSyncResponderService {
 			long headersTime = System.currentTimeMillis() - headersStart;
 
 			long totalTime = System.currentTimeMillis() - start;
-			if (totalTime > 1000) { // Only log slow requests
+			if (totalTime > 500) { // Only log slow requests
 				log.warn("SLOW GetHeaders: {} headers in {}ms (ancestor: {}ms, headers: {}ms) range [{}-{}]",
 						headersToSend.size(), totalTime, findAncestorTime, headersTime, startHeight, endHeight);
 			}

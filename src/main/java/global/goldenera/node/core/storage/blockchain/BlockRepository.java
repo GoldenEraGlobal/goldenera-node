@@ -184,6 +184,20 @@ public class BlockRepository {
 		});
 	}
 
+	/**
+	 * Optimized version that only loads header - much faster for
+	 * findCommonAncestor.
+	 */
+	public Optional<BlockHeader> getCanonicalBlockHeaderByHash(Hash hash) {
+		return getBlockHeaderByHash(hash).flatMap(header -> {
+			Optional<Hash> canonicalHash = getBlockHashByHeight(header.getHeight());
+			if (canonicalHash.isPresent() && canonicalHash.get().equals(hash)) {
+				return Optional.of(header);
+			}
+			return Optional.empty();
+		});
+	}
+
 	public Optional<StoredBlock> getCanonicalStoredBlockByHash(Hash hash) {
 		return getStoredBlockByHash(hash).flatMap(storedBlock -> {
 			Optional<Hash> canonicalHash = getBlockHashByHeight(storedBlock.getBlock().getHeight());
