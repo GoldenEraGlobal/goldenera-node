@@ -69,7 +69,7 @@ public class Constants {
             Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"));
 
     // Block
-    public static final long GENESIS_BLOCK_TIMESTAMP = 1764773067365L;
+    public static final long GENESIS_BLOCK_TIMESTAMP = 1764806403777L;
     public static final BigInteger GENESIS_BLOCK_DIFFICULTY = GENESIS_NETWORK_MIN_DIFFICULTY;
 
     // Native token
