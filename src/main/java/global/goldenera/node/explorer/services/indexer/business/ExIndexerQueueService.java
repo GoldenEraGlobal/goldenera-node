@@ -26,7 +26,10 @@ package global.goldenera.node.explorer.services.indexer.business;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -48,7 +51,8 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExIndexerQueueService {
 
-	private static final int MAX_QUEUE_CAPACITY = 2000;
+	private static final int MAX_QUEUE_CAPACITY = 10000;
+	private static final long OFFER_TIMEOUT_MS = 10; // Max time to wait when queue is full
 
 	GeneralProperties generalProperties;
 	MeterRegistry registry;
@@ -76,22 +80,23 @@ public class ExIndexerQueueService {
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
-				// Signal notFull because we removed an item
-				notFull.signal();
+				notFull.signalAll();
 				log.debug("Optimization: Skipped flickering (Disconnect->Connect) for block #{}",
 						event.getBlock().getHeight());
 				return;
 			}
 
-			// Backpressure: Wait if queue is full
-			while (queue.size() >= MAX_QUEUE_CAPACITY) {
+			// Non-blocking offer with short timeout when queue is at hard limit
+			if (queue.size() >= MAX_QUEUE_CAPACITY) {
 				registry.counter("explorer.queue.blocked").increment();
-				log.warn("Explorer Queue FULL ({}). Blocking producer until space is available.", queue.size());
-				notFull.await();
+				if (!notFull.await(OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+					log.warn("Explorer Queue FULL ({}). Event for block #{} added despite limit.",
+							queue.size(), event.getBlock().getHeight());
+				}
 			}
 
 			queue.addLast(new ExIndexerTask.ConnectTask(event));
-			notEmpty.signal();
+			notEmpty.signalAll();
 
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -111,22 +116,23 @@ public class ExIndexerQueueService {
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
-				// Signal notFull because we removed an item
-				notFull.signal();
+				notFull.signalAll();
 				log.debug("Optimization: Skipped indexing/reverting block #{} (cancelled in queue)",
 						event.getBlock().getHeight());
 				return;
 			}
 
-			// Backpressure: Wait if queue is full
-			while (queue.size() >= MAX_QUEUE_CAPACITY) {
+			// Non-blocking offer with short timeout when queue is at hard limit
+			if (queue.size() >= MAX_QUEUE_CAPACITY) {
 				registry.counter("explorer.queue.blocked").increment();
-				log.warn("Explorer Queue FULL ({}). Blocking producer until space is available.", queue.size());
-				notFull.await();
+				if (!notFull.await(OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+					log.warn("Explorer Queue FULL ({}). Event for block #{} added despite limit.",
+							queue.size(), event.getBlock().getHeight());
+				}
 			}
 
 			queue.addLast(new ExIndexerTask.DisconnectTask(event));
-			notEmpty.signal();
+			notEmpty.signalAll();
 
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
@@ -143,7 +149,46 @@ public class ExIndexerQueueService {
 				notEmpty.await();
 			}
 			ExIndexerTask task = queue.pollFirst();
-			notFull.signal();
+			notFull.signalAll();
+			return task;
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	/**
+	 * Drains up to maxElements from the queue for batch processing.
+	 * Returns immediately with available elements (may be less than max or empty).
+	 */
+	public List<ExIndexerTask> drainBatch(int maxElements) {
+		lock.lock();
+		try {
+			List<ExIndexerTask> batch = new ArrayList<>(Math.min(maxElements, queue.size()));
+			while (!queue.isEmpty() && batch.size() < maxElements) {
+				batch.add(queue.pollFirst());
+			}
+			if (!batch.isEmpty()) {
+				notFull.signalAll();
+			}
+			return batch;
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	/**
+	 * Takes a single element or waits up to the timeout.
+	 */
+	public ExIndexerTask poll(long timeoutMs) throws InterruptedException {
+		lock.lock();
+		try {
+			if (queue.isEmpty()) {
+				notEmpty.await(timeoutMs, TimeUnit.MILLISECONDS);
+			}
+			ExIndexerTask task = queue.pollFirst();
+			if (task != null) {
+				notFull.signalAll();
+			}
 			return task;
 		} finally {
 			lock.unlock();

@@ -103,7 +103,7 @@ public class ExIndexerCoordinateService {
 					triggerPanicMode(task);
 				}
 
-				logQueueLag();
+				logQueueStatus();
 
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
@@ -166,11 +166,12 @@ public class ExIndexerCoordinateService {
 		throw new GEFailedException("Explorer entered PANIC MODE at block " + task.getHeight());
 	}
 
-	private void logQueueLag() {
+	private void logQueueStatus() {
 		int size = queueService.size();
-		if (size > 1000 && size % 500 == 0) {
-			log.warn("Explorer Queue is lagging! Pending blocks: {}", size);
-			sleep(300);
+		// Only log periodically to avoid log spam, no sleeping - let it process as fast
+		// as possible
+		if (size > 0 && size % 1000 == 0) {
+			log.info("Explorer Queue status: {} pending blocks", size);
 		}
 	}
 
