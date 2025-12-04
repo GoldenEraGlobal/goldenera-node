@@ -124,6 +124,12 @@ public class BlockchainApiV1 {
                 .orElseThrow(() -> new GENotFoundException("Transaction not found")));
     }
 
+    @GetMapping("tx/by-hash/{hash}/confirmations")
+    public ResponseEntity<Long> getTransactionConfirmations(@PathVariable Hash hash) {
+        return ResponseEntity.ok(chainQuery.getTransactionConfirmations(hash)
+                .orElseThrow(() -> new GENotFoundException("Transaction not found or not in canonical chain")));
+    }
+
     @GetMapping("worldstate/account/{address}/{tokenAddress}/balance")
     public ResponseEntity<AccountBalanceState> getWorldStateAccountBalance(@PathVariable Address address,
             @PathVariable Address tokenAddress) {

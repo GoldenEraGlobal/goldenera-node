@@ -307,6 +307,42 @@ public class BlockRepository {
 		}
 	}
 
+	/**
+	 * Gets the block height where a transaction is included.
+	 * More efficient than getTransactionByHash when only height is needed.
+	 */
+	public Optional<Long> getTransactionBlockHeight(Hash txHash) {
+		try {
+			byte[] blockHashBytes = repository.get(cf.txIndex(), txHash.toArray());
+			if (blockHashBytes == null)
+				return Optional.empty();
+
+			Hash blockHash = Hash.wrap(blockHashBytes);
+
+			// Use header-only loading for efficiency
+			return getBlockHeaderByHash(blockHash)
+					.filter(header -> {
+						// Verify the block is still canonical
+						Optional<Hash> canonicalHash = getBlockHashByHeight(header.getHeight());
+						return canonicalHash.isPresent() && canonicalHash.get().equals(blockHash);
+					})
+					.map(BlockHeader::getHeight);
+		} catch (RocksDBException e) {
+			throw new RuntimeException("Failed to read TxIndex " + txHash, e);
+		}
+	}
+
+	/**
+	 * Gets the height of the latest block in the canonical chain.
+	 */
+	public Optional<Long> getLatestBlockHeight() {
+		StoredBlock cachedLatest = latestBlockCache.get();
+		if (cachedLatest != null) {
+			return Optional.of(cachedLatest.getHeight());
+		}
+		return getLatestStoredBlock().map(StoredBlock::getHeight);
+	}
+
 	public List<Block> findByHeightRange(long fromHeight, long toHeight) {
 		if (fromHeight > toHeight)
 			return new ArrayList<>();

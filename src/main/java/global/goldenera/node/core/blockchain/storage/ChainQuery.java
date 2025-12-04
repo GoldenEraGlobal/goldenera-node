@@ -221,4 +221,18 @@ public class ChainQuery {
         return blockRepository.getCanonicalStoredBlockByHash(hash);
     }
 
+    /**
+     * Gets the number of confirmations for a transaction.
+     * Confirmations = (current chain height - tx block height) + 1
+     * 
+     * @param txHash
+     *            the transaction hash
+     * @return number of confirmations, or empty if tx not found in canonical chain
+     */
+    public Optional<Long> getTransactionConfirmations(Hash txHash) {
+        return blockRepository.getTransactionBlockHeight(txHash)
+                .flatMap(txBlockHeight -> blockRepository.getLatestBlockHeight()
+                        .map(currentHeight -> currentHeight - txBlockHeight + 1));
+    }
+
 }
