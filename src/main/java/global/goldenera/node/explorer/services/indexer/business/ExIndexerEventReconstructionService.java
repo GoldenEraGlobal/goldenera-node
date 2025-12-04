@@ -25,6 +25,9 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
@@ -33,81 +36,179 @@ import org.springframework.stereotype.Service;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.merkletrie.MerkleTrie;
+import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.ExecutionResult;
 import global.goldenera.node.core.state.WorldState;
+import global.goldenera.node.core.state.WorldStateDiff;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.shared.consensus.state.AccountBalanceState;
+import global.goldenera.node.shared.consensus.state.AccountNonceState;
+import global.goldenera.node.shared.consensus.state.AuthorityState;
+import global.goldenera.node.shared.consensus.state.BipState;
 import global.goldenera.node.shared.consensus.state.NetworkParamsState;
+import global.goldenera.node.shared.consensus.state.StateDiff;
+import global.goldenera.node.shared.consensus.state.TokenState;
+import global.goldenera.node.shared.consensus.state.impl.AuthorityStateImpl;
+import global.goldenera.node.shared.consensus.state.impl.NetworkParamsStateImpl;
+import global.goldenera.node.shared.consensus.state.impl.TokenStateImpl;
+import global.goldenera.node.shared.datatypes.BalanceKey;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExIndexerEventReconstructionService {
 
-    ChainQuery chainQuery;
-    WorldStateFactory worldStateFactory;
-    StateProcessor stateProcessor;
+        ChainQuery chainQuery;
+        WorldStateFactory worldStateFactory;
+        StateProcessor stateProcessor;
 
-    public BlockConnectedEvent reconstructEvent(StoredBlock storedBlock) {
-        Block block = storedBlock.getBlock();
-        long height = block.getHeight();
-        Address receivedFrom = storedBlock.getReceivedFrom();
-        Instant receivedAt = storedBlock.getReceivedAt();
-        ConnectedSource connectedSource = storedBlock.getConnectedSource();
+        public BlockConnectedEvent reconstructEvent(StoredBlock storedBlock) {
+                Block block = storedBlock.getBlock();
+                long height = block.getHeight();
+                Address receivedFrom = storedBlock.getReceivedFrom();
+                Instant receivedAt = storedBlock.getReceivedAt();
+                ConnectedSource connectedSource = storedBlock.getConnectedSource();
 
-        // --- NORMAL BLOCK RECONSTRUCTION ---
-        Block prevBlock = height != 0 ? chainQuery.getBlockByHash(block.getHeader().getPreviousHash())
-                .orElseThrow(() -> new IllegalStateException("Parent block not found for reconstruction: " + height))
-                : null;
+                // --- GENESIS BLOCK: Special handling ---
+                // Genesis has no transactions, state is set explicitly in GenesisInitializer.
+                // We read the final state directly from the stored block's stateRoot.
+                if (height == 0) {
+                        return reconstructGenesisEvent(block, storedBlock, connectedSource, receivedFrom, receivedAt);
+                }
 
-        Hash startStateRoot = prevBlock == null ? MerkleTrie.EMPTY_TRIE_NODE_HASH
-                : prevBlock.getHeader().getStateRootHash();
+                // --- NORMAL BLOCK RECONSTRUCTION ---
+                Block prevBlock = chainQuery.getBlockByHash(block.getHeader().getPreviousHash())
+                                .orElseThrow(() -> new IllegalStateException(
+                                                "Parent block not found for reconstruction: " + height));
 
-        // 1. Create WorldState (Validation Mode = No Journal, Initial State Capture ON)
-        WorldState worldState = worldStateFactory.createForValidation(startStateRoot);
-        NetworkParamsState params = worldState.getParams();
+                Hash startStateRoot = prevBlock.getHeader().getStateRootHash();
 
-        // 2. Execute Transactions (To get Diffs & Fees)
-        ExecutionResult executionResult = stateProcessor.executeTransactions(worldState,
-                new StateProcessor.SimpleBlock(block),
-                block.getTxs(), params);
+                // 1. Create WorldState (Validation Mode = No Journal, Initial State Capture ON)
+                WorldState worldState = worldStateFactory.createForValidation(startStateRoot);
+                NetworkParamsState params = worldState.getParams();
 
-        // 3. Extract Data
-        BigInteger cumulativeDifficulty = storedBlock.getCumulativeDifficulty();
-        Wei totalFees = executionResult.getTotalFeesCollected();
-        Wei actualRewardPaid = executionResult.getMinerActualRewardPaid();
-        Map<Hash, Wei> actualBurnAmounts = executionResult.getActualBurnAmounts();
+                // 2. Execute Transactions (To get Diffs & Fees)
+                ExecutionResult executionResult = stateProcessor.executeTransactions(worldState,
+                                new StateProcessor.SimpleBlock(block),
+                                block.getTxs(), params);
 
-        return new BlockConnectedEvent(
-                this,
-                connectedSource,
-                block,
+                // 3. Extract Data
+                BigInteger cumulativeDifficulty = storedBlock.getCumulativeDifficulty();
+                Wei totalFees = executionResult.getTotalFeesCollected();
+                Wei actualRewardPaid = executionResult.getMinerActualRewardPaid();
+                Map<Hash, Wei> actualBurnAmounts = executionResult.getActualBurnAmounts();
 
-                worldState.getBalanceDiffs(),
-                worldState.getNonceDiffs(),
-                worldState.getTokenDiffs(),
-                worldState.getBipDiffs(),
-                worldState.getParamsDiff(),
+                return new BlockConnectedEvent(
+                                this,
+                                connectedSource,
+                                block,
 
-                worldState.getDirtyAuthorities(),
-                worldState.getAuthoritiesRemovedWithState(),
+                                worldState.getBalanceDiffs(),
+                                worldState.getNonceDiffs(),
+                                worldState.getTokenDiffs(),
+                                worldState.getBipDiffs(),
+                                worldState.getParamsDiff(),
 
-                worldState.getDirtyAddressAliases(),
-                worldState.getAliasesRemovedWithState(),
+                                worldState.getDirtyAuthorities(),
+                                worldState.getAuthoritiesRemovedWithState(),
 
-                totalFees,
-                actualRewardPaid,
-                cumulativeDifficulty,
-                actualBurnAmounts,
-                receivedFrom,
-                receivedAt);
-    }
+                                worldState.getDirtyAddressAliases(),
+                                worldState.getAliasesRemovedWithState(),
+
+                                totalFees,
+                                actualRewardPaid,
+                                cumulativeDifficulty,
+                                actualBurnAmounts,
+                                receivedFrom,
+                                receivedAt);
+        }
+
+        /**
+         * Reconstructs the BlockConnectedEvent for the genesis block.
+         * 
+         * Genesis block has no transactions - its state is set explicitly by
+         * GenesisInitializer. To avoid duplicating the genesis state logic,
+         * we read the ACTUAL state directly from the stored genesis block's
+         * stateRoot. This ensures a single source of truth.
+         * 
+         * The diff is computed as: EMPTY_STATE -> GENESIS_STATE
+         */
+        private BlockConnectedEvent reconstructGenesisEvent(
+                        Block block,
+                        StoredBlock storedBlock,
+                        ConnectedSource connectedSource,
+                        Address receivedFrom,
+                        Instant receivedAt) {
+
+                log.info("Reconstructing genesis block event from stored state...");
+
+                // Read the actual genesis state from the stored block's stateRoot
+                Hash genesisStateRoot = block.getHeader().getStateRootHash();
+                WorldState genesisState = worldStateFactory.createForValidation(genesisStateRoot);
+
+                // 1. Network Params: ZERO -> actual genesis params
+                NetworkParamsState genesisParams = genesisState.getParams();
+                StateDiff<NetworkParamsState> paramsDiff = new WorldStateDiff<>(
+                                NetworkParamsStateImpl.ZERO, genesisParams);
+
+                // 2. Native Token: ZERO -> actual genesis token
+                TokenState nativeToken = genesisState.getToken(Address.NATIVE_TOKEN);
+                Map<Address, StateDiff<TokenState>> tokenDiffs = new LinkedHashMap<>();
+                if (!TokenStateImpl.ZERO.equals(nativeToken)) {
+                        tokenDiffs.put(Address.NATIVE_TOKEN, new WorldStateDiff<>(TokenStateImpl.ZERO, nativeToken));
+                }
+
+                // 3. Authorities: Read from Constants (addresses only) and get state from trie
+                // This is the only place we still reference Constants, but only for the ADDRESS
+                // list,
+                // not the state structure. The actual AuthorityState comes from the stored
+                // genesis.
+                List<Address> authorityAddresses = Constants.GENESIS_AUTHORITY_ADDRESSES;
+                Map<Address, AuthorityState> authoritiesToAdd = new LinkedHashMap<>();
+                for (Address authority : authorityAddresses) {
+                        AuthorityState authState = genesisState.getAuthority(authority);
+                        if (!AuthorityStateImpl.ZERO.equals(authState)) {
+                                authoritiesToAdd.put(authority, authState);
+                        }
+                }
+
+                // Genesis has no balance changes, nonce changes, bip changes, or aliases
+                Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs = Collections.emptyMap();
+                Map<Address, StateDiff<AccountNonceState>> nonceDiffs = Collections.emptyMap();
+                Map<Hash, StateDiff<BipState>> bipDiffs = Collections.emptyMap();
+
+                return new BlockConnectedEvent(
+                                this,
+                                connectedSource,
+                                block,
+
+                                balanceDiffs,
+                                nonceDiffs,
+                                tokenDiffs,
+                                bipDiffs,
+                                paramsDiff,
+
+                                authoritiesToAdd,
+                                Collections.emptyMap(), // No authorities removed in genesis
+
+                                Collections.emptyMap(), // No aliases added in genesis
+                                Collections.emptyMap(), // No aliases removed in genesis
+
+                                Wei.ZERO, // No fees in genesis
+                                Wei.ZERO, // No miner reward in genesis
+                                storedBlock.getCumulativeDifficulty(),
+                                Collections.emptyMap(), // No burns in genesis
+                                receivedFrom,
+                                receivedAt);
+        }
 }
