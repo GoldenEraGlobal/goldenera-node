@@ -58,8 +58,8 @@ public class CoreAsyncConfig {
 	public Executor p2pReceiveExecutor() {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		int cores = Runtime.getRuntime().availableProcessors();
-		executor.setCorePoolSize(Math.max(2, cores / 2));
-		executor.setMaxPoolSize(cores);
+		executor.setCorePoolSize(Math.max(4, cores / 2));
+		executor.setMaxPoolSize(Math.max(8, cores));
 		executor.setQueueCapacity(3000);
 		executor.setThreadNamePrefix("P2P-In-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
@@ -73,7 +73,7 @@ public class CoreAsyncConfig {
 		int cores = Runtime.getRuntime().availableProcessors();
 		executor.setCorePoolSize(Math.max(4, cores / 2));
 		executor.setMaxPoolSize(Math.max(8, cores));
-		executor.setQueueCapacity(1000);
+		executor.setQueueCapacity(3000);
 		executor.setThreadNamePrefix("P2P-Out-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
 		executor.initialize();

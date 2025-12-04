@@ -64,12 +64,12 @@ public class BlockSyncResponderService {
 		List<BlockHeader> headersToSend = new ArrayList<>();
 
 		long findAncestorStart = System.currentTimeMillis();
-		Optional<Block> commonAncestorOpt = chainQueryService
+		Optional<BlockHeader> commonAncestorOpt = chainQueryService
 				.findCommonAncestor(new LinkedHashSet<>(locators));
 		long findAncestorTime = System.currentTimeMillis() - findAncestorStart;
 
 		if (commonAncestorOpt.isPresent()) {
-			Block ancestor = commonAncestorOpt.get();
+			BlockHeader ancestor = commonAncestorOpt.get();
 			long startHeight = ancestor.getHeight() + 1;
 			if (startHeight == 0)
 				startHeight = 1;

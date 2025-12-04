@@ -195,16 +195,15 @@ public class ChainQuery {
     }
 
     /**
-     * Finds the common ancestor block from locator hashes.
-     * Optimized to use header-only loading for speed.
+     * Finds the common ancestor block header from locator hashes.
+     * Returns only the header to avoid loading the full block.
      */
-    public Optional<Block> findCommonAncestor(LinkedHashSet<Hash> locatorHashes) {
+    public Optional<BlockHeader> findCommonAncestor(LinkedHashSet<Hash> locatorHashes) {
         for (Hash hash : locatorHashes) {
-            // First check if it's canonical using header-only (fast)
+            // Check if it's canonical using header-only (fast)
             Optional<BlockHeader> header = getCanonicalBlockHeaderByHash(hash);
             if (header.isPresent()) {
-                // Only load full block if we found it in canonical chain
-                return getBlockByHash(hash);
+                return header;
             }
         }
         return Optional.empty();

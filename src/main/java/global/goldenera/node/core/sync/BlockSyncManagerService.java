@@ -282,7 +282,8 @@ public class BlockSyncManagerService {
 			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
 			long reqId = peer.reserveRequestId();
 			pendingHeaderRequests.put(reqId, future);
-			peer.sendGetBlockHeaders(currentLocators, stopHash, 100, reqId);
+			int remaining = SYNC_CHUNK_SIZE_HEADERS - allHeaders.size();
+			peer.sendGetBlockHeaders(currentLocators, stopHash, remaining, reqId);
 			try {
 				List<BlockHeader> batch = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 				if (batch == null || batch.isEmpty())
@@ -310,7 +311,7 @@ public class BlockSyncManagerService {
 				allHeaders.addAll(batch);
 
 				BlockHeader lastHeader = batch.get(batch.size() - 1);
-				if (lastHeader.getHash().equals(stopHash) || batch.size() < 100)
+				if (lastHeader.getHash().equals(stopHash) || batch.size() < remaining)
 					break;
 
 				currentLocators.clear();
