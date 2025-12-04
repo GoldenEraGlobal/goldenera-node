@@ -54,6 +54,7 @@ public class StoredBlock {
 	Address receivedFrom;
 	ConnectedSource connectedSource;
 	int size;
+	boolean isPartial;
 
 	public Hash getHash() {
 		return block.getHash();
@@ -61,5 +62,12 @@ public class StoredBlock {
 
 	public long getHeight() {
 		return block.getHeight();
+	}
+
+	public int getSize() {
+		if (isPartial) {
+			throw new IllegalStateException("Cannot get size of partial block");
+		}
+		return size;
 	}
 }

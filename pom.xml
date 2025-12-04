@@ -366,7 +366,7 @@
                     <password></password>
 
                     <referenceUrl>
-                        hibernate:spring:global.goldenera.node.explorer.entities,global.goldenera.node.explorer.converters,global.goldenera.node.explorer.converters.state,global.goldenera.node.shared.converters,global.goldenera.node.shared.entities?dialect=org.hibernate.dialect.PostgreSQLDialect&amp;physicalNamingStrategy=org.springframework.boot.orm.jpa.hibernate.SpringPhysicalNamingStrategy</referenceUrl>
+                        hibernate:spring:global.goldenera.node.explorer.entities,global.goldenera.node.explorer.converters,global.goldenera.node.explorer.converters.state,global.goldenera.node.shared.converters,global.goldenera.node.shared.entities,global.goldenera.node.core.webhook.entities,global.goldenera.node.core.webhook.converters?dialect=org.hibernate.dialect.PostgreSQLDialect&amp;physicalNamingStrategy=org.springframework.boot.orm.jpa.hibernate.SpringPhysicalNamingStrategy</referenceUrl>
 
                     <systemProperties>
                         <user.name>goldenera</user.name>

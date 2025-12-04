@@ -27,7 +27,7 @@ import global.goldenera.node.shared.exceptions.GEValidationException;
 
 public class PaginationUtil {
 	public static final int MAX_PAGE_SIZE = 100;
-	public static final int MAX_BLOCK_RANGE_LIMIT = 1000;
+	public static final int MAX_BLOCK_RANGE_LIMIT = 500;
 
 	public static void validatePageRequest(int pageNumber, int pageSize) {
 		if (pageNumber < 0) {

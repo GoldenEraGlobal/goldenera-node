@@ -30,6 +30,7 @@ import org.springframework.stereotype.Component;
 
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -40,15 +41,22 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExIndexerNodeListener {
 
+	GeneralProperties generalProperties;
 	ExIndexerQueueService queueService;
 
 	@EventListener
 	public void onBlockConnected(BlockConnectedEvent event) {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		queueService.pushConnect(event);
 	}
 
 	@EventListener
 	public void onBlockDisconnected(BlockDisconnectedEvent event) {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		queueService.pushDisconnect(event);
 	}
 }

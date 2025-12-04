@@ -35,6 +35,8 @@ import org.springframework.context.annotation.Configuration;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.AllArgsConstructor;
@@ -63,10 +65,43 @@ public class CacheConfig {
 				.build();
 	}
 
+	@Bean("headerCache")
+	public Cache<Hash, BlockHeader> headerCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(50_000)
+				.expireAfterWrite(1, TimeUnit.HOURS)
+				.build();
+	}
+
 	@Bean("heightCache")
 	public Cache<Long, Hash> heightCache() {
 		return Caffeine.newBuilder()
 				.maximumSize(100_000)
+				.expireAfterWrite(1, TimeUnit.HOURS)
+				.build();
+	}
+
+	@Bean("txCache")
+	public Cache<Hash, Tx> txCache() {
+		return Caffeine.newBuilder()
+				.maximumWeight(100 * 1024 * 1024) // 100MB
+				.weigher((Hash key, Tx value) -> value.getSize())
+				.expireAfterWrite(1, TimeUnit.HOURS)
+				.build();
+	}
+
+	@Bean("tokensCache")
+	public Cache<String, Object> tokensCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(1)
+				.expireAfterWrite(1, TimeUnit.HOURS)
+				.build();
+	}
+
+	@Bean("authoritiesCache")
+	public Cache<String, Object> authoritiesCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(1)
 				.expireAfterWrite(1, TimeUnit.HOURS)
 				.build();
 	}

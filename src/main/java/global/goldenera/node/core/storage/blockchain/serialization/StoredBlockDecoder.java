@@ -46,6 +46,10 @@ public class StoredBlockDecoder {
 	}
 
 	public StoredBlock decode(Bytes rlpBytes) {
+		return decode(rlpBytes, false);
+	}
+
+	public StoredBlock decode(Bytes rlpBytes, boolean withoutBody) {
 		if (rlpBytes == null || rlpBytes.isEmpty()) {
 			throw new IllegalArgumentException("Cannot decode empty bytes");
 		}
@@ -62,7 +66,7 @@ public class StoredBlockDecoder {
 			throw new GEFailedException("Unknown StoredBlock version: " + version);
 		}
 
-		StoredBlock storedBlock = strategy.decode(input);
+		StoredBlock storedBlock = strategy.decode(input, withoutBody);
 		input.leaveList();
 		return storedBlock.toBuilder().size(rlpBytes.size()).build();
 	}

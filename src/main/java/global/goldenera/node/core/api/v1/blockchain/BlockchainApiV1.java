@@ -26,7 +26,6 @@ package global.goldenera.node.core.api.v1.blockchain;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,8 +37,18 @@ import org.springframework.web.bind.annotation.RestController;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.shared.consensus.state.AccountBalanceState;
+import global.goldenera.node.shared.consensus.state.AccountNonceState;
+import global.goldenera.node.shared.consensus.state.AddressAliasState;
+import global.goldenera.node.shared.consensus.state.AuthorityState;
+import global.goldenera.node.shared.consensus.state.BipState;
+import global.goldenera.node.shared.consensus.state.NetworkParamsState;
+import global.goldenera.node.shared.consensus.state.TokenState;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.utils.PaginationUtil;
 import lombok.AllArgsConstructor;
@@ -52,29 +61,33 @@ import lombok.experimental.FieldDefaults;
 public class BlockchainApiV1 {
 
     ChainQuery chainQuery;
+    ChainHeadStateCache chainHeadStateCache;
+    EntityIndexRepository entityIndexRepository;
 
     @GetMapping("block-header/latest")
     public ResponseEntity<BlockHeader> getLatestBlockHeader() {
-        return ResponseEntity.ok(chainQuery.getLatestBlockOrThrow().getHeader());
+        return ResponseEntity.ok(chainQuery.getLatestBlockHash()
+                .flatMap(chainQuery::getBlockHeaderByHash)
+                .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
     @GetMapping("block-header/by-height/{height}")
     public ResponseEntity<BlockHeader> getBlockHeaderByHeight(@PathVariable Long height) {
-        return ResponseEntity.ok(chainQuery.getBlockByHeight(height).map(Block::getHeader)
+        return ResponseEntity.ok(chainQuery.getBlockHeaderByHeight(height)
                 .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
     @GetMapping("block-header/by-hash/{hash}")
     public ResponseEntity<BlockHeader> getBlockHeaderByHash(@PathVariable Hash hash) {
-        return ResponseEntity.ok(chainQuery.getBlockByHashOrThrow(hash).getHeader());
+        return ResponseEntity.ok(chainQuery.getBlockHeaderByHash(hash)
+                .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
     @GetMapping("block-header/by-range")
     public ResponseEntity<List<BlockHeader>> getBlockHeaderByRange(@RequestParam long fromHeight,
             @RequestParam long toHeight) {
         PaginationUtil.validateRangeRequest(fromHeight, toHeight);
-        return ResponseEntity.ok(chainQuery.findByHeightRange(fromHeight, toHeight).stream()
-                .map(Block::getHeader).collect(Collectors.toList()));
+        return ResponseEntity.ok(chainQuery.findHeadersByHeightRange(fromHeight, toHeight));
     }
 
     @GetMapping("block/latest")
@@ -108,5 +121,51 @@ public class BlockchainApiV1 {
     public ResponseEntity<Tx> getTransactionByHash(@PathVariable Hash hash) {
         return ResponseEntity.ok(chainQuery.getTransactionByHash(hash)
                 .orElseThrow(() -> new GENotFoundException("Transaction not found")));
+    }
+
+    @GetMapping("worldstate/account/{address}/{tokenAddress}/balance")
+    public ResponseEntity<AccountBalanceState> getWorldStateAccountBalance(@PathVariable Address address,
+            @PathVariable Address tokenAddress) {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getBalance(address, tokenAddress));
+    }
+
+    @GetMapping("worldstate/account/{address}/nonce")
+    public ResponseEntity<AccountNonceState> getWorldStateAccountNonce(@PathVariable Address address) {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getNonce(address));
+    }
+
+    @GetMapping("worldstate/address-alias/{alias}")
+    public ResponseEntity<AddressAliasState> getWorldStateAddressAlias(@PathVariable String alias) {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getAddressAlias(alias));
+    }
+
+    @GetMapping("worldstate/authority/{address}")
+    public ResponseEntity<AuthorityState> getWorldStateAuthority(@PathVariable Address address) {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getAuthority(address));
+    }
+
+    @GetMapping("worldstate/bip-state/{hash}")
+    public ResponseEntity<BipState> getWorldStateBipState(@PathVariable Hash hash) {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getBip(hash));
+    }
+
+    @GetMapping("worldstate/network-params")
+    public ResponseEntity<NetworkParamsState> getWorldStateNetworkParams() {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getParams());
+    }
+
+    @GetMapping("worldstate/token/{address}")
+    public ResponseEntity<TokenState> getWorldStateToken(@PathVariable Address address) {
+        return ResponseEntity.ok(chainHeadStateCache.getHeadState().getToken(address));
+    }
+
+    @GetMapping("worldstate/tokens")
+    public ResponseEntity<List<TokenState>> getAllTokens() {
+        return ResponseEntity.ok(entityIndexRepository.getAllTokens());
+    }
+
+    @GetMapping("worldstate/authorities")
+    public ResponseEntity<List<AuthorityState>> getAllAuthorities() {
+        return ResponseEntity.ok(entityIndexRepository.getAllAuthorities());
     }
 }

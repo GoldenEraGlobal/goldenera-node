@@ -36,6 +36,7 @@ import org.springframework.modulith.NamedInterface;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -113,6 +114,18 @@ public class ChainQuery {
 
     public List<Block> findByHeightRange(long fromHeight, long toHeight) {
         return blockRepository.findByHeightRange(fromHeight, toHeight);
+    }
+
+    public Optional<BlockHeader> getBlockHeaderByHash(Hash hash) {
+        return blockRepository.getBlockHeaderByHash(hash);
+    }
+
+    public Optional<BlockHeader> getBlockHeaderByHeight(long height) {
+        return blockRepository.getBlockHashByHeight(height).flatMap(this::getBlockHeaderByHash);
+    }
+
+    public List<BlockHeader> findHeadersByHeightRange(long fromHeight, long toHeight) {
+        return blockRepository.findHeadersByHeightRange(fromHeight, toHeight);
     }
 
     public List<Block> findChainFrom(Hash commonAncestorHash, Hash currentBestBlockHash) {

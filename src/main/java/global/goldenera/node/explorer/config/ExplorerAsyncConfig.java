@@ -39,8 +39,6 @@ public class ExplorerAsyncConfig {
 	public static final String EXPLORER_EXECUTOR = "explorerTaskExecutor";
 	public static final String EXPLORER_SCHEDULER = "explorerTaskScheduler";
 
-	public static final String EXPLORER_WEBHOOK_SCHEDULER = "explorerWebhookTaskScheduler";
-
 	@Bean(name = EXPLORER_EXECUTOR)
 	public Executor explorerTaskExecutor() {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -58,15 +56,6 @@ public class ExplorerAsyncConfig {
 		ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
 		scheduler.setPoolSize(2);
 		scheduler.setThreadNamePrefix("Explorer-Sched-");
-		scheduler.initialize();
-		return scheduler;
-	}
-
-	@Bean(name = EXPLORER_WEBHOOK_SCHEDULER)
-	public ThreadPoolTaskScheduler explorerWebhookTaskScheduler() {
-		ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
-		scheduler.setPoolSize(2);
-		scheduler.setThreadNamePrefix("Explorer-Webhook-Sched-");
 		scheduler.initialize();
 		return scheduler;
 	}

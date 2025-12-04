@@ -1,0 +1,48 @@
+name: Purge GitHub Actions Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type "DELETE" to confirm complete cache purge'
+        required: true
+        default: ""
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  purge-cache:
+    name: Purge All Cache Entries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate Safety Confirmation
+        if: ${{ github.event.inputs.confirmation != 'DELETE' }}
+        run: |
+          echo "::error::Operation aborted! Safety check failed."
+          echo "You must type 'DELETE' in the input field to execute this destructive action."
+          exit 1
+
+      - name: Install GitHub CLI Extension
+        run: gh extension install actions/gh-actions-cache
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Execute Cache Purge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Starting cache cleanup for repository: $REPO"
+
+          # List caches before deletion for audit log clarity
+          echo "Current cache status:"
+          gh actions-cache list -R $REPO || echo "No cache list available or empty."
+
+          # Execute deletion
+          # The --confirm flag bypasses the interactive prompt since we handled safety via inputs
+          gh actions-cache delete --all --confirm -R $REPO
+
+          echo "::notice::All cache entries have been successfully removed."

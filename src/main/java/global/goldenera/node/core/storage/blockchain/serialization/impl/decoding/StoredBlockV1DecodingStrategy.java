@@ -39,9 +39,9 @@ import global.goldenera.rlp.RLPInput;
 public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrategy {
 
 	@Override
-	public StoredBlock decode(RLPInput input) {
+	public StoredBlock decode(RLPInput input, boolean withoutBody) {
 		Bytes blockBytes = input.readRaw();
-		Block block = BlockDecoder.INSTANCE.decode(blockBytes);
+		Block block = BlockDecoder.INSTANCE.decode(blockBytes, withoutBody);
 		BigInteger cumulativeDifficulty = input.readBigIntegerScalar();
 		long receivedAtMillis = input.readLongScalar();
 		Instant receivedAt = Instant.ofEpochMilli(receivedAtMillis);
@@ -55,7 +55,13 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 				.receivedAt(receivedAt)
 				.receivedFrom(receivedFrom)
 				.connectedSource(connectedSource)
+				.isPartial(withoutBody)
 				.build();
+	}
+
+	@Override
+	public StoredBlock decode(RLPInput input) {
+		return decode(input, false);
 	}
 
 }

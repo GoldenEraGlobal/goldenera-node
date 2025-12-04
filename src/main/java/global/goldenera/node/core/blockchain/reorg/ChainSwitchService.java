@@ -47,6 +47,7 @@ import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
+import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import global.goldenera.node.shared.exceptions.GEFailedException;
@@ -66,6 +67,7 @@ public class ChainSwitchService {
     BlockValidator blockValidationService;
     ApplicationEventPublisher applicationEventPublisher;
     ReentrantLock masterChainLock;
+    EntityIndexRepository entityIndexRepository;
 
     public ChainSwitchService(
             ChainQuery chainQueryService,
@@ -74,7 +76,8 @@ public class ChainSwitchService {
             StateProcessor stateProcessor,
             BlockValidator blockValidationService,
             ApplicationEventPublisher applicationEventPublisher,
-            @Qualifier("masterChainLock") ReentrantLock masterChainLock) {
+            @Qualifier("masterChainLock") ReentrantLock masterChainLock,
+            EntityIndexRepository entityIndexRepository) {
         this.chainQueryService = chainQueryService;
         this.blockRepository = blockRepository;
         this.worldStateFactory = worldStateFactory;
@@ -82,6 +85,7 @@ public class ChainSwitchService {
         this.blockValidationService = blockValidationService;
         this.applicationEventPublisher = applicationEventPublisher;
         this.masterChainLock = masterChainLock;
+        this.entityIndexRepository = entityIndexRepository;
     }
 
     public void executeAtomicReorgSwap(
@@ -123,6 +127,7 @@ public class ChainSwitchService {
                             blockRepository.addDisconnectBlockIndexToBatch(batch, storedBlockToDisconnect, parent);
                         }
 
+                        entityIndexRepository.revertEntities(batch, blockToDisconnect);
                         blockDisconnectedEvents.add(new BlockDisconnectedEvent(this, blockToDisconnect));
                     }
 
@@ -160,6 +165,7 @@ public class ChainSwitchService {
                         }
 
                         worldState.persistToBatch(batch);
+                        entityIndexRepository.saveEntities(batch, blockToConnect, worldState);
 
                         if (saveTipData && i == newChainHeaders.size() - 1) {
                             blockRepository.addBlockToBatch(batch, storedBlockToConnect);
@@ -192,6 +198,7 @@ public class ChainSwitchService {
                         previousBlock = blockToConnect;
                     }
                 });
+                entityIndexRepository.invalidateCaches();
             } catch (RuntimeException e) {
                 log.error("Reorg DB write failed", e);
                 if (e.getCause() instanceof GEFailedException) {

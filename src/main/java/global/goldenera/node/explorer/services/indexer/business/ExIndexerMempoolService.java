@@ -46,6 +46,7 @@ import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.explorer.entities.ExMemTransfer;
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerMempoolCoreService;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import lombok.AccessLevel;
@@ -58,12 +59,15 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExIndexerMempoolService {
 
+	GeneralProperties generalProperties;
 	MeterRegistry registry;
 	ExIndexerMempoolCoreService exMempoolCoreService;
 	ThreadPoolTaskScheduler explorerScheduler;
 
-	public ExIndexerMempoolService(MeterRegistry registry, ExIndexerMempoolCoreService exMempoolCoreService,
+	public ExIndexerMempoolService(GeneralProperties generalProperties, MeterRegistry registry,
+			ExIndexerMempoolCoreService exMempoolCoreService,
 			@Qualifier(EXPLORER_SCHEDULER) ThreadPoolTaskScheduler explorerScheduler) {
+		this.generalProperties = generalProperties;
 		this.registry = registry;
 		this.exMempoolCoreService = exMempoolCoreService;
 		this.explorerScheduler = explorerScheduler;
@@ -83,6 +87,9 @@ public class ExIndexerMempoolService {
 
 	@PostConstruct
 	public void init() {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		// Schedule the flushBuffer task to run every 3 seconds using
 		// explorerTaskScheduler
 		explorerScheduler.scheduleWithFixedDelay(
@@ -98,16 +105,25 @@ public class ExIndexerMempoolService {
 	@EventListener
 	@Transactional(rollbackFor = Exception.class)
 	public void onCoreReady(CoreDbReadyEvent event) {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		exMempoolCoreService.truncate();
 	}
 
 	@EventListener
 	public void onMempoolAdd(MempoolTxAddEvent event) {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		buffer.put(event.getEntry().getTx().getHash(), new PendingAction(ActionType.ADD, event.getEntry()));
 	}
 
 	@EventListener
 	public void onMempoolRemove(MempoolTxRemoveEvent event) {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		Hash txHash = event.getEntry().getTx().getHash();
 		buffer.compute(txHash, (key, existingAction) -> {
 			if (existingAction != null && existingAction.getType() == ActionType.ADD) {
@@ -127,6 +143,9 @@ public class ExIndexerMempoolService {
 	 */
 	@Transactional(rollbackFor = Exception.class)
 	public void flushBuffer() {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		if (buffer.isEmpty()) {
 			return;
 		}

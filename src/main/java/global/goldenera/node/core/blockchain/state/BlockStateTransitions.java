@@ -48,6 +48,7 @@ import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
+import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
@@ -64,18 +65,21 @@ public class BlockStateTransitions {
 	ChainSwitchService chainSwitchService;
 	ApplicationEventPublisher applicationEventPublisher;
 	ReentrantLock masterChainLock;
+	EntityIndexRepository entityIndexRepository;
 
 	public BlockStateTransitions(
 			BlockRepository blockRepository,
 			ChainQuery chainQueryService,
 			ChainSwitchService chainSwitchService,
 			ApplicationEventPublisher applicationEventPublisher,
-			@Qualifier("masterChainLock") ReentrantLock masterChainLock) {
+			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
+			EntityIndexRepository entityIndexRepository) {
 		this.blockRepository = blockRepository;
 		this.chainQueryService = chainQueryService;
 		this.chainSwitchService = chainSwitchService;
 		this.applicationEventPublisher = applicationEventPublisher;
 		this.masterChainLock = masterChainLock;
+		this.entityIndexRepository = entityIndexRepository;
 	}
 
 	public void connectBlock(
@@ -172,6 +176,7 @@ public class BlockStateTransitions {
 				blockRepository.getRepository().executeAtomicBatch(batch -> {
 					worldState.persistToBatch(batch);
 					if (performFullConnect) {
+						entityIndexRepository.saveEntities(batch, block, worldState);
 						blockRepository.addBlockToBatch(batch, storedBlockToSave);
 					} else {
 						try {
@@ -181,6 +186,7 @@ public class BlockStateTransitions {
 						}
 					}
 				});
+				entityIndexRepository.invalidateCaches();
 			} catch (RuntimeException e) {
 				log.error("Atomic commit failed for block {}: {}", block.getHeight(), e.getMessage(), e);
 				worldState.rollback();

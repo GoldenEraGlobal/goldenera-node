@@ -26,8 +26,9 @@ package global.goldenera.node.core.storage.blockchain.serialization;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.rlp.RLPInput;
 
-@FunctionalInterface
 public interface StoredBlockDecodingStrategy {
 
 	StoredBlock decode(RLPInput input);
+
+	StoredBlock decode(RLPInput input, boolean withoutBody);
 }

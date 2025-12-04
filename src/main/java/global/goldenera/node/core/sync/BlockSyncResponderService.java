@@ -30,7 +30,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
@@ -79,8 +78,7 @@ public class BlockSyncResponderService {
 			}
 			long myTipHeight = chainQueryService.getLatestBlockOrThrow().getHeight();
 			endHeight = Math.min(endHeight, myTipHeight);
-			headersToSend = chainQueryService.findByHeightRange(startHeight, endHeight).stream().map(b -> b.getHeader())
-					.collect(Collectors.toList());
+			headersToSend = chainQueryService.findHeadersByHeightRange(startHeight, endHeight);
 		}
 		event.getPeer().sendBlockHeaders(headersToSend, event.getRequestId());
 	}

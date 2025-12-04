@@ -1,6 +1,6 @@
 databaseChangeLog:
 - changeSet:
-    id: 1764687487690-1
+    id: 1764865009036-1
     author: goldenera (generated)
     changes:
     - createSequence:
@@ -8,7 +8,7 @@ databaseChangeLog:
         sequenceName: api_key_id_seq
         startValue: 1
 - changeSet:
-    id: 1764687487690-2
+    id: 1764865009036-2
     author: goldenera (generated)
     changes:
     - createSequence:
@@ -16,7 +16,7 @@ databaseChangeLog:
         sequenceName: explorer_revert_log_seq
         startValue: 1
 - changeSet:
-    id: 1764687487690-3
+    id: 1764865009036-3
     author: goldenera (generated)
     changes:
     - createSequence:
@@ -24,15 +24,15 @@ databaseChangeLog:
         sequenceName: explorer_transfer_seq
         startValue: 1
 - changeSet:
-    id: 1764687487690-4
+    id: 1764865009036-4
     author: goldenera (generated)
     changes:
     - createSequence:
         incrementBy: 1000
-        sequenceName: explorer_webhook_event_id_seq
+        sequenceName: webhook_event_id_seq
         startValue: 1
 - changeSet:
-    id: 1764687487690-5
+    id: 1764865009036-5
     author: goldenera (generated)
     changes:
     - createTable:
@@ -85,7 +85,7 @@ databaseChangeLog:
             type: BIGINT
         tableName: api_key
 - changeSet:
-    id: 1764687487690-6
+    id: 1764865009036-6
     author: goldenera (generated)
     changes:
     - createTable:
@@ -106,7 +106,7 @@ databaseChangeLog:
             type: INT
         tableName: api_key_permission
 - changeSet:
-    id: 1764687487690-7
+    id: 1764865009036-7
     author: goldenera (generated)
     changes:
     - createTable:
@@ -155,7 +155,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_account_balance
 - changeSet:
-    id: 1764687487690-8
+    id: 1764865009036-8
     author: goldenera (generated)
     changes:
     - createTable:
@@ -197,7 +197,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_account_nonce
 - changeSet:
-    id: 1764687487690-9
+    id: 1764865009036-9
     author: goldenera (generated)
     changes:
     - createTable:
@@ -234,7 +234,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_address_alias
 - changeSet:
-    id: 1764687487690-10
+    id: 1764865009036-10
     author: goldenera (generated)
     changes:
     - createTable:
@@ -266,7 +266,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_authority
 - changeSet:
-    id: 1764687487690-11
+    id: 1764865009036-11
     author: goldenera (generated)
     changes:
     - createTable:
@@ -359,7 +359,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_bip_state
 - changeSet:
-    id: 1764687487690-12
+    id: 1764865009036-12
     author: goldenera (generated)
     changes:
     - createTable:
@@ -446,7 +446,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_block_header
 - changeSet:
-    id: 1764687487690-13
+    id: 1764865009036-13
     author: goldenera (generated)
     changes:
     - createTable:
@@ -534,7 +534,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_mem_transfer
 - changeSet:
-    id: 1764687487690-14
+    id: 1764865009036-14
     author: goldenera (generated)
     changes:
     - createTable:
@@ -613,7 +613,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_network_params
 - changeSet:
-    id: 1764687487690-15
+    id: 1764865009036-15
     author: goldenera (generated)
     changes:
     - createTable:
@@ -658,7 +658,7 @@ databaseChangeLog:
             type: BYTEA
         tableName: explorer_revert_log
 - changeSet:
-    id: 1764687487690-16
+    id: 1764865009036-16
     author: goldenera (generated)
     changes:
     - createTable:
@@ -690,7 +690,7 @@ databaseChangeLog:
             type: BIGINT
         tableName: explorer_status
 - changeSet:
-    id: 1764687487690-17
+    id: 1764865009036-17
     author: goldenera (generated)
     changes:
     - createTable:
@@ -773,7 +773,7 @@ databaseChangeLog:
             type: VARCHAR(1024)
         tableName: explorer_token
 - changeSet:
-    id: 1764687487690-18
+    id: 1764865009036-18
     author: goldenera (generated)
     changes:
     - createTable:
@@ -822,7 +822,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_transfer
 - changeSet:
-    id: 1764687487690-19
+    id: 1764865009036-19
     author: goldenera (generated)
     changes:
     - createTable:
@@ -915,7 +915,7 @@ databaseChangeLog:
             type: INT
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-20
+    id: 1764865009036-20
     author: goldenera (generated)
     changes:
     - createTable:
@@ -924,7 +924,7 @@ databaseChangeLog:
             constraints:
               nullable: false
               primaryKey: true
-              primaryKeyName: explorer_webhookPK
+              primaryKeyName: webhookPK
             name: id
             type: UUID
         - column:
@@ -971,9 +971,9 @@ databaseChangeLog:
               nullable: false
             name: created_by_api_key_id
             type: BIGINT
-        tableName: explorer_webhook
+        tableName: webhook
 - changeSet:
-    id: 1764687487690-21
+    id: 1764865009036-21
     author: goldenera (generated)
     changes:
     - createTable:
@@ -982,7 +982,7 @@ databaseChangeLog:
             constraints:
               nullable: false
               primaryKey: true
-              primaryKeyName: explorer_webhook_eventPK
+              primaryKeyName: webhook_eventPK
             name: id
             type: BIGINT
         - column:
@@ -1009,9 +1009,9 @@ databaseChangeLog:
               nullable: false
             name: webhook_id
             type: UUID
-        tableName: explorer_webhook_event
+        tableName: webhook_event
 - changeSet:
-    id: 1764687487690-22
+    id: 1764865009036-22
     author: goldenera (generated)
     changes:
     - addUniqueConstraint:
@@ -1019,15 +1019,15 @@ databaseChangeLog:
         constraintName: UC_API_KEYID_COL
         tableName: api_key
 - changeSet:
-    id: 1764687487690-23
+    id: 1764865009036-23
     author: goldenera (generated)
     changes:
     - addUniqueConstraint:
         columnNames: id
-        constraintName: UC_EXPLORER_WEBHOOK_EVENTID_COL
-        tableName: explorer_webhook_event
+        constraintName: UC_WEBHOOK_EVENTID_COL
+        tableName: webhook_event
 - changeSet:
-    id: 1764687487690-24
+    id: 1764865009036-24
     author: goldenera (generated)
     changes:
     - addUniqueConstraint:
@@ -1035,15 +1035,15 @@ databaseChangeLog:
         constraintName: idx_apikey_prefix
         tableName: api_key
 - changeSet:
-    id: 1764687487690-25
+    id: 1764865009036-25
     author: goldenera (generated)
     changes:
     - addUniqueConstraint:
         columnNames: label
-        constraintName: idx_explorer_webhook_label
-        tableName: explorer_webhook
+        constraintName: idx_webhook_label
+        tableName: webhook
 - changeSet:
-    id: 1764687487690-26
+    id: 1764865009036-26
     author: goldenera (generated)
     changes:
     - addUniqueConstraint:
@@ -1051,7 +1051,7 @@ databaseChangeLog:
         constraintName: uc_explorer_tx_block_pos
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-27
+    id: 1764865009036-27
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1061,7 +1061,7 @@ databaseChangeLog:
         indexName: idx_apikey_label
         tableName: api_key
 - changeSet:
-    id: 1764687487690-28
+    id: 1764865009036-28
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1074,7 +1074,7 @@ databaseChangeLog:
         indexName: idx_block_coinbase_height
         tableName: explorer_block_header
 - changeSet:
-    id: 1764687487690-29
+    id: 1764865009036-29
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1085,7 +1085,7 @@ databaseChangeLog:
         indexName: idx_block_height_desc
         tableName: explorer_block_header
 - changeSet:
-    id: 1764687487690-30
+    id: 1764865009036-30
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1095,7 +1095,7 @@ databaseChangeLog:
         indexName: idx_block_previous_hash
         tableName: explorer_block_header
 - changeSet:
-    id: 1764687487690-31
+    id: 1764865009036-31
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1105,7 +1105,7 @@ databaseChangeLog:
         indexName: idx_block_timestamp
         tableName: explorer_block_header
 - changeSet:
-    id: 1764687487690-32
+    id: 1764865009036-32
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1118,7 +1118,7 @@ databaseChangeLog:
         indexName: idx_ex_transfer_from
         tableName: explorer_transfer
 - changeSet:
-    id: 1764687487690-33
+    id: 1764865009036-33
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1131,7 +1131,7 @@ databaseChangeLog:
         indexName: idx_ex_transfer_to
         tableName: explorer_transfer
 - changeSet:
-    id: 1764687487690-34
+    id: 1764865009036-34
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1144,7 +1144,7 @@ databaseChangeLog:
         indexName: idx_ex_transfer_token
         tableName: explorer_transfer
 - changeSet:
-    id: 1764687487690-35
+    id: 1764865009036-35
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1154,7 +1154,7 @@ databaseChangeLog:
         indexName: idx_ex_transfer_tx_hash
         tableName: explorer_transfer
 - changeSet:
-    id: 1764687487690-36
+    id: 1764865009036-36
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1164,7 +1164,7 @@ databaseChangeLog:
         indexName: idx_explorer_account_balance_balance
         tableName: explorer_account_balance
 - changeSet:
-    id: 1764687487690-37
+    id: 1764865009036-37
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1176,7 +1176,7 @@ databaseChangeLog:
         indexName: idx_explorer_account_balance_token_balance
         tableName: explorer_account_balance
 - changeSet:
-    id: 1764687487690-38
+    id: 1764865009036-38
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1186,7 +1186,7 @@ databaseChangeLog:
         indexName: idx_explorer_address_alias_address
         tableName: explorer_address_alias
 - changeSet:
-    id: 1764687487690-39
+    id: 1764865009036-39
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1196,7 +1196,7 @@ databaseChangeLog:
         indexName: idx_explorer_address_alias_origin_tx_hash
         tableName: explorer_address_alias
 - changeSet:
-    id: 1764687487690-40
+    id: 1764865009036-40
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1206,7 +1206,7 @@ databaseChangeLog:
         indexName: idx_explorer_authority_origin_tx_hash
         tableName: explorer_authority
 - changeSet:
-    id: 1764687487690-41
+    id: 1764865009036-41
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1216,7 +1216,7 @@ databaseChangeLog:
         indexName: idx_explorer_bip_state_status
         tableName: explorer_bip_state
 - changeSet:
-    id: 1764687487690-42
+    id: 1764865009036-42
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1226,7 +1226,7 @@ databaseChangeLog:
         indexName: idx_explorer_network_params_updated_by_tx_hash
         tableName: explorer_network_params
 - changeSet:
-    id: 1764687487690-43
+    id: 1764865009036-43
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1236,7 +1236,7 @@ databaseChangeLog:
         indexName: idx_explorer_token_name
         tableName: explorer_token
 - changeSet:
-    id: 1764687487690-44
+    id: 1764865009036-44
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1248,7 +1248,7 @@ databaseChangeLog:
         indexName: idx_explorer_token_name_smallest_unit_name
         tableName: explorer_token
 - changeSet:
-    id: 1764687487690-45
+    id: 1764865009036-45
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1258,7 +1258,7 @@ databaseChangeLog:
         indexName: idx_explorer_token_origin_tx_hash
         tableName: explorer_token
 - changeSet:
-    id: 1764687487690-46
+    id: 1764865009036-46
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1268,7 +1268,7 @@ databaseChangeLog:
         indexName: idx_explorer_token_smallest_unit_name
         tableName: explorer_token
 - changeSet:
-    id: 1764687487690-47
+    id: 1764865009036-47
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1278,7 +1278,7 @@ databaseChangeLog:
         indexName: idx_explorer_token_updated_by_tx_hash
         tableName: explorer_token
 - changeSet:
-    id: 1764687487690-48
+    id: 1764865009036-48
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1288,7 +1288,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_block_hash
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-49
+    id: 1764865009036-49
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1301,7 +1301,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_latest
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-50
+    id: 1764865009036-50
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1314,7 +1314,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_recipient_latest
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-51
+    id: 1764865009036-51
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1324,7 +1324,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_ref_hash
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-52
+    id: 1764865009036-52
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1337,7 +1337,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_sender_latest
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-53
+    id: 1764865009036-53
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1347,7 +1347,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_timestamp
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-54
+    id: 1764865009036-54
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1360,57 +1360,7 @@ databaseChangeLog:
         indexName: idx_explorer_tx_token_latest
         tableName: explorer_tx
 - changeSet:
-    id: 1764687487690-55
-    author: goldenera (generated)
-    changes:
-    - createIndex:
-        columns:
-        - column:
-            name: created_by_api_key_id
-        indexName: idx_explorer_webhook_created_by_api_key_id
-        tableName: explorer_webhook
-- changeSet:
-    id: 1764687487690-56
-    author: goldenera (generated)
-    changes:
-    - createIndex:
-        columns:
-        - column:
-            name: address_filter
-        indexName: idx_explorer_webhook_event_address
-        tableName: explorer_webhook_event
-- changeSet:
-    id: 1764687487690-57
-    author: goldenera (generated)
-    changes:
-    - createIndex:
-        columns:
-        - column:
-            name: token_address_filter
-        indexName: idx_explorer_webhook_event_token_address
-        tableName: explorer_webhook_event
-- changeSet:
-    id: 1764687487690-58
-    author: goldenera (generated)
-    changes:
-    - createIndex:
-        columns:
-        - column:
-            name: type
-        indexName: idx_explorer_webhook_event_type
-        tableName: explorer_webhook_event
-- changeSet:
-    id: 1764687487690-59
-    author: goldenera (generated)
-    changes:
-    - createIndex:
-        columns:
-        - column:
-            name: webhook_id
-        indexName: idx_explorer_webhook_event_webhook_id
-        tableName: explorer_webhook_event
-- changeSet:
-    id: 1764687487690-60
+    id: 1764865009036-55
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1421,7 +1371,7 @@ databaseChangeLog:
         indexName: idx_mem_tx_added
         tableName: explorer_mem_transfer
 - changeSet:
-    id: 1764687487690-61
+    id: 1764865009036-56
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1432,7 +1382,7 @@ databaseChangeLog:
         indexName: idx_mem_tx_fee
         tableName: explorer_mem_transfer
 - changeSet:
-    id: 1764687487690-62
+    id: 1764865009036-57
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1442,7 +1392,7 @@ databaseChangeLog:
         indexName: idx_mem_tx_recipient
         tableName: explorer_mem_transfer
 - changeSet:
-    id: 1764687487690-63
+    id: 1764865009036-58
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1452,7 +1402,7 @@ databaseChangeLog:
         indexName: idx_mem_tx_sender
         tableName: explorer_mem_transfer
 - changeSet:
-    id: 1764687487690-64
+    id: 1764865009036-59
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1462,7 +1412,7 @@ databaseChangeLog:
         indexName: idx_revert_block_hash
         tableName: explorer_revert_log
 - changeSet:
-    id: 1764687487690-65
+    id: 1764865009036-60
     author: goldenera (generated)
     changes:
     - createIndex:
@@ -1472,7 +1422,57 @@ databaseChangeLog:
         indexName: idx_revert_height
         tableName: explorer_revert_log
 - changeSet:
-    id: 1764687487690-66
+    id: 1764865009036-61
+    author: goldenera (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: created_by_api_key_id
+        indexName: idx_webhook_created_by_api_key_id
+        tableName: webhook
+- changeSet:
+    id: 1764865009036-62
+    author: goldenera (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: address_filter
+        indexName: idx_webhook_event_address
+        tableName: webhook_event
+- changeSet:
+    id: 1764865009036-63
+    author: goldenera (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: token_address_filter
+        indexName: idx_webhook_event_token_address
+        tableName: webhook_event
+- changeSet:
+    id: 1764865009036-64
+    author: goldenera (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: type
+        indexName: idx_webhook_event_type
+        tableName: webhook_event
+- changeSet:
+    id: 1764865009036-65
+    author: goldenera (generated)
+    changes:
+    - createIndex:
+        columns:
+        - column:
+            name: webhook_id
+        indexName: idx_webhook_event_webhook_id
+        tableName: webhook_event
+- changeSet:
+    id: 1764865009036-66
     author: goldenera (generated)
     changes:
     - addForeignKeyConstraint:
@@ -1485,29 +1485,29 @@ databaseChangeLog:
         referencedTableName: api_key
         validate: true
 - changeSet:
-    id: 1764687487690-67
-    author: goldenera (generated)
-    changes:
-    - addForeignKeyConstraint:
-        baseColumnNames: created_by_api_key_id
-        baseTableName: explorer_webhook
-        constraintName: FKa2c2wuj5enoagjnycpbkf4umu
-        deferrable: false
-        initiallyDeferred: false
-        referencedColumnNames: id
-        referencedTableName: api_key
-        validate: true
-- changeSet:
-    id: 1764687487690-68
+    id: 1764865009036-67
     author: goldenera (generated)
     changes:
     - addForeignKeyConstraint:
         baseColumnNames: webhook_id
-        baseTableName: explorer_webhook_event
-        constraintName: FKeqkix6qigpyg2yra1u5enirv9
+        baseTableName: webhook_event
+        constraintName: FKjw3gva2vi6le9hg6ubjluvn0
         deferrable: false
         initiallyDeferred: false
         referencedColumnNames: id
-        referencedTableName: explorer_webhook
+        referencedTableName: webhook
+        validate: true
+- changeSet:
+    id: 1764865009036-68
+    author: goldenera (generated)
+    changes:
+    - addForeignKeyConstraint:
+        baseColumnNames: created_by_api_key_id
+        baseTableName: webhook
+        constraintName: FKkelgtk6wusa7yjcp35x8c2vhy
+        deferrable: false
+        initiallyDeferred: false
+        referencedColumnNames: id
+        referencedTableName: api_key
         validate: true
 

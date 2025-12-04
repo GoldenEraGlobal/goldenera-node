@@ -1,72 +1,72 @@
 databaseChangeLog:
-    - changeSet:
-          id: add-gin-index-on-criteria
-          author: goldenera
-          changes:
-              - sql:
-                    dbms: postgresql
-                    endDelimiter: ;
-                    sql: |
-                        CREATE INDEX IF NOT EXISTS idx_explorer_webhook_event_criteria_gin 
-                        ON explorer_webhook_event 
-                        USING GIN (criteria);
-          rollback:
-              - sql:
-                    dbms: postgresql
-                    endDelimiter: ;
-                    sql: DROP INDEX IF EXISTS idx_explorer_webhook_event_criteria_gin;
-    - changeSet:
-          id: add-unique-filter-constraint
-          author: goldenera
-          changes:
-              - sql:
-                    dbms: postgresql
-                    endDelimiter: ;
-                    sql: |
-                        CREATE UNIQUE INDEX IF NOT EXISTS idx_explorer_webhook_event_unique_filters
-                        ON explorer_webhook_event (
-                            webhook_id,
-                            type,
-                            address_filter,
-                            token_address_filter
-                        )
-                        NULLS NOT DISTINCT;
-          rollback:
-              - sql:
-                    dbms: postgresql
-                    endDelimiter: ;
-                    sql: DROP INDEX IF EXISTS idx_explorer_webhook_event_unique_filters;
-    - changeSet:
-          id: recreate-webhook-event-sequence-with-cache
-          author: goldenera
-          changes:
-              # Drop old sequence if exists
-              - sql:
-                    sql: DROP SEQUENCE IF EXISTS explorer_webhook_event_id_seq CASCADE;
-              # Create new sequence with CACHE optimization
-              - createSequence:
-                    sequenceName: explorer_webhook_event_id_seq
-                    dataType: bigint
-                    startValue: 1
-                    incrementBy: 1000
-                    cacheSize: 1000
-              # Link sequence to id column
-              - sql:
-                    sql: ALTER TABLE explorer_webhook_event ALTER COLUMN id SET DEFAULT nextval('explorer_webhook_event_id_seq');
-    - changeSet:
-          id: recreate-api-key-sequence-with-cache
-          author: goldenera
-          changes:
-              # Drop old sequence if exists
-              - sql:
-                    sql: DROP SEQUENCE IF EXISTS api_key_id_seq CASCADE;
-              # Create new sequence with CACHE optimization
-              - createSequence:
-                    sequenceName: api_key_id_seq
-                    dataType: bigint
-                    startValue: 1
-                    incrementBy: 5
-                    cacheSize: 5
-              # Link sequence to id column
-              - sql:
-                    sql: ALTER TABLE api_key ALTER COLUMN id SET DEFAULT nextval('api_key_id_seq');
+      - changeSet:
+              id: add-gin-index-on-criteria
+              author: goldenera
+              changes:
+                    - sql:
+                            dbms: postgresql
+                            endDelimiter: ;
+                            sql: |
+                                  CREATE INDEX IF NOT EXISTS idx_webhook_event_criteria_gin 
+                                  ON webhook_event 
+                                  USING GIN (criteria);
+              rollback:
+                    - sql:
+                            dbms: postgresql
+                            endDelimiter: ;
+                            sql: DROP INDEX IF EXISTS idx_webhook_event_criteria_gin;
+      - changeSet:
+              id: add-unique-filter-constraint
+              author: goldenera
+              changes:
+                    - sql:
+                            dbms: postgresql
+                            endDelimiter: ;
+                            sql: |
+                                  CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_event_unique_filters
+                                  ON webhook_event (
+                                      webhook_id,
+                                      type,
+                                      address_filter,
+                                      token_address_filter
+                                  )
+                                  NULLS NOT DISTINCT;
+              rollback:
+                    - sql:
+                            dbms: postgresql
+                            endDelimiter: ;
+                            sql: DROP INDEX IF EXISTS idx_webhook_event_unique_filters;
+      - changeSet:
+              id: recreate-webhook-event-sequence-with-cache
+              author: goldenera
+              changes:
+                    # Drop old sequence if exists
+                    - sql:
+                            sql: DROP SEQUENCE IF EXISTS webhook_event_id_seq CASCADE;
+                    # Create new sequence with CACHE optimization
+                    - createSequence:
+                            sequenceName: webhook_event_id_seq
+                            dataType: bigint
+                            startValue: 1
+                            incrementBy: 1000
+                            cacheSize: 1000
+                    # Link sequence to id column
+                    - sql:
+                            sql: ALTER TABLE webhook_event ALTER COLUMN id SET DEFAULT nextval('webhook_event_id_seq');
+      - changeSet:
+              id: recreate-api-key-sequence-with-cache
+              author: goldenera
+              changes:
+                    # Drop old sequence if exists
+                    - sql:
+                            sql: DROP SEQUENCE IF EXISTS api_key_id_seq CASCADE;
+                    # Create new sequence with CACHE optimization
+                    - createSequence:
+                            sequenceName: api_key_id_seq
+                            dataType: bigint
+                            startValue: 1
+                            incrementBy: 5
+                            cacheSize: 5
+                    # Link sequence to id column
+                    - sql:
+                            sql: ALTER TABLE api_key ALTER COLUMN id SET DEFAULT nextval('api_key_id_seq');

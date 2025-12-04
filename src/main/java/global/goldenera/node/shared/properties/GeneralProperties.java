@@ -47,6 +47,8 @@ public class GeneralProperties {
 
 	String nodeIdentityFile;
 
+	boolean explorerEnable;
+
 	public Address getBeneficiaryAddress() {
 		if (beneficiaryAddress == null || beneficiaryAddress.isEmpty()) {
 			throw new GEFailedException("Beneficiary address is not set in properties file.");

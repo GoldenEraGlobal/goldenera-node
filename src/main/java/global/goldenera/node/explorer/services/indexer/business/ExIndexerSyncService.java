@@ -39,6 +39,7 @@ import global.goldenera.node.explorer.entities.ExBlockHeader;
 import global.goldenera.node.explorer.entities.ExStatus;
 import global.goldenera.node.explorer.repositories.ExBlockHeaderRepository;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -50,6 +51,7 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExIndexerSyncService {
 
+	GeneralProperties generalProperties;
 	ExBlockHeaderRepository exBlockHeaderRepository;
 	ExIndexerStatusCoreService exStatusCoreService;
 	ExIndexerQueueService exQueueService;
@@ -61,6 +63,10 @@ public class ExIndexerSyncService {
 	@EventListener(CoreDbReadyEvent.class)
 	@Transactional(rollbackFor = Exception.class)
 	public void syncExplorerOnStartup() {
+		if (!generalProperties.isExplorerEnable()) {
+			log.info("Explorer is disabled. Skipping sync.");
+			return;
+		}
 		log.info("Checking Explorer synchronization status...");
 		long explorerHeight = validateAndRepairStatus();
 

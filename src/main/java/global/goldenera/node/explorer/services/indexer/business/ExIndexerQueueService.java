@@ -34,6 +34,7 @@ import org.springframework.stereotype.Service;
 
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
@@ -49,6 +50,7 @@ public class ExIndexerQueueService {
 
 	private static final int MAX_QUEUE_CAPACITY = 2000;
 
+	GeneralProperties generalProperties;
 	MeterRegistry registry;
 	Deque<ExIndexerTask> queue = new ArrayDeque<>(MAX_QUEUE_CAPACITY);
 
@@ -58,6 +60,9 @@ public class ExIndexerQueueService {
 
 	@PostConstruct
 	public void initMetrics() {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		registry.gaugeCollectionSize("explorer.queue.size", Tags.empty(), queue);
 	}
 

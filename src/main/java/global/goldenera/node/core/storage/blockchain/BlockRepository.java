@@ -29,6 +29,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.rocksdb.RocksDBException;
@@ -39,6 +40,7 @@ import org.springframework.stereotype.Repository;
 import com.github.benmanes.caffeine.cache.Cache;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.enums.StoredBlockVersion;
@@ -61,7 +63,10 @@ public class BlockRepository {
 	RocksDBRepository repository;
 	RocksDbColumnFamilies cf;
 	Cache<Hash, StoredBlock> blockCache;
+	Cache<Hash, BlockHeader> headerCache;
 	Cache<Long, Hash> heightCache;
+	Cache<Hash, Tx> txCache;
+	AtomicReference<StoredBlock> latestBlockCache = new AtomicReference<>();
 
 	private final ThreadLocal<List<Runnable>> postCommitActions = new ThreadLocal<>();
 
@@ -84,7 +89,9 @@ public class BlockRepository {
 				return Optional.empty();
 
 			StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
-			blockCache.put(hash, storedBlock);
+			if (!storedBlock.isPartial()) {
+				blockCache.put(hash, storedBlock);
+			}
 			return Optional.of(storedBlock);
 		} catch (RocksDBException e) {
 			throw new RuntimeException("Failed to read StoredBlock " + hash, e);
@@ -164,6 +171,10 @@ public class BlockRepository {
 	}
 
 	public Optional<Hash> getLatestBlockHash() {
+		StoredBlock cachedLatest = latestBlockCache.get();
+		if (cachedLatest != null) {
+			return Optional.of(cachedLatest.getHash());
+		}
 		try {
 			byte[] data = repository.get(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH);
 			return (data == null) ? Optional.empty() : Optional.of(Hash.wrap(data));
@@ -173,21 +184,27 @@ public class BlockRepository {
 	}
 
 	public Optional<Block> getLatestBlock() {
-		return getLatestBlockHash().flatMap(this::getBlockByHash);
+		return getLatestStoredBlock().map(StoredBlock::getBlock);
 	}
 
 	public Block getLatestBlockOrThrow() {
-		return getLatestBlockHash().flatMap(this::getBlockByHash)
+		return getLatestStoredBlock().map(StoredBlock::getBlock)
 				.orElseThrow(() -> new GENotFoundException("No latest block found"));
 	}
 
 	public StoredBlock getLatestStoredBlockOrThrow() {
-		return getLatestBlockHash().flatMap(this::getStoredBlockByHash)
+		return getLatestStoredBlock()
 				.orElseThrow(() -> new GENotFoundException("No latest block found"));
 	}
 
 	public Optional<StoredBlock> getLatestStoredBlock() {
-		return getLatestBlockHash().flatMap(this::getStoredBlockByHash);
+		StoredBlock cachedLatest = latestBlockCache.get();
+		if (cachedLatest != null) {
+			return Optional.of(cachedLatest);
+		}
+		Optional<StoredBlock> loaded = getLatestBlockHash().flatMap(this::getStoredBlockByHash);
+		loaded.ifPresent(latestBlockCache::set);
+		return loaded;
 	}
 
 	public List<Tx> getTxsByBlockHash(Hash blockHash) {
@@ -195,6 +212,10 @@ public class BlockRepository {
 	}
 
 	public Optional<Tx> getTransactionByHash(Hash txHash) {
+		Tx cachedTx = txCache.getIfPresent(txHash);
+		if (cachedTx != null) {
+			return Optional.of(cachedTx);
+		}
 		try {
 			byte[] blockHashBytes = repository.get(cf.txIndex(), txHash.toArray());
 			if (blockHashBytes == null)
@@ -213,6 +234,7 @@ public class BlockRepository {
 			for (int i = 0; i < txs.size(); i++) {
 				Tx tx = txs.get(i);
 				if (tx.getHash().equals(txHash)) {
+					txCache.put(txHash, tx);
 					return Optional.of(tx);
 				}
 			}
@@ -241,6 +263,43 @@ public class BlockRepository {
 		return blocks;
 	}
 
+	public Optional<BlockHeader> getBlockHeaderByHash(Hash hash) {
+		BlockHeader cached = headerCache.getIfPresent(hash);
+		if (cached != null)
+			return Optional.of(cached);
+		try {
+			byte[] data = repository.get(cf.blocks(), hash.toArray());
+			if (data == null)
+				return Optional.empty();
+
+			StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
+			BlockHeader header = storedBlock.getBlock().getHeader();
+			headerCache.put(hash, header);
+			return Optional.of(header);
+		} catch (Exception e) {
+			log.error("Failed to read BlockHeader " + hash, e);
+			return Optional.empty();
+		}
+	}
+
+	public List<BlockHeader> findHeadersByHeightRange(long fromHeight, long toHeight) {
+		if (fromHeight > toHeight)
+			return new ArrayList<>();
+		int estimatedSize = (int) Math.min(toHeight - fromHeight + 1, 1000);
+		List<BlockHeader> headers = new ArrayList<>(estimatedSize);
+		try (RocksIterator iterator = repository.newIterator(cf.hashByHeight())) {
+			iterator.seek(longToBytes(fromHeight));
+			while (iterator.isValid()) {
+				long currentHeight = bytesToLong(iterator.key());
+				if (currentHeight > toHeight)
+					break;
+				getBlockHeaderByHash(Hash.wrap(iterator.value())).ifPresent(headers::add);
+				iterator.next();
+			}
+		}
+		return headers;
+	}
+
 	private static byte[] longToBytes(long val) {
 		return ByteBuffer.allocate(8).putLong(val).array();
 	}
@@ -260,11 +319,21 @@ public class BlockRepository {
 		Bytes encoded = StoredBlockEncoder.INSTANCE.encode(storedBlock, StoredBlockVersion.V1);
 		batch.put(cf.blocks(), hashBytes, encoded.toArray());
 		scheduleInvalidation(() -> blockCache.invalidate(block.getHash()));
+		scheduleInvalidation(() -> headerCache.invalidate(block.getHash()));
+
+		// Update latestBlockCache if we are updating the current tip
+		StoredBlock currentLatest = latestBlockCache.get();
+		if (currentLatest != null && currentLatest.getHash().equals(block.getHash())) {
+			scheduleInvalidation(() -> latestBlockCache.set(storedBlock));
+		}
 
 		// 2. Index Transactions (TxHash -> BlockHash)
+		List<Hash> txHashes = new ArrayList<>(block.getTxs().size());
 		for (Tx tx : block.getTxs()) {
 			batch.put(cf.txIndex(), tx.getHash().toArray(), hashBytes);
+			txHashes.add(tx.getHash());
 		}
+		scheduleInvalidation(() -> txCache.invalidateAll(txHashes));
 	}
 
 	public void connectBlockIndexToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
@@ -273,6 +342,7 @@ public class BlockRepository {
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, hashBytes);
 		batch.put(cf.hashByHeight(), Bytes.ofUnsignedLong(block.getHeight()).toArray(), hashBytes);
 		scheduleInvalidation(() -> heightCache.invalidate(block.getHeight()));
+		scheduleInvalidation(() -> latestBlockCache.set(storedBlock));
 	}
 
 	public void addBlockToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
@@ -285,12 +355,14 @@ public class BlockRepository {
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, newTip.getHash().toArray());
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(blockToDisconnect.getHeight()).toArray());
 		scheduleInvalidation(() -> heightCache.invalidate(blockToDisconnect.getHeight()));
+		scheduleInvalidation(() -> latestBlockCache.set(newTip));
 	}
 
 	public void forceDisconnectBlockIndex(WriteBatch batch, long height, Hash newTipHash) throws RocksDBException {
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, newTipHash.toArray());
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(height).toArray());
 		scheduleInvalidation(() -> heightCache.invalidate(height));
+		scheduleInvalidation(() -> latestBlockCache.set(null)); // We don't have the full new tip block here easily
 	}
 
 	public void removeBlockIndexFromBatch(WriteBatch batch, long height) throws RocksDBException {

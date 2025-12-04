@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.node.shared.exceptions.GEFailedException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -48,6 +49,7 @@ public class ExIndexerCoordinateService {
 	private static final long BASE_DELAY_MS = 1000;
 	private static final long MAX_DELAY_MS = 10000;
 
+	final GeneralProperties generalProperties;
 	final MeterRegistry registry;
 	final ExIndexerQueueService queueService;
 	final ExIndexerService indexer;
@@ -58,12 +60,18 @@ public class ExIndexerCoordinateService {
 
 	@PostConstruct
 	public void start() {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		worker.setUncaughtExceptionHandler((t, e) -> log.error("Uncaught exception in Explorer Coordinator", e));
 		worker.start();
 	}
 
 	@PreDestroy
 	public void stop() {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
 		running.set(false);
 		worker.interrupt();
 		try {

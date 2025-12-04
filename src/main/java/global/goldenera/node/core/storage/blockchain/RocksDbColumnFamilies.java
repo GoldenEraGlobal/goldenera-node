@@ -55,6 +55,11 @@ public class RocksDbColumnFamilies {
 	// Metadata
 	public static final String CF_METADATA = "metadata";
 
+	// Entity Indexes
+	public static final String CF_TOKENS = "tokens";
+	public static final String CF_AUTHORITIES = "authorities";
+	public static final String CF_ENTITY_UNDO_LOG = "entity_undo_log";
+
 	Map<String, ColumnFamilyHandle> handles = new HashMap<>();
 
 	public void addHandle(String name, ColumnFamilyHandle handle) {
@@ -79,5 +84,17 @@ public class RocksDbColumnFamilies {
 
 	public ColumnFamilyHandle metadata() {
 		return handles.get(CF_METADATA);
+	}
+
+	public ColumnFamilyHandle tokens() {
+		return handles.get(CF_TOKENS);
+	}
+
+	public ColumnFamilyHandle authorities() {
+		return handles.get(CF_AUTHORITIES);
+	}
+
+	public ColumnFamilyHandle entityUndoLog() {
+		return handles.get(CF_ENTITY_UNDO_LOG);
 	}
 }

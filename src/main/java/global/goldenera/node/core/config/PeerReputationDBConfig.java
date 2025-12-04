@@ -34,10 +34,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import org.rocksdb.BlockBasedTableConfig;
+import org.rocksdb.BloomFilter;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
+import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
+import org.rocksdb.LRUCache;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 import org.springframework.context.annotation.Bean;
@@ -64,7 +68,19 @@ public class PeerReputationDBConfig {
 		Files.createDirectories(Paths.get(dbPath));
 		RocksDB.loadLibrary();
 
-		final ColumnFamilyOptions cfOpts = new ColumnFamilyOptions().optimizeLevelStyleCompaction();
+		// Lighter configuration for Peer Reputation (less memory intensive than
+		// blockchain)
+		final BlockBasedTableConfig tableOptions = new BlockBasedTableConfig()
+				.setBlockCache(new LRUCache(64 * 1024 * 1024L)) // 64MB Cache
+				.setFilterPolicy(new BloomFilter(10, false))
+				.setBlockSize(4 * 1024L) // Smaller block size for small reputation records
+				.setCacheIndexAndFilterBlocks(true);
+
+		final ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
+				.setTableFormatConfig(tableOptions)
+				.setWriteBufferSize(16 * 1024 * 1024L) // 16MB Memtable
+				.setLevelCompactionDynamicLevelBytes(true)
+				.setCompressionType(CompressionType.LZ4_COMPRESSION); // LZ4 is sufficient here
 
 		final List<ColumnFamilyDescriptor> cfDescriptors = Arrays.asList(
 				new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts),
@@ -74,12 +90,15 @@ public class PeerReputationDBConfig {
 
 		final DBOptions dbOptions = new DBOptions()
 				.setCreateIfMissing(true)
-				.setCreateMissingColumnFamilies(true);
+				.setCreateMissingColumnFamilies(true)
+				.setMaxBackgroundJobs(2); // Fewer threads for auxiliary DB
 
 		final List<ColumnFamilyHandle> handles = new ArrayList<>();
 
 		File dbDir = new File(dbPath);
-		dbDir.mkdirs();
+		if (!dbDir.exists()) {
+			dbDir.mkdirs();
+		}
 		log.info("Opening Peer Reputation RocksDB at path: {}", dbDir.getAbsolutePath());
 
 		RocksDB rocksDB = RocksDB.open(dbOptions, dbDir.getAbsolutePath(), cfDescriptors, handles);
