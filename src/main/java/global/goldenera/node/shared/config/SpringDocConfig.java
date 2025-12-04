@@ -83,7 +83,11 @@ public class SpringDocConfig {
 	// --- API GROUPS ---
 	@Bean
 	public GroupedOpenApi coreApi() {
-		return GroupedOpenApi.builder().group("CORE API").pathsToMatch("/api/core/**").build();
+		return GroupedOpenApi.builder().group("CORE API").pathsToMatch("/api/core/**")
+				.addOperationCustomizer((op, m) -> {
+					op.addSecurityItem(new SecurityRequirement().addList(API_KEY_SCHEME));
+					return op;
+				}).build();
 	}
 
 	@Bean
