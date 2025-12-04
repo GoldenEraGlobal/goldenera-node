@@ -26,6 +26,7 @@ package global.goldenera.node.core.api.v1.blockchain;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -160,12 +161,12 @@ public class BlockchainApiV1 {
     }
 
     @GetMapping("worldstate/tokens")
-    public ResponseEntity<List<TokenState>> getAllTokens() {
-        return ResponseEntity.ok(entityIndexRepository.getAllTokens());
+    public ResponseEntity<Map<Address, TokenState>> getAllTokens() {
+        return ResponseEntity.ok(entityIndexRepository.getAllTokensWithAddresses());
     }
 
     @GetMapping("worldstate/authorities")
-    public ResponseEntity<List<AuthorityState>> getAllAuthorities() {
-        return ResponseEntity.ok(entityIndexRepository.getAllAuthorities());
+    public ResponseEntity<Map<Address, AuthorityState>> getAllAuthorities() {
+        return ResponseEntity.ok(entityIndexRepository.getAllAuthoritiesWithAddresses());
     }
 }

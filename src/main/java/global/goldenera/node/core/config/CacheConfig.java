@@ -26,6 +26,7 @@ package global.goldenera.node.core.config;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -38,6 +39,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.consensus.state.AuthorityState;
@@ -103,6 +105,22 @@ public class CacheConfig {
 
 	@Bean("authoritiesCache")
 	public Cache<String, List<AuthorityState>> authoritiesCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(1)
+				.expireAfterWrite(1, TimeUnit.HOURS)
+				.build();
+	}
+
+	@Bean("tokensMapCache")
+	public Cache<String, Map<Address, TokenState>> tokensMapCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(1)
+				.expireAfterWrite(1, TimeUnit.HOURS)
+				.build();
+	}
+
+	@Bean("authoritiesMapCache")
+	public Cache<String, Map<Address, AuthorityState>> authoritiesMapCache() {
 		return Caffeine.newBuilder()
 				.maximumSize(1)
 				.expireAfterWrite(1, TimeUnit.HOURS)

@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -61,6 +62,8 @@ public class EntityIndexRepository {
     ObjectMapper objectMapper;
     Cache<String, List<TokenState>> tokensCache;
     Cache<String, List<AuthorityState>> authoritiesCache;
+    Cache<String, Map<Address, TokenState>> tokensMapCache;
+    Cache<String, Map<Address, AuthorityState>> authoritiesMapCache;
 
     // --- SAVE / UPDATE ---
 
@@ -256,9 +259,53 @@ public class EntityIndexRepository {
         return authorities;
     }
 
+    public Map<Address, TokenState> getAllTokensWithAddresses() {
+        Map<Address, TokenState> cached = tokensMapCache.getIfPresent("ALL");
+        if (cached != null) {
+            return cached;
+        }
+
+        Map<Address, TokenState> tokens = new LinkedHashMap<>();
+        try (RocksIterator it = rocksDBRepository.newIterator(rocksDBRepository.getColumnFamilies().tokens())) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                Address address = Address.wrap(it.key());
+                TokenState state = objectMapper.readValue(it.value(), TokenStateImpl.class);
+                tokens.put(address, state);
+            }
+        } catch (IOException e) {
+            log.error("Failed to read tokens with addresses", e);
+        }
+
+        tokensMapCache.put("ALL", tokens);
+        return tokens;
+    }
+
+    public Map<Address, AuthorityState> getAllAuthoritiesWithAddresses() {
+        Map<Address, AuthorityState> cached = authoritiesMapCache.getIfPresent("ALL");
+        if (cached != null) {
+            return cached;
+        }
+
+        Map<Address, AuthorityState> authorities = new LinkedHashMap<>();
+        try (RocksIterator it = rocksDBRepository.newIterator(rocksDBRepository.getColumnFamilies().authorities())) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                Address address = Address.wrap(it.key());
+                AuthorityState state = objectMapper.readValue(it.value(), AuthorityStateImpl.class);
+                authorities.put(address, state);
+            }
+        } catch (IOException e) {
+            log.error("Failed to read authorities with addresses", e);
+        }
+
+        authoritiesMapCache.put("ALL", authorities);
+        return authorities;
+    }
+
     public void invalidateCaches() {
         tokensCache.invalidateAll();
         authoritiesCache.invalidateAll();
+        tokensMapCache.invalidateAll();
+        authoritiesMapCache.invalidateAll();
     }
 
     // --- INNER CLASSES ---
