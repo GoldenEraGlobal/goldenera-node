@@ -47,6 +47,7 @@
         <goldenera-cryptoj.version>0.0.1</goldenera-cryptoj.version>
         <micrometer-extras.version>0.2.2</micrometer-extras.version>
         <license-maven-plugin.version>4.6</license-maven-plugin.version>
+        <bucket4j.version>8.15.0</bucket4j.version>
     </properties>
 
     <dependencyManagement>
@@ -297,6 +298,11 @@
             <artifactId>micrometer-jvm-extras</artifactId>
             <version>${micrometer-extras.version}</version>
         </dependency>
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j_jdk17-core</artifactId>
+            <version>${bucket4j.version}</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -432,6 +438,11 @@
                         <groupId>org.web3j</groupId>
                         <artifactId>crypto</artifactId>
                         <version>${web3j.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>com.bucket4j</groupId>
+                        <artifactId>bucket4j_jdk17-core</artifactId>
+                        <version>${bucket4j.version}</version>
                     </dependency>
                 </dependencies>
             </plugin>

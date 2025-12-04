@@ -164,11 +164,20 @@ public class ChainQuery {
 
     public Optional<Block> findCommonAncestor(LinkedHashSet<Hash> locatorHashes) {
         for (Hash hash : locatorHashes) {
-            Optional<Block> b = blockRepository.getBlockByHash(hash);
-            if (b.isPresent())
+            Optional<Block> b = getCanonicalBlockByHash(hash);
+            if (b.isPresent()) {
                 return b;
+            }
         }
         return Optional.empty();
+    }
+
+    public Optional<Block> getCanonicalBlockByHash(Hash hash) {
+        return blockRepository.getCanonicalBlockByHash(hash);
+    }
+
+    public Optional<StoredBlock> getCanonicalStoredBlockByHash(Hash hash) {
+        return blockRepository.getCanonicalStoredBlockByHash(hash);
     }
 
 }

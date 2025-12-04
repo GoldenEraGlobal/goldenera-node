@@ -64,6 +64,6 @@ public class StoredBlockDecoder {
 
 		StoredBlock storedBlock = strategy.decode(input);
 		input.leaveList();
-		return storedBlock;
+		return storedBlock.toBuilder().size(rlpBytes.size()).build();
 	}
 }

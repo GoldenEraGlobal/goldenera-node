@@ -26,27 +26,28 @@ package global.goldenera.node.shared.properties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
-import global.goldenera.node.shared.utils.ValidatorUtil;
-import jakarta.annotation.PostConstruct;
 import lombok.Getter;
-import lombok.NonNull;
 import lombok.Setter;
 
 @Getter
 @Setter
 @Configuration
-@ConfigurationProperties(prefix = "ge.security", ignoreUnknownFields = false)
-public class SecurityProperties {
+@ConfigurationProperties(prefix = "ge.throttling", ignoreUnknownFields = false)
+public class ThrottlingProperties {
 
-	@NonNull
-	String hmacSecret;
+	long globalCapacity;
+	long globalRefillTokens;
 
-	@NonNull
-	String aesGcmSecret;
+	long publicCoreCapacity;
+	long publicCoreRefillTokens;
 
-	@PostConstruct
-	public void validate() {
-		ValidatorUtil.validateSecuritySecret(hmacSecret, "SECURITY_HMAC_SECRET");
-		ValidatorUtil.validateSecuritySecret(aesGcmSecret, "SECURITY_AES_GCM_SECRET");
-	}
+	long apiKeyDefaultCapacity;
+	long apiKeyDefaultRefillTokens;
+
+	long apiKeyExplorerCapacity;
+	long apiKeyExplorerRefillTokens;
+
+	long p2pCapacity;
+	long p2pRefillTokens;
+
 }

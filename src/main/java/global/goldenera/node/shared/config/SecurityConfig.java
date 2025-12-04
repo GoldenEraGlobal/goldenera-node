@@ -25,11 +25,8 @@ package global.goldenera.node.shared.config;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -51,24 +48,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.filters.ApiKeyAuthFilter;
-import global.goldenera.node.shared.properties.SecurityProperties;
+import global.goldenera.node.shared.filters.ThrottlingFilter;
 import global.goldenera.node.shared.services.ApiKeyCoreService;
+import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @Configuration
 @EnableWebSecurity
+@AllArgsConstructor
 @EnableMethodSecurity(prePostEnabled = true)
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class SecurityConfig {
-
-    String baseUrl;
-    SecurityProperties securityProperties;
-
-    public SecurityConfig(@Value("${server.base-url}") String baseUrl,
-            SecurityProperties securityProperties) {
-        this.baseUrl = baseUrl;
-        this.securityProperties = securityProperties;
-    }
 
     /**
      * Filter chain for the "master password" admin area.
@@ -93,7 +83,8 @@ public class SecurityConfig {
      */
     @Bean
     @Order(2)
-    public SecurityFilterChain explorerAndSharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter)
+    public SecurityFilterChain explorerAndSharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+            ThrottlingFilter throttlingFilter)
             throws Exception {
         http
                 .securityMatcher("/api/explorer/**", "/api/shared/**")
@@ -104,7 +95,8 @@ public class SecurityConfig {
 
         http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
-                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
         return http.build();
     }
 
@@ -114,7 +106,8 @@ public class SecurityConfig {
      */
     @Bean
     @Order(3)
-    public SecurityFilterChain coreApiFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain coreApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+            ThrottlingFilter throttlingFilter) throws Exception {
         http
                 .securityMatcher("/api/core/**")
                 .cors(Customizer.withDefaults())
@@ -123,6 +116,10 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .formLogin(login -> login.disable())
                 .httpBasic(basic -> basic.disable());
+
+        http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
         return http.build();
     }
 
@@ -141,20 +138,14 @@ public class SecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        List<String> allowedOrigins = new ArrayList<>(securityProperties.getCorsAllowedOriginsList());
-        allowedOrigins.add(baseUrl);
-        configuration.setAllowedOrigins(allowedOrigins);
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList(
-                "Content-Type",
-                "Authorization",
-                "X-Api-Key",
-                "X-Node-Identity-Password",
-                "X-Peer-Node-Identity"));
+        configuration.setAllowedOriginPatterns(List.of("*"));
+        configuration.setAllowedMethods(List.of("*"));
+        configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/**", configuration);
+        source.registerCorsConfiguration("/**", configuration);
         return source;
     }
 }

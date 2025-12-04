@@ -133,15 +133,8 @@ Create a file named `.env`. You **must** configure the variables marked as requi
 # Spring profile
 SPRING_PROFILES_ACTIVE="prod"
 
-# Admin URL & Explorer URL
-LISTEN_URL="http://localhost"
+# Admin PORT & Explorer PORT
 LISTEN_PORT=8080
-
-# SSL
-SSL_ENABLED=false
-SSL_KEY_STORE=
-SSL_KEY_STORE_PASSWORD=
-SSL_FORCE_REDIRECT_TO_HTTPS=false
 
 # Node
 NODE_IDENTITY_FILE="./node_data/.node_identity"
@@ -152,7 +145,7 @@ PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
 NETWORK="MAINNET"
 BENEFICIARY_ADDRESS="0x0000000000000000000000000000000000000000"
 
-# P2P
+# P2P (use the public IP address!)
 P2P_HOST=
 P2P_PORT=9000
 
@@ -177,6 +170,7 @@ POSTGRESQL_USERNAME="postgres"
 POSTGRESQL_PASSWORD="postgres"
 
 # Security
+# openssl rand -base64 32
 SECURITY_HMAC_SECRET=""
 SECURITY_AES_GCM_SECRET=""
 SECURITY_CORS_ALLOWED_ORIGINS="http://localhost"
@@ -190,6 +184,33 @@ LOGGING_DIR="./node_logs"
 LOGGING_FILE="goldenera.log"
 LOGGING_LEVEL_ROOT=INFO
 LOGGING_LEVEL_GLOBAL_GOLDENERA=INFO
+
+# Throttling (api & p2p rate limiting)
+
+# GLOBAL SAFETY NET (Per IP) - Applied to EVERYTHING
+# Allows 500 requests per second. Just to stop DDoS scripts.
+THROTTLING_GLOBAL_CAPACITY=500
+THROTTLING_GLOBAL_REFILL_TOKENS=500
+
+# PUBLIC CORE (Per IP) - Unauthenticated access to Core
+# Strict: 100 tokens capacity, refills 20 per second.
+THROTTLING_PUBLIC_CORE_CAPACITY=100
+THROTTLING_PUBLIC_CORE_REFILL_TOKENS=20
+
+# API KEY: DEFAULT / MEGA LOOSE (Per Key) - For everything else
+# Mega Loose: 5000 tokens capacity, refills 2000 per second.
+THROTTLING_API_KEY_DEFAULT_CAPACITY=5000
+THROTTLING_API_KEY_DEFAULT_REFILL_TOKENS=2000
+
+# API KEY: EXPLORER (Per Key) - Heavy queries
+# Reasonable: 500 tokens capacity, refills 100 per second.
+THROTTLING_API_KEY_EXPLORER_CAPACITY=500
+THROTTLING_API_KEY_EXPLORER_REFILL_TOKENS=100
+
+# P2P (Per Peer) - Protection against flood
+# High throughput: 20000 capacity, refills 10000 per second (supports ~5000 TPS + overhead)
+THROTTLING_P2P_CAPACITY=20000
+THROTTLING_P2P_REFILL_TOKENS=10000
 ```
 
 ### 3. Critical Configuration Guide
@@ -198,7 +219,6 @@ Before running the node, you must adjust specific `.env` variables to match your
 
 | Variable | Description & Requirement |
 | :--- | :--- |
-| **`LISTEN_URL`** | **Set this to your public domain.**<br>Do not use `localhost` if you are running a public node. Example: `https://my-goldenera-node.com`. This tells the app its public address. |
 | **`LISTEN_PORT`** | The port for the Explorer/Admin API (exposed via Docker). Default is `8080`. |
 | **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |
 | **`P2P_HOST`** | **Must be your Public IP Address.**<br>Do not use a domain name here. This is used for peer discovery. |

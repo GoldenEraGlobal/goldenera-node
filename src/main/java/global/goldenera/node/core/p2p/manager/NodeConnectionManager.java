@@ -26,6 +26,7 @@ package global.goldenera.node.core.p2p.manager;
 import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_SCHEDULER;
 import static lombok.AccessLevel.PRIVATE;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
@@ -123,12 +124,21 @@ public class NodeConnectionManager {
 		Instant now = Instant.now();
 		Set<Address> connectedIdentities = new HashSet<>();
 		Set<String> connectedIps = new HashSet<>();
+		Set<String> ipsWithPendingHandshake = new HashSet<>();
 		Address myIdentity = identityService.getNodeIdentityAddress();
 
 		// First pass: Collect info and disconnect self/duplicates
 		for (RemotePeer p : peerRegistry.getAll()) {
 			String rawAddr = p.getChannel().remoteAddress().toString();
-			connectedIps.add(rawAddr.replace("/", ""));
+			if (p.getChannel().remoteAddress() instanceof InetSocketAddress) {
+				InetSocketAddress addr = (InetSocketAddress) p.getChannel().remoteAddress();
+				connectedIps.add(addr.getAddress().getHostAddress() + ":" + addr.getPort());
+				if (p.getIdentity() == null) {
+					ipsWithPendingHandshake.add(addr.getAddress().getHostAddress());
+				}
+			} else {
+				connectedIps.add(rawAddr.replace("/", ""));
+			}
 
 			if (p.getIdentity() != null) {
 				// 1. Check for Self-Connection
@@ -229,7 +239,7 @@ public class NodeConnectionManager {
 					.collect(Collectors.toList());
 
 			for (DirectoryService.P2PClient candidate : selected) {
-				if (isAlreadyConnected(candidate, connectedIps)) {
+				if (isAlreadyConnected(candidate, connectedIps, ipsWithPendingHandshake)) {
 					continue;
 				}
 				try {
@@ -241,8 +251,22 @@ public class NodeConnectionManager {
 		}
 	}
 
-	private boolean isAlreadyConnected(DirectoryService.P2PClient candidate, Set<String> connectedNettyAddresses) {
-		String cleanCandidate = candidate.getP2pListenHost().trim() + ":" + candidate.getP2pListenPort();
-		return connectedNettyAddresses.contains(cleanCandidate);
+	private boolean isAlreadyConnected(DirectoryService.P2PClient candidate, Set<String> connectedNettyAddresses,
+			Set<String> ipsWithPendingHandshake) {
+		String candidateSocket = candidate.getP2pListenHost().trim() + ":" + candidate.getP2pListenPort();
+		String candidateHost = candidate.getP2pListenHost().trim();
+
+		// 1. Check exact socket match (IP:Port) - prevents outgoing duplicates
+		if (connectedNettyAddresses.contains(candidateSocket)) {
+			return true;
+		}
+
+		// 2. Check if any peer on this IP is pending handshake - prevents race
+		// conditions with incoming connections
+		if (ipsWithPendingHandshake.contains(candidateHost)) {
+			return true;
+		}
+
+		return false;
 	}
 }

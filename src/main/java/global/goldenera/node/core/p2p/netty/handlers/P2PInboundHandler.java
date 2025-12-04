@@ -26,6 +26,7 @@ package global.goldenera.node.core.p2p.netty.handlers;
 import static global.goldenera.node.core.config.CoreAsyncConfig.P2P_RECEIVE_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
@@ -70,6 +71,8 @@ import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.properties.GeneralProperties;
+import global.goldenera.node.shared.properties.ThrottlingProperties;
+import io.github.bucket4j.Bucket;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.netty.channel.ChannelHandlerContext;
@@ -99,13 +102,14 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	final PeerRegistry peerRegistry;
 	final PeerReputationService reputationService;
 	final P2PValidation p2pValidation;
+	final Bucket rateLimitBucket;
 	RemotePeer peer;
 
 	public P2PInboundHandler(ApplicationEventPublisher applicationEventPublisher, PeerRegistry peerRegistry,
 			PeerReputationService reputationService,
 			GeneralProperties generalProperties, IdentityService identityService,
 			ChainQuery chainQueryService, @Qualifier(P2P_RECEIVE_EXECUTOR) Executor p2pReceiveExecutor,
-			P2PValidation p2pValidation, MeterRegistry registry) {
+			P2PValidation p2pValidation, MeterRegistry registry, ThrottlingProperties throttlingProperties) {
 		this.applicationEventPublisher = applicationEventPublisher;
 		this.peerRegistry = peerRegistry;
 		this.reputationService = reputationService;
@@ -115,6 +119,11 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		this.p2pReceiveExecutor = p2pReceiveExecutor;
 		this.registry = registry;
 		this.p2pValidation = p2pValidation;
+
+		this.rateLimitBucket = Bucket.builder()
+				.addLimit(limit -> limit.capacity(throttlingProperties.getP2pCapacity())
+						.refillGreedy(throttlingProperties.getP2pRefillTokens(), Duration.ofSeconds(1)))
+				.build();
 	}
 
 	@Override
@@ -142,6 +151,15 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 
 	@Override
 	protected void channelRead0(ChannelHandlerContext ctx, P2PEnvelope envelope) {
+		if (!rateLimitBucket.tryConsume(1)) {
+			log.warn("Peer {} exceeded rate limit. Closing connection.", getPeerLogInfo());
+			if (peer.getIdentity() != null) {
+				reputationService.recordFailure(peer.getIdentity());
+			}
+			ctx.close();
+			return;
+		}
+
 		registry.counter("p2p.messages.in", "type", envelope.getMessageType().name()).increment();
 		try {
 			Timer.Sample sample = Timer.start(registry);

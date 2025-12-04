@@ -53,6 +53,7 @@ public class StoredBlock {
 	Instant receivedAt;
 	Address receivedFrom;
 	ConnectedSource connectedSource;
+	int size;
 
 	public Hash getHash() {
 		return block.getHash();

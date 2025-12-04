@@ -140,9 +140,7 @@ public class BlockStateTransitions {
 							.orElseThrow(() -> new GEFailedException("Broken link in reorg chain"));
 
 					while (cursor != null) {
-						StoredBlock mainChainBlock = chainQueryService.getStoredBlockByHeight(cursor.getHeight())
-								.orElse(null);
-						if (mainChainBlock != null && mainChainBlock.getHash().equals(cursor.getHash())) {
+						if (chainQueryService.getCanonicalStoredBlockByHash(cursor.getHash()).isPresent()) {
 							commonAncestor = cursor;
 							break;
 						}

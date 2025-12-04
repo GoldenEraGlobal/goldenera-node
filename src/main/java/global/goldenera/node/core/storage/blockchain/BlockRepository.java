@@ -61,6 +61,18 @@ public class BlockRepository {
 	RocksDBRepository repository;
 	RocksDbColumnFamilies cf;
 	Cache<Hash, StoredBlock> blockCache;
+	Cache<Long, Hash> heightCache;
+
+	private final ThreadLocal<List<Runnable>> postCommitActions = new ThreadLocal<>();
+
+	private void scheduleInvalidation(Runnable action) {
+		List<Runnable> actions = postCommitActions.get();
+		if (actions != null) {
+			actions.add(action);
+		} else {
+			action.run();
+		}
+	}
 
 	public Optional<StoredBlock> getStoredBlockByHash(Hash hash) {
 		StoredBlock cached = blockCache.getIfPresent(hash);
@@ -106,10 +118,38 @@ public class BlockRepository {
 				.orElseThrow(() -> new GENotFoundException("Block not found: " + hash));
 	}
 
+	public Optional<Block> getCanonicalBlockByHash(Hash hash) {
+		return getStoredBlockByHash(hash).flatMap(storedBlock -> {
+			Optional<Hash> canonicalHash = getBlockHashByHeight(storedBlock.getBlock().getHeight());
+			if (canonicalHash.isPresent() && canonicalHash.get().equals(hash)) {
+				return Optional.of(storedBlock.getBlock());
+			}
+			return Optional.empty();
+		});
+	}
+
+	public Optional<StoredBlock> getCanonicalStoredBlockByHash(Hash hash) {
+		return getStoredBlockByHash(hash).flatMap(storedBlock -> {
+			Optional<Hash> canonicalHash = getBlockHashByHeight(storedBlock.getBlock().getHeight());
+			if (canonicalHash.isPresent() && canonicalHash.get().equals(hash)) {
+				return Optional.of(storedBlock);
+			}
+			return Optional.empty();
+		});
+	}
+
 	public Optional<Hash> getBlockHashByHeight(long height) {
+		Hash cached = heightCache.getIfPresent(height);
+		if (cached != null)
+			return Optional.of(cached);
 		try {
 			byte[] hashBytes = repository.get(cf.hashByHeight(), Bytes.ofUnsignedLong(height).toArray());
-			return (hashBytes == null) ? Optional.empty() : Optional.of(Hash.wrap(hashBytes));
+			if (hashBytes == null)
+				return Optional.empty();
+
+			Hash hash = Hash.wrap(hashBytes);
+			heightCache.put(height, hash);
+			return Optional.of(hash);
 		} catch (RocksDBException e) {
 			throw new RuntimeException("Failed to read HashByHeight " + height, e);
 		}
@@ -162,16 +202,12 @@ public class BlockRepository {
 
 			Hash blockHash = Hash.wrap(blockHashBytes);
 
-			Optional<StoredBlock> storedBlockOpt = getStoredBlockByHash(blockHash);
+			Optional<StoredBlock> storedBlockOpt = getCanonicalStoredBlockByHash(blockHash);
 			if (storedBlockOpt.isEmpty())
 				return Optional.empty();
 
 			StoredBlock storedBlock = storedBlockOpt.get();
 			Block block = storedBlock.getBlock();
-			Optional<Hash> mainChainHashAtHeight = getBlockHashByHeight(block.getHeight());
-			if (mainChainHashAtHeight.isEmpty() || !mainChainHashAtHeight.get().equals(blockHash)) {
-				return Optional.empty();
-			}
 
 			List<Tx> txs = block.getTxs();
 			for (int i = 0; i < txs.size(); i++) {
@@ -223,7 +259,7 @@ public class BlockRepository {
 		// 1. Save StoredBlock
 		Bytes encoded = StoredBlockEncoder.INSTANCE.encode(storedBlock, StoredBlockVersion.V1);
 		batch.put(cf.blocks(), hashBytes, encoded.toArray());
-		blockCache.invalidate(block.getHash());
+		scheduleInvalidation(() -> blockCache.invalidate(block.getHash()));
 
 		// 2. Index Transactions (TxHash -> BlockHash)
 		for (Tx tx : block.getTxs()) {
@@ -236,6 +272,7 @@ public class BlockRepository {
 		byte[] hashBytes = block.getHash().toArray();
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, hashBytes);
 		batch.put(cf.hashByHeight(), Bytes.ofUnsignedLong(block.getHeight()).toArray(), hashBytes);
+		scheduleInvalidation(() -> heightCache.invalidate(block.getHeight()));
 	}
 
 	public void addBlockToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
@@ -247,18 +284,27 @@ public class BlockRepository {
 			throws RocksDBException {
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, newTip.getHash().toArray());
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(blockToDisconnect.getHeight()).toArray());
+		scheduleInvalidation(() -> heightCache.invalidate(blockToDisconnect.getHeight()));
 	}
 
 	public void forceDisconnectBlockIndex(WriteBatch batch, long height, Hash newTipHash) throws RocksDBException {
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, newTipHash.toArray());
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(height).toArray());
+		scheduleInvalidation(() -> heightCache.invalidate(height));
 	}
 
 	public void removeBlockIndexFromBatch(WriteBatch batch, long height) throws RocksDBException {
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(height).toArray());
+		scheduleInvalidation(() -> heightCache.invalidate(height));
 	}
 
 	public void executeAtomicBatch(RocksDBRepository.BatchOperation operation) {
-		repository.executeAtomicBatch(operation);
+		postCommitActions.set(new ArrayList<>());
+		try {
+			repository.executeAtomicBatch(operation);
+			postCommitActions.get().forEach(Runnable::run);
+		} finally {
+			postCommitActions.remove();
+		}
 	}
 }
