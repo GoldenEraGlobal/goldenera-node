@@ -237,16 +237,18 @@ public class StateProcessor {
 
 		state.setNonce(sender, nonceState.increaseNonce(block.getHeight(), block.getTimestamp()));
 
+		// Fee validation applies to ALL transactions
+		long txSize = tx.getSize();
+		Wei minBaseFee = params.getMinTxBaseFee();
+		Wei minByteFee = params.getMinTxByteFee();
+		Wei requiredFee = minBaseFee.add(minByteFee.multiply(txSize));
+
+		checkArgument(tx.getFee().compareTo(requiredFee) >= 0,
+				"Transaction fee is too low. Required: %s, Provided: %s (Size: %s B)",
+				requiredFee, tx.getFee(), txSize);
+
+		// Fee deduction only for user-paid transactions (TRANSFER)
 		if (isUserPaidFee(tx.getType())) {
-			long txSize = tx.getSize();
-			Wei minBaseFee = params.getMinTxBaseFee();
-			Wei minByteFee = params.getMinTxByteFee();
-			Wei requiredFee = minBaseFee.add(minByteFee.multiply(txSize));
-
-			checkArgument(tx.getFee().compareTo(requiredFee) >= 0,
-					"Transaction fee is too low. Required: %s, Provided: %s (Size: %s B)",
-					requiredFee, tx.getFee(), txSize);
-
 			AccountBalanceStateImpl bal = (AccountBalanceStateImpl) state.getBalance(sender, Address.NATIVE_TOKEN);
 			state.setBalance(sender, Address.NATIVE_TOKEN,
 					bal.debit(tx.getFee(), block.getHeight(), block.getTimestamp()));

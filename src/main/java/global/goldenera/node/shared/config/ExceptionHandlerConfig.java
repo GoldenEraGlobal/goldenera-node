@@ -145,6 +145,13 @@ public class ExceptionHandlerConfig {
     }
 
     @ResponseBody
+    @ExceptionHandler(IllegalStateException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    String handleIllegalStateException(@NonNull IllegalStateException ex) {
+        return wrapToJson(ex.getMessage());
+    }
+
+    @ResponseBody
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     String handleMethodArgumentTypeMismatchException(@NonNull MethodArgumentTypeMismatchException ex) {

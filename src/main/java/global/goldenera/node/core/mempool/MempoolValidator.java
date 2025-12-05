@@ -54,6 +54,7 @@ import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.consensus.state.AccountBalanceState;
 import global.goldenera.node.shared.consensus.state.AccountNonceState;
 import global.goldenera.node.shared.consensus.state.BipState;
+import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import global.goldenera.node.shared.consensus.state.TokenState;
 import global.goldenera.node.shared.enums.BipStatus;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -147,7 +148,20 @@ public class MempoolValidator {
 			return MempoolValidationResult.stale(currentChainNonce, "Nonce is too low.");
 		}
 
-		// 4b. TX-Type specific L4 logic
+		// 4b. Validate fee against network params (applies to ALL user txs)
+		NetworkParamsState params = worldstate.getParams();
+		long txSize = tx.getSize();
+		Wei minBaseFee = params.getMinTxBaseFee();
+		Wei minByteFee = params.getMinTxByteFee();
+		Wei requiredFee = minBaseFee.add(minByteFee.multiply(txSize));
+
+		if (tx.getFee().compareTo(requiredFee) < 0) {
+			return MempoolValidationResult.invalid(
+					String.format("Fee too low. Required: %s, Provided: %s (Size: %d B)",
+							requiredFee, tx.getFee(), txSize));
+		}
+
+		// 4c. TX-Type specific L4 logic
 		switch (tx.getType()) {
 			case TRANSFER:
 				// This is the only type with a user-paid fee
