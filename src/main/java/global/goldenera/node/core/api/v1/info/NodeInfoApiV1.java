@@ -28,6 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -41,6 +42,8 @@ import global.goldenera.node.Constants;
 import global.goldenera.node.core.api.v1.info.dtos.NodeInfoDtoV1;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.p2p.manager.PeerRegistry;
+import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -53,6 +56,7 @@ public class NodeInfoApiV1 {
 
 	ChainQuery chainQueryService;
 	IdentityService identityService;
+	PeerRegistry peerRegistry;
 
 	@GetMapping
 	public ResponseEntity<NodeInfoDtoV1> getNodeInfo() {
@@ -60,13 +64,41 @@ public class NodeInfoApiV1 {
 		Optional<StoredBlock> storedBlock = chainQueryService.getLatestStoredBlock();
 		BlockHeader blockHeader = storedBlock.map(StoredBlock::getBlock).map(Block::getHeader).orElse(null);
 		BigInteger cumulativeDifficulty = storedBlock.map(StoredBlock::getCumulativeDifficulty).orElse(null);
+		long localHeight = blockHeader != null ? blockHeader.getHeight() : 0L;
+
+		// Sync status
+		int connectedPeers = peerRegistry.count();
+		OptionalLong networkHeightOpt = peerRegistry.getAll().stream()
+				.filter(p -> p.getIdentity() != null)
+				.mapToLong(RemotePeer::getHeadHeight)
+				.max();
+
+		boolean synced;
+		Long networkHeight = null;
+		Long blocksBehind = null;
+		Double syncProgress = null;
+
+		if (networkHeightOpt.isPresent()) {
+			networkHeight = networkHeightOpt.getAsLong();
+			blocksBehind = Math.max(0, networkHeight - localHeight);
+			synced = blocksBehind <= 2;
+			syncProgress = networkHeight == 0 ? 100.0
+					: Math.round((double) localHeight / networkHeight * 10000.0) / 100.0;
+		} else {
+			synced = true; // No peers = assume synced (solo node)
+		}
 
 		return ResponseEntity.ok(NodeInfoDtoV1.builder()
 				.version(Constants.NODE_VERSION)
 				.identity(identity)
-				.blockHeader(blockHeader)
 				.timestamp(Instant.now())
+				.blockHeader(blockHeader)
 				.cumulativeDifficulty(cumulativeDifficulty)
+				.synced(synced)
+				.networkHeight(networkHeight)
+				.blocksBehind(blocksBehind)
+				.syncProgress(syncProgress)
+				.connectedPeers(connectedPeers)
 				.build());
 	}
 }

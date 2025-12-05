@@ -563,6 +563,98 @@ public class MempoolStore {
 		return allTxsByHash.size();
 	}
 
+	/**
+	 * Returns fee statistics from the current mempool.
+	 * Used for calculating recommended transaction fees.
+	 *
+	 * @return FeeStatistics record with median and fast (80th percentile) fee per
+	 *         byte.
+	 */
+	public FeeStatistics getFeeStatistics() {
+		// Get all executable transactions sorted by fee (highest first)
+		List<MempoolEntry> sortedTxs = new ArrayList<>(executableTxsByFee);
+
+		if (sortedTxs.isEmpty()) {
+			// Empty mempool - return zero statistics
+			return new FeeStatistics(0.0, 0.0, 0);
+		}
+
+		// Calculate fee per byte for each transaction
+		List<Double> feesPerByte = sortedTxs.stream()
+				.map(MempoolStore::calculateFeePerByte)
+				.filter(fee -> fee > 0)
+				.sorted(Comparator.reverseOrder()) // Highest first
+				.toList();
+
+		if (feesPerByte.isEmpty()) {
+			return new FeeStatistics(0.0, 0.0, sortedTxs.size());
+		}
+
+		int size = feesPerByte.size();
+
+		// Median (50th percentile)
+		double medianFeePerByte;
+		int midIndex = size / 2;
+		if (size % 2 == 0) {
+			medianFeePerByte = (feesPerByte.get(midIndex - 1) + feesPerByte.get(midIndex)) / 2.0;
+		} else {
+			medianFeePerByte = feesPerByte.get(midIndex);
+		}
+
+		// Fast fee (20th percentile from top = 80th percentile overall)
+		// This means 20% of transactions have higher fees
+		int fastIndex = (int) Math.ceil(size * 0.2) - 1;
+		if (fastIndex < 0)
+			fastIndex = 0;
+		double fastFeePerByte = feesPerByte.get(fastIndex);
+
+		return new FeeStatistics(medianFeePerByte, fastFeePerByte, size);
+	}
+
+	/**
+	 * Record holding fee statistics from mempool.
+	 */
+	public record FeeStatistics(
+			double medianFeePerByte,
+			double fastFeePerByte,
+			int txCount) {
+	}
+
+	/**
+	 * Returns all pending transactions for a specific sender address.
+	 */
+	public List<MempoolEntry> getTxsBySender(Address sender) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			return Collections.emptyList();
+		}
+		pool.lock.lock();
+		try {
+			List<MempoolEntry> result = new ArrayList<>();
+			result.addAll(pool.getExecutableTxs().values());
+			result.addAll(pool.getFutureTxs().values());
+			return result;
+		} finally {
+			pool.lock.unlock();
+		}
+	}
+
+	/**
+	 * Returns the count of pending transactions for a specific sender address.
+	 */
+	public int getPendingTxCount(Address sender) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			return 0;
+		}
+		pool.lock.lock();
+		try {
+			return pool.getExecutableTxs().size() + pool.getFutureTxs().size();
+		} finally {
+			pool.lock.unlock();
+		}
+	}
+
 	public boolean isFull() {
 		return allTxsByHash.size() >= mempoolProperties.getMaxSize();
 	}

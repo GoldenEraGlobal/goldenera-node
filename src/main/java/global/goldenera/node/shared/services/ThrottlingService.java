@@ -88,6 +88,10 @@ public class ThrottlingService {
         ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/tx/by-hash/.*/block-height.*"), 3);
         ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/tx/by-hash/.*"), 3);
 
+        // ============= ACCOUNT ENDPOINTS =============
+        // Account summary - trie lookup + mempool check
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/account/.*/summary.*"), 3);
+
         // ============= WORLDSTATE ENDPOINTS (in-memory cache) =============
         // BIP state - might be complex
         ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/bip-state/.*"), 3);
@@ -105,8 +109,16 @@ public class ThrottlingService {
         // ============= MEMPOOL ENDPOINTS =============
         // Submit TX - crypto validation required
         ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/submit.*"), 10);
-        // Inventory check
+        // Inventory check - scans mempool
         ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/inventory.*"), 5);
+        // Pending TXs by address - mempool lookup
+        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/pending-txs/.*"), 3);
+        // Recommended fees - mempool statistics
+        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/recommended-fees.*"), 2);
+        // TX by hash - simple lookup
+        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/by-hash/.*"), 2);
+        // Size - very cheap counter
+        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/size.*"), 1);
 
         // Default cost is 1 (for any unmatched endpoints)
     }

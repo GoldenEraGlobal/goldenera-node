@@ -28,6 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -38,10 +39,13 @@ import org.springframework.web.bind.annotation.RestController;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.api.v1.blockchain.dtos.AccountSummaryDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.mempool.MempoolStore;
+import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.consensus.state.AccountBalanceState;
@@ -68,6 +72,7 @@ public class BlockchainApiV1 {
     ChainQuery chainQuery;
     ChainHeadStateCache chainHeadStateCache;
     EntityIndexRepository entityIndexRepository;
+    MempoolStore mempoolStore;
 
     BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
 
@@ -238,4 +243,38 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(entityIndexRepository.getAllAuthoritiesWithAddresses());
     }
 
+    // ========================
+    // Account Summary endpoint (wallet-friendly)
+    // ========================
+
+    @GetMapping("account/{address}/summary")
+    public ResponseEntity<AccountSummaryDtoV1> getAccountSummary(
+            @PathVariable Address address,
+            @RequestParam(required = false) Address tokenAddress) {
+        WorldState state = chainHeadStateCache.getHeadState();
+
+        AccountBalanceState balanceState = state.getBalance(address, Address.NATIVE_TOKEN);
+        AccountNonceState nonceState = state.getNonce(address);
+
+        Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
+        long nonce = nonceState.exists() ? nonceState.getNonce() : -1L;
+        int pendingTxCount = mempoolStore.getPendingTxCount(address);
+
+        AccountSummaryDtoV1.AccountSummaryDtoV1Builder builder = AccountSummaryDtoV1.builder()
+                .address(address)
+                .nativeBalance(nativeBalance)
+                .nonce(nonce)
+                .nextNonce(nonce + 1)
+                .pendingTxCount(pendingTxCount);
+
+        // Optional token balance lookup
+        if (tokenAddress != null) {
+            AccountBalanceState tokenBalanceState = state.getBalance(address, tokenAddress);
+            Wei tokenBalance = tokenBalanceState.exists() ? tokenBalanceState.getBalance() : Wei.ZERO;
+            builder.tokenAddress(tokenAddress)
+                    .tokenBalance(tokenBalance);
+        }
+
+        return ResponseEntity.ok(builder.build());
+    }
 }

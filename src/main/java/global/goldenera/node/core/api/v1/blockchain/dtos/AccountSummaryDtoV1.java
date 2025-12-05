@@ -21,37 +21,64 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.api.v1.info.dtos;
+package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.math.BigInteger;
-import java.time.Instant;
+import org.apache.tuweni.units.ethereum.Wei;
 
-import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Value;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
-@Value
+/**
+ * DTO containing summary information about an account.
+ * Combines balance, nonce, and pending transaction count in a single response.
+ */
+@Data
 @Builder
+@AllArgsConstructor
+@NoArgsConstructor
 @FieldDefaults(level = PRIVATE)
-public class NodeInfoDtoV1 {
+public class AccountSummaryDtoV1 {
 
-	// Node identity
-	String version;
-	Address identity;
-	Instant timestamp;
+    /**
+     * The account address.
+     */
+    Address address;
 
-	// Chain state
-	BlockHeader blockHeader;
-	BigInteger cumulativeDifficulty;
+    /**
+     * Native token balance.
+     */
+    Wei nativeBalance;
 
-	// Sync status
-	boolean synced;
-	Long networkHeight;
-	Long blocksBehind;
-	Double syncProgress;
-	int connectedPeers;
+    /**
+     * Current confirmed nonce (last used nonce).
+     */
+    long nonce;
+
+    /**
+     * Next nonce to use for new transaction.
+     */
+    long nextNonce;
+
+    /**
+     * Number of pending transactions in mempool for this address.
+     */
+    int pendingTxCount;
+
+    /**
+     * Optional: Address of requested token (if tokenAddress query param was
+     * provided).
+     */
+    Address tokenAddress;
+
+    /**
+     * Optional: Balance of the requested token (if tokenAddress query param was
+     * provided).
+     */
+    Wei tokenBalance;
 }
