@@ -100,9 +100,10 @@ public class MempoolValidator {
 			Tx tx = entry.getTx();
 
 			// 2. Anti-Spam: Check for minimum fee (applies to ALL tx types)
-			if (tx.getFee().compareTo(Wei.valueOf(mempoolProperties.getMinAcceptableFeeWei())) < 0) {
+			Wei minFee = Wei.valueOf(mempoolProperties.getMinAcceptableFeeWei());
+			if (tx.getFee().compareTo(minFee) < 0) {
 				return MempoolValidationResult.invalid("Fee too low. Must be at least "
-						+ mempoolProperties.getMinAcceptableFeeWei() + " Wei.");
+						+ minFee.toBigInteger().toString() + " Wei.");
 			}
 
 			Block chainTip = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
@@ -158,7 +159,7 @@ public class MempoolValidator {
 		if (tx.getFee().compareTo(requiredFee) < 0) {
 			return MempoolValidationResult.invalid(
 					String.format("Fee too low. Required: %s, Provided: %s (Size: %d B)",
-							requiredFee, tx.getFee(), txSize));
+							requiredFee.toBigInteger().toString(), tx.getFee().toBigInteger().toString(), txSize));
 		}
 
 		// 4c. TX-Type specific L4 logic
