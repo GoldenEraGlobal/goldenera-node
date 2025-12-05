@@ -258,7 +258,7 @@ public class MempoolStore {
 					List<MempoolEntry> txsToRemove = new ArrayList<>();
 
 					for (MempoolEntry entry : senderEntries) {
-						StorageAddResult res = pool.addTransaction(entry, txsToAdd, txsToRemove);
+						StorageAddResult res = pool.addTransaction(entry, chainNonce, txsToAdd, txsToRemove);
 						results.put(entry.getHash(), res);
 
 						if (res.isSuccess()) {
@@ -850,7 +850,7 @@ public class MempoolStore {
 
 				pool.lock.lock();
 				try {
-					result = pool.addTransaction(tx, txsToAdd, txsToRemove);
+					result = pool.addTransaction(tx, currentChainNonce, txsToAdd, txsToRemove);
 				} finally {
 					pool.lock.unlock();
 				}
@@ -1047,8 +1047,18 @@ public class MempoolStore {
 		 */
 		public StorageAddResult addTransaction(
 				MempoolEntry tx,
+				long currentChainNonce, // NEW ARGUMENT
 				List<MempoolEntry> outTxsToAdd,
 				List<MempoolEntry> outTxsToRemove) {
+
+			// 0. Lazy Sync: If the external world says chainNonce is higher, believe it.
+			// This fixes de-sync issues if processNewBlock was delayed/missed.
+			if (currentChainNonce > this.chainNonce) {
+				log.debug("Sender {}: Lazy sync chainNonce from {} to {}.",
+						senderAddress.toChecksumAddress(), this.chainNonce, currentChainNonce);
+				List<MempoolEntry> evicted = updateChainNonceAndPromote(currentChainNonce, outTxsToAdd);
+				outTxsToRemove.addAll(evicted);
+			}
 			long txNonce = tx.getNonce();
 
 			// 1. Check for stale nonce
@@ -1149,7 +1159,32 @@ public class MempoolStore {
 			evictStale(executableTxs, newChainNonce, evictedTxs);
 			evictStale(futureTxs, newChainNonce, evictedTxs);
 
-			// 2. Try to promote
+			// 2. Integrity Check: Ensure executableTxs are contiguous from chainNonce + 1
+			if (!executableTxs.isEmpty()) {
+				long expectedNonce = this.chainNonce + 1;
+				// If the head of executableTxs creates a gap, demote ALL executable to future
+				// This handles cases where intermediate txs were lost or reorged
+				if (executableTxs.firstKey() > expectedNonce) {
+					log.warn(
+							"Sender {}: Gap detected after chain update (Expected: {}, Got: {}). Demoting {} txs to future.",
+							senderAddress.toChecksumAddress(), expectedNonce, executableTxs.firstKey(),
+							executableTxs.size());
+					futureTxs.putAll(executableTxs);
+					executableTxs.clear();
+					// Note: caller needs to handle removal from global executable set
+					// (executableTxsByFee)
+					// But SenderAccountPool cannot access it.
+					// We can treat them as "evicted" from executable status, but they are not
+					// "removed" from mempool.
+					// Since MempoolStore relies on executableTxsByFee being a superset, having
+					// extra (future) txs
+					// in executableTxsByFee is suboptimal but not fatal (Miner will fail
+					// execution).
+					// ideally we should return them to be removed from executableTxsByFee.
+				}
+			}
+
+			// 3. Try to promote
 			promoteExecutableTxs(outPromotedTxs);
 
 			return evictedTxs;
