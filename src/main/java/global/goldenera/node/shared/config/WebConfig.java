@@ -29,6 +29,7 @@ import org.springframework.format.FormatterRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import global.goldenera.node.shared.converters.ReflectionEnumConverter;
+import global.goldenera.node.shared.exceptions.GEValidationException;
 
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
@@ -59,7 +60,9 @@ public class WebConfig implements WebMvcConfigurer {
                 try {
                     return adapter.getFromString().apply(source);
                 } catch (Exception e) {
-                    return null;
+                    throw new GEValidationException(
+                            String.format("Invalid %s value: '%s'",
+                                    adapter.getType().getSimpleName(), source));
                 }
             }
         });
