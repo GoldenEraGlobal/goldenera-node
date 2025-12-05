@@ -25,6 +25,8 @@ package global.goldenera.node.core.blockchain.validation;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import java.math.BigInteger;
+
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Service;
 
@@ -107,10 +109,14 @@ public class TxValidator {
 					validateTokenDecimals(p.getNumberOfDecimals());
 					ValidatorUtil.Url.url(p.getWebsiteUrl());
 					ValidatorUtil.Url.url(p.getLogoUrl());
+					validateMaxSupply(p.getMaxSupply());
 				}
 				break;
 			case BIP_TOKEN_UPDATE:
 				if (tx.getPayload() instanceof TxBipTokenUpdatePayload p) {
+					if (p.getTokenAddress() == null) {
+						throw new GEValidationException("Token address cannot be null for update");
+					}
 					// null values during update mean the old value is kept
 					if (p.getName() != null) {
 						validateTokenName(p.getName());
@@ -124,6 +130,9 @@ public class TxValidator {
 				break;
 			case BIP_TOKEN_MINT:
 				if (tx.getPayload() instanceof TxBipTokenMintPayload p) {
+					if (p.getTokenAddress() == null) {
+						throw new GEValidationException("Token address cannot be null for mint");
+					}
 					validateAmount(p.getAmount());
 					if (p.getRecipient() == null) {
 						throw new GEValidationException("Mint recipient cannot be null");
@@ -132,7 +141,13 @@ public class TxValidator {
 				break;
 			case BIP_TOKEN_BURN:
 				if (tx.getPayload() instanceof TxBipTokenBurnPayload p) {
+					if (p.getTokenAddress() == null) {
+						throw new GEValidationException("Token address cannot be null for burn");
+					}
 					validateAmount(p.getAmount());
+					if (p.getSender() == null) {
+						throw new GEValidationException("Burn target (sender) cannot be null");
+					}
 				}
 				break;
 			case BIP_AUTHORITY_ADD:
@@ -166,6 +181,10 @@ public class TxValidator {
 				if (tx.getPayload() instanceof TxBipNetworkParamsSetPayload p) {
 					validateBlockReward(p.getBlockReward());
 					validateMiningTargetTime(p.getTargetMiningTimeMs());
+					validateMinTxFee(p.getMinTxBaseFee(), "minTxBaseFee");
+					validateMinTxFee(p.getMinTxByteFee(), "minTxByteFee");
+					validateMinDifficulty(p.getMinDifficulty());
+					validateAsertHalfLifeBlocks(p.getAsertHalfLifeBlocks());
 				}
 				break;
 			default:
@@ -237,6 +256,30 @@ public class TxValidator {
 	private void validateMiningTargetTime(Long miningTargetTime) {
 		if (miningTargetTime != null && miningTargetTime < 5000) { // Min 5 seconds
 			throw new GEValidationException("Mining target time too low.");
+		}
+	}
+
+	private void validateMinTxFee(Wei fee, String fieldName) {
+		if (fee != null && fee.compareTo(Wei.ZERO) < 0) {
+			throw new GEValidationException(fieldName + " must be non-negative");
+		}
+	}
+
+	private void validateMinDifficulty(BigInteger minDifficulty) {
+		if (minDifficulty != null && minDifficulty.compareTo(BigInteger.ZERO) < 0) {
+			throw new GEValidationException("minDifficulty must be non-negative");
+		}
+	}
+
+	private void validateAsertHalfLifeBlocks(Long halfLife) {
+		if (halfLife != null && halfLife < 1) {
+			throw new GEValidationException("asertHalfLifeBlocks must be at least 1");
+		}
+	}
+
+	private void validateMaxSupply(BigInteger maxSupply) {
+		if (maxSupply != null && maxSupply.compareTo(BigInteger.ZERO) <= 0) {
+			throw new GEValidationException("maxSupply must be greater than zero if specified");
 		}
 	}
 
