@@ -89,7 +89,7 @@ public class BlockSyncManagerService {
 	// Max 4 bodies per request due to MAX_FRAME_SIZE (32MB) and blocks up to 6MB
 	// each
 	static final int BODY_DOWNLOAD_BATCH_SIZE = 4;
-	static final long TIMEOUT_SECONDS = 10;
+	static final long TIMEOUT_SECONDS = 30;
 	static final long SYNC_POLL_DELAY_MS = 100;
 
 	final MeterRegistry registry;

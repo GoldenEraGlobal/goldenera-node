@@ -55,7 +55,7 @@ public class CacheConfig {
 	@Bean("trieNodeCache")
 	public Cache<Hash, Bytes> trieNodeCache() {
 		return Caffeine.newBuilder()
-				.maximumWeight(250 * 1024 * 1024) // 250MB
+				.maximumWeight(256 * 1024 * 1024) // 256MB
 				.weigher((Hash key, Bytes value) -> value.size())
 				.expireAfterAccess(1, TimeUnit.HOURS)
 				.build();
@@ -64,7 +64,7 @@ public class CacheConfig {
 	@Bean("blockCache")
 	public Cache<Hash, StoredBlock> blockCache() {
 		return Caffeine.newBuilder()
-				.maximumWeight(100 * 1024 * 1024) // 100MB
+				.maximumWeight(256 * 1024 * 1024) // 256MB
 				.weigher((Hash key, StoredBlock value) -> value.getSize())
 				.expireAfterWrite(1, TimeUnit.HOURS)
 				.build();
@@ -89,7 +89,7 @@ public class CacheConfig {
 	@Bean("txCache")
 	public Cache<Hash, Tx> txCache() {
 		return Caffeine.newBuilder()
-				.maximumWeight(100 * 1024 * 1024) // 100MB
+				.maximumWeight(128 * 1024 * 1024) // 128MB
 				.weigher((Hash key, Tx value) -> value.getSize())
 				.expireAfterWrite(1, TimeUnit.HOURS)
 				.build();

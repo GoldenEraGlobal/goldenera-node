@@ -507,13 +507,17 @@ public class BlockRepository {
 		// 1. Save StoredBlock
 		Bytes encoded = StoredBlockEncoder.INSTANCE.encode(storedBlock, StoredBlockVersion.V1);
 		batch.put(cf.blocks(), hashBytes, encoded.toArray());
-		scheduleInvalidation(() -> blockCache.invalidate(block.getHash()));
-		scheduleInvalidation(() -> headerCache.invalidate(block.getHash()));
+
+		// Put the block into cache immediately so it's available for serving
+		// (instead of just invalidating, which would require a DB read on next access)
+		StoredBlock cachedBlock = storedBlock.toBuilder().size(encoded.size()).build();
+		scheduleInvalidation(() -> blockCache.put(block.getHash(), cachedBlock));
+		scheduleInvalidation(() -> headerCache.put(block.getHash(), block.getHeader()));
 
 		// Update latestBlockCache if we are updating the current tip
 		StoredBlock currentLatest = latestBlockCache.get();
 		if (currentLatest != null && currentLatest.getHash().equals(block.getHash())) {
-			scheduleInvalidation(() -> latestBlockCache.set(storedBlock));
+			scheduleInvalidation(() -> latestBlockCache.set(cachedBlock));
 		}
 
 		// 2. Index Transactions (TxHash -> BlockHash)
@@ -530,7 +534,8 @@ public class BlockRepository {
 		byte[] hashBytes = block.getHash().toArray();
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, hashBytes);
 		batch.put(cf.hashByHeight(), Bytes.ofUnsignedLong(block.getHeight()).toArray(), hashBytes);
-		scheduleInvalidation(() -> heightCache.invalidate(block.getHeight()));
+		// Put height->hash mapping into cache immediately
+		scheduleInvalidation(() -> heightCache.put(block.getHeight(), block.getHash()));
 		scheduleInvalidation(() -> latestBlockCache.set(storedBlock));
 	}
 
