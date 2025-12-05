@@ -130,11 +130,9 @@ public class MiningBlockAssemblerService {
 		long endExec = System.currentTimeMillis();
 		log.debug("Executed {} tx(s) | Time: {}s", txs.size(), String.format("%.2f", (endExec - startExec) / 1000.0));
 
-		// IMPORTANT: Use ONLY valid transactions for hash calculations!
 		List<Tx> validTxs = result.getValidTxs();
-
 		Hash stateRootHash = worldState.calculateRootHash();
-		Hash txRootHash = TxRootUtil.txRootHash(validTxs); // Use valid txs only!
+		Hash txRootHash = TxRootUtil.txRootHash(validTxs);
 		BigInteger difficulty = difficultyService.calculateNextDifficulty(parentBlock.getHeader(), params);
 		BlockHeaderTemplate template = BlockHeaderTemplate.builder()
 				.version(blockVersion)
