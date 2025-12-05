@@ -627,8 +627,9 @@ public class BlockSyncManagerService {
 	@EventListener
 	public void onNewBlock(P2PBlockReceivedEvent event) {
 		blockValidationService.validateFullBlock(event.getBlock());
+		// TX already validated in validateFullBlock(), skip re-validation
 		BlockIngestionService.IngestionResult result = blockIngestionService.processBlock(
-				event.getBlock(), ConnectedSource.BROADCAST, event.getPeer().getIdentity(), Instant.now());
+				event.getBlock(), ConnectedSource.BROADCAST, event.getPeer().getIdentity(), Instant.now(), true);
 
 		if (result == BlockIngestionService.IngestionResult.GAP_DETECTED) {
 			log.debug("Gap detected from broadcast, triggering sync");

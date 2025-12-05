@@ -232,6 +232,10 @@ public class MempoolManager {
 		return mempoolStore.isFull();
 	}
 
+	public long getTransactionCount() {
+		return mempoolStore.getCount();
+	}
+
 	public void clear() {
 		mempoolStore.clear();
 	}

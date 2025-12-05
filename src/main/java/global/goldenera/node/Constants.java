@@ -51,6 +51,7 @@ public class Constants {
     public static final long MAX_HEADER_SIZE = 600; // 600 bytes
     public static final long MAX_TX_SIZE_IN_BYTES = 100_000; // 100KB
     public static final long MAX_BLOCK_SIZE_IN_BYTES = 5_000_000; // 5MB
+    public static final long MAX_TX_COUNT_PER_BLOCK = 100_000; // 100K transactions
     public static final long BIP_EXPIRATION_PERIOD_MS = 86400000; // 24 hours
     public static final long BIP_APPROVAL_THRESHOLD_BPS = 5100; // 51%
 

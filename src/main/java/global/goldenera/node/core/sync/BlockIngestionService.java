@@ -78,6 +78,16 @@ public class BlockIngestionService {
 	 * Entry point for processing a single block (from Miner or Broadcast).
 	 */
 	public IngestionResult processBlock(Block block, ConnectedSource source, Address receivedFrom, Instant receivedAt) {
+		return processBlock(block, source, receivedFrom, receivedAt, false);
+	}
+
+	/**
+	 * Entry point for processing a single block with optional TX validation skip.
+	 * Use skipTxValidation=true when TX were already validated in
+	 * validateFullBlock().
+	 */
+	public IngestionResult processBlock(Block block, ConnectedSource source, Address receivedFrom, Instant receivedAt,
+			boolean skipTxValidation) {
 		Timer.Sample sample = Timer.start(registry);
 		IngestionResult result = null;
 		masterChainLock.lock();
@@ -91,7 +101,8 @@ public class BlockIngestionService {
 			Optional<StoredBlock> parentOpt = chainQueryService
 					.getStoredBlockByHash(block.getHeader().getPreviousHash());
 			if (parentOpt.isPresent()) {
-				processBlockAndOrphans(block, parentOpt.get().getBlock(), source, receivedFrom, receivedAt);
+				processBlockAndOrphans(block, parentOpt.get().getBlock(), source, receivedFrom, receivedAt,
+						skipTxValidation);
 				result = IngestionResult.SUCCESS;
 				return result;
 			} else {
@@ -126,8 +137,8 @@ public class BlockIngestionService {
 	 * orphan buffer.
 	 */
 	private void processBlockAndOrphans(Block block, Block parent, ConnectedSource source,
-			Address receivedFrom, Instant receivedAt) throws Exception {
-		processSingleBlock(parent, block, source, receivedFrom, receivedAt);
+			Address receivedFrom, Instant receivedAt, boolean skipTxValidation) throws Exception {
+		processSingleBlock(parent, block, source, receivedFrom, receivedAt, skipTxValidation);
 		log.info("Block connected at height {} with hash {} ({} txs)", block.getHeight(),
 				block.getHash().toShortLogString(),
 				block.getTxs().size());
@@ -137,8 +148,9 @@ public class BlockIngestionService {
 			log.debug("Processing {} orphan(s) for block {}", orphans.size(), block.getHeight());
 			for (BlockOrphanBufferService.OrphanBlockWrapper orphan : orphans) {
 				try {
+					// Orphans were not pre-validated, so don't skip TX validation
 					processBlockAndOrphans(orphan.getBlock(), block, source,
-							orphan.getReceivedFrom(), orphan.getReceivedAt());
+							orphan.getReceivedFrom(), orphan.getReceivedAt(), false);
 				} catch (Exception e) {
 					log.warn("Failed to process connected orphan block {}: {}", orphan.getBlock().getHeight(),
 							e.getMessage());
@@ -148,14 +160,18 @@ public class BlockIngestionService {
 	}
 
 	private void processSingleBlock(Block parentBlock, Block childBlock,
-			ConnectedSource source, Address receivedFrom, Instant receivedAt)
+			ConnectedSource source, Address receivedFrom, Instant receivedAt, boolean skipTxValidation)
 			throws Exception {
 		WorldState worldState = worldStateFactory.createForValidation(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
 
 		blockValidationService.validateHeaderContext(childBlock.getHeader(), parentBlock.getHeader(),
 				params);
-		childBlock.getTxs().parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
+
+		// Skip TX validation if already done in validateFullBlock()
+		if (!skipTxValidation) {
+			childBlock.getTxs().parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
+		}
 
 		StateProcessor.ExecutionResult result = stateProcessor.executeTransactions(worldState,
 				new SimpleBlock(childBlock), childBlock.getTxs(), params);

@@ -154,13 +154,23 @@ public class BlockValidator {
 				validateHeader(block.getHeader());
 			}
 
-			// 2. Full Block Size Limit
+			// 2. Coinbase address must be set
+			checkArgument(block.getHeader().getCoinbase() != null,
+					"Block coinbase address cannot be null");
+
+			// 3. Full Block Size Limit
 			checkArgument(block.getSize() <= Constants.MAX_BLOCK_SIZE_IN_BYTES,
 					"Block size exceeded limit: %s", block.getSize());
 
-			// 3. Transaction Existence
+			// 4. Transaction Existence
 			List<Tx> txs = block.getTxs();
-			// 4. MERKLE ROOT CHECK
+
+			// 5. Transaction Count Limit
+			checkArgument(txs.size() <= Constants.MAX_TX_COUNT_PER_BLOCK,
+					"Transaction count exceeded limit: %s (max: %s)",
+					txs.size(), Constants.MAX_TX_COUNT_PER_BLOCK);
+
+			// 6. MERKLE ROOT CHECK
 			Hash calculatedRoot = TxRootUtil.txRootHash(txs);
 			if (!calculatedRoot.equals(block.getHeader().getTxRootHash())) {
 				throw new GEValidationException(String.format(
@@ -168,7 +178,7 @@ public class BlockValidator {
 						block.getHeader().getTxRootHash(), calculatedRoot));
 			}
 
-			// 5. Transaction Validation (Signatures, Formats)
+			// 7. Transaction Validation (Signatures, Formats)
 			txs.parallelStream().forEach(txValidator::validateStateless);
 		} catch (IllegalArgumentException e) {
 			throw new GEValidationException("Full Block Validation failed: " + e.getMessage(), e);

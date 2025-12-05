@@ -51,6 +51,7 @@ import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
+import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.shared.consensus.state.NetworkParamsState;
@@ -66,6 +67,11 @@ import lombok.extern.slf4j.Slf4j;
  * Responsible for assembling a "Block Template" (header + body)
  * by pulling transactions from the mempool, creating a coinbase,
  * and executing them to get the final stateRootHash.
+ *
+ * Dynamic block sizing:
+ * - Low mempool utilization (< 30%): Target 1/3 of max block size
+ * - Medium utilization (30-80%): Target 1/2 of max block size
+ * - High utilization (> 80%): Use full block size
  */
 @Service
 @AllArgsConstructor
@@ -75,6 +81,7 @@ public class MiningBlockAssemblerService {
 
 	WorldStateFactory worldStateFactory;
 	MempoolManager mempoolService;
+	MempoolProperties mempoolProperties;
 	GeneralProperties generalConfig;
 	StateProcessor stateProcessor;
 	DifficultyCalculator difficultyService;
@@ -93,7 +100,10 @@ public class MiningBlockAssemblerService {
 
 		WorldState worldState = worldStateFactory.createForMining(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
-		long maxBlockSize = Constants.MAX_BLOCK_SIZE_IN_BYTES;
+
+		// Dynamic block size based on mempool utilization
+		long maxBlockSize = calculateDynamicBlockSize();
+
 		long nextHeight = parentBlock.getHeight() + 1;
 		long now = Instant.now().toEpochMilli();
 		long timestamp = (now / 1000) * 1000;
@@ -102,7 +112,7 @@ public class MiningBlockAssemblerService {
 		long startSelect = System.currentTimeMillis();
 		List<Tx> txs = getExecutableTransactions(maxBlockSize - 512);
 		long endSelect = System.currentTimeMillis();
-		log.debug("Selected {} tx(s) | Time: {}s", txs.size(),
+		log.debug("Selected {} tx(s) for block size {} | Time: {}s", txs.size(), maxBlockSize,
 				String.format("%.2f", (endSelect - startSelect) / 1000.0));
 
 		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
@@ -174,6 +184,39 @@ public class MiningBlockAssemblerService {
 			}
 		}
 		return blockTxs;
+	}
+
+	/**
+	 * Calculates the dynamic block size based on mempool utilization.
+	 * This prevents mining unnecessarily large blocks when there's low demand.
+	 *
+	 * @return The target block size in bytes
+	 */
+	private long calculateDynamicBlockSize() {
+		long maxBlockSize = Constants.MAX_BLOCK_SIZE_IN_BYTES;
+		long currentMempoolSize = mempoolService.getTransactionCount();
+		long maxMempoolSize = mempoolProperties.getMaxSize();
+
+		if (maxMempoolSize <= 0) {
+			return maxBlockSize;
+		}
+
+		double utilizationRatio = (double) currentMempoolSize / maxMempoolSize;
+		double utilizationPercent = utilizationRatio * 100;
+
+		if (utilizationRatio >= 0.80) {
+			// High load (80%+): Use full block size
+			log.debug("Mempool high load ({}%), using full block size", String.format("%.1f", utilizationPercent));
+			return maxBlockSize;
+		} else if (utilizationRatio >= 0.30) {
+			// Medium load (30-80%): Use 1/2 block size
+			log.debug("Mempool medium load ({}%), using 1/2 block size", String.format("%.1f", utilizationPercent));
+			return maxBlockSize / 2;
+		} else {
+			// Low load (<30%): Use 1/3 block size
+			log.debug("Mempool low load ({}%), using 1/3 block size", String.format("%.1f", utilizationPercent));
+			return maxBlockSize / 3;
+		}
 	}
 
 	@Data
