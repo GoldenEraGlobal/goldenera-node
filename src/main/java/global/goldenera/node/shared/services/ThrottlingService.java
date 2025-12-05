@@ -64,19 +64,51 @@ public class ThrottlingService {
 
     private static final Map<Pattern, Integer> ENDPOINT_COSTS = new LinkedHashMap<>();
     static {
-        // Heavy IO / Range Scans
+        // ============= HEAVY IO / Range Scans (highest cost) =============
+        // Block header range - full DB scan
         ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block-header/by-range.*"), 20);
-        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block/by-.*txs.*"), 15);
-        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block/.*"), 10);
+        // Block TXs - loads full block body + pagination
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block/by-hash/.*/txs.*"), 15);
+        // All tokens/authorities - full index scan
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/tokens.*"), 15);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/authorities.*"), 15);
 
-        // Crypto / CPU intensive
-        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/submit.*"), 10);
+        // ============= MODERATE IO (DB lookups) =============
+        // Block header by hash/height - indexed lookup
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block-header/by-hash/.*"), 5);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block-header/by-height/.*"), 5);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block-header/latest.*"), 3);
+        // Block hash/height conversions
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block-hash/by-height/.*"), 3);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/block-height/by-hash/.*"), 3);
 
-        // Moderate
-        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/inventory.*"), 5);
+        // ============= TRANSACTION ENDPOINTS =============
+        // TX lookup by hash
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/tx/by-hash/.*/confirmations.*"), 5);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/tx/by-hash/.*/block-height.*"), 3);
         ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/tx/by-hash/.*"), 3);
 
-        // Default cost is 1
+        // ============= WORLDSTATE ENDPOINTS (in-memory cache) =============
+        // BIP state - might be complex
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/bip-state/.*"), 3);
+        // Account balance/nonce - simple trie lookup
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/account/.*"), 2);
+        // Token/Authority/Alias lookup
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/token/.*"), 2);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/authority/.*"), 2);
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/address-alias/.*"), 2);
+        // Network params - cached
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/worldstate/network-params.*"), 1);
+        // Latest height - very cheap
+        ENDPOINT_COSTS.put(Pattern.compile(".*/blockchain/latest-height.*"), 1);
+
+        // ============= MEMPOOL ENDPOINTS =============
+        // Submit TX - crypto validation required
+        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/submit.*"), 10);
+        // Inventory check
+        ENDPOINT_COSTS.put(Pattern.compile(".*/mempool/inventory.*"), 5);
+
+        // Default cost is 1 (for any unmatched endpoints)
     }
 
     /**
