@@ -38,6 +38,9 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePaylo
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
@@ -51,6 +54,7 @@ import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.consensus.state.AccountBalanceState;
 import global.goldenera.node.shared.consensus.state.AccountNonceState;
 import global.goldenera.node.shared.consensus.state.BipState;
+import global.goldenera.node.shared.consensus.state.TokenState;
 import global.goldenera.node.shared.enums.BipStatus;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -154,6 +158,10 @@ public class MempoolValidator {
 					totalNativeCost = totalNativeCost.add(tx.getAmount());
 				} else {
 					// Check custom token balance
+					TokenState tokenState = worldstate.getToken(tx.getTokenAddress());
+					if (!tokenState.exists()) {
+						return MempoolValidationResult.invalid("Token does not exist on-chain.");
+					}
 					AccountBalanceState tokenBalance = worldstate.getBalance(sender, tx.getTokenAddress());
 					if (tokenBalance.getBalance().compareTo(tx.getAmount()) < 0) {
 						return MempoolValidationResult.invalid("Insufficient token balance for transfer.");
@@ -161,6 +169,17 @@ public class MempoolValidator {
 				}
 				if (nativeBalance.getBalance().compareTo(totalNativeCost) < 0) {
 					return MempoolValidationResult.invalid("Insufficient native funds for fee and/or amount.");
+				}
+
+				// Early validation: Check if user is trying to burn a non-burnable token
+				if (tx.getRecipient().equals(Address.ZERO)) {
+					TokenState tokenState = worldstate.getToken(tx.getTokenAddress());
+					if (!tokenState.exists()) {
+						return MempoolValidationResult.invalid("Cannot burn token that does not exist.");
+					}
+					if (!tokenState.isUserBurnable()) {
+						return MempoolValidationResult.invalid("Token is not user-burnable.");
+					}
 				}
 				break;
 
@@ -237,6 +256,34 @@ public class MempoolValidator {
 				// Check mempool
 				if (mempoolStorage.hasAuthorityPendingParamChange(tx.getSender())) {
 					return MempoolValidationResult.invalid("ConsensusParamsSet is already pending in mempool.");
+				}
+			} else if (payload instanceof TxBipTokenMintPayload mintPayload) {
+				// Early validation: Check if minting would exceed maxSupply
+				TokenState tokenState = worldstate.getToken(mintPayload.getTokenAddress());
+				if (!tokenState.exists()) {
+					return MempoolValidationResult.invalid("Token does not exist on-chain.");
+				}
+				if (tokenState.getMaxSupply() != null) {
+					var newTotalSupply = tokenState.getTotalSupply().toBigInteger()
+							.add(mintPayload.getAmount().toBigInteger());
+					if (newTotalSupply.compareTo(tokenState.getMaxSupply()) > 0) {
+						return MempoolValidationResult.invalid(
+								"Minting would exceed maxSupply. Current: " + tokenState.getTotalSupply()
+										+ ", Minting: " + mintPayload.getAmount() + ", MaxSupply: "
+										+ tokenState.getMaxSupply());
+					}
+				}
+			} else if (payload instanceof TxBipTokenBurnPayload burnPayload) {
+				// Early validation: Check if token exists for burn
+				TokenState tokenState = worldstate.getToken(burnPayload.getTokenAddress());
+				if (!tokenState.exists()) {
+					return MempoolValidationResult.invalid("Token does not exist on-chain.");
+				}
+			} else if (payload instanceof TxBipTokenUpdatePayload updatePayload) {
+				// Early validation: Check if token exists for update
+				TokenState tokenState = worldstate.getToken(updatePayload.getTokenAddress());
+				if (!tokenState.exists()) {
+					return MempoolValidationResult.invalid("Token does not exist on-chain.");
 				}
 			}
 		}

@@ -25,6 +25,7 @@ package global.goldenera.node.core.processing.handlers;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import java.math.BigInteger;
 import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
@@ -163,6 +164,7 @@ public class BipVoteHandler implements TxHandler {
 				.websiteUrl(p.getWebsiteUrl())
 				.logoUrl(p.getLogoUrl())
 				.maxSupply(p.getMaxSupply())
+				.userBurnable(p.isUserBurnable())
 				.totalSupply(Wei.ZERO)
 				.originTxHash(bipHash)
 				.updatedByTxHash(bipHash)
@@ -183,6 +185,14 @@ public class BipVoteHandler implements TxHandler {
 	private void processTokenMint(WorldState state, TxBipTokenMintPayload p, SimpleBlock block, Hash bipHash) {
 		TokenStateImpl token = (TokenStateImpl) state.getToken(p.getTokenAddress());
 		checkArgument(token.exists(), "Token not found");
+
+		// Validate maxSupply constraint for custom tokens
+		if (token.getMaxSupply() != null) {
+			BigInteger newTotalSupply = token.getTotalSupply().toBigInteger().add(p.getAmount().toBigInteger());
+			checkArgument(newTotalSupply.compareTo(token.getMaxSupply()) <= 0,
+					"Minting would exceed maxSupply. Current: %s, Minting: %s, MaxSupply: %s",
+					token.getTotalSupply(), p.getAmount(), token.getMaxSupply());
+		}
 
 		state.setToken(p.getTokenAddress(),
 				token.mint(p.getAmount(), bipHash, block.getHeight(), block.getTimestamp()));

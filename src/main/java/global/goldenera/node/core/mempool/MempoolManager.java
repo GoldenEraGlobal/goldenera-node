@@ -23,14 +23,19 @@
  */
 package global.goldenera.node.core.mempool;
 
+import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_SCHEDULER;
 import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_TASK_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Iterator;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
@@ -41,8 +46,9 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
+import global.goldenera.node.core.properties.MempoolProperties;
 import io.micrometer.core.instrument.MeterRegistry;
-import lombok.AllArgsConstructor;
+import jakarta.annotation.PostConstruct;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -54,14 +60,42 @@ import lombok.extern.slf4j.Slf4j;
  * Reacts to blockchain events (connect/disconnect).
  */
 @Service
-@AllArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MempoolManager {
 
+	static final long MEMPOOL_PRUNE_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
+
 	MeterRegistry registry;
 	MempoolStore mempoolStore;
 	MempoolValidator mempoolValidator;
+	MempoolProperties mempoolProperties;
+	ThreadPoolTaskScheduler coreScheduler;
+
+	public MempoolManager(MeterRegistry registry, MempoolStore mempoolStore, MempoolValidator mempoolValidator,
+			MempoolProperties mempoolProperties, @Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
+		this.registry = registry;
+		this.mempoolStore = mempoolStore;
+		this.mempoolValidator = mempoolValidator;
+		this.mempoolProperties = mempoolProperties;
+		this.coreScheduler = coreScheduler;
+	}
+
+	@PostConstruct
+	public void init() {
+		coreScheduler.scheduleAtFixedRate(this::pruneExpired, Duration.ofMillis(MEMPOOL_PRUNE_INTERVAL_MS));
+		log.info("MempoolManager: Scheduled pruneExpired every {}ms (txExpireTime={}min)",
+				MEMPOOL_PRUNE_INTERVAL_MS, mempoolProperties.getTxExpireTimeInMinutes());
+	}
+
+	/**
+	 * Scheduled task to prune expired transactions from the mempool.
+	 */
+	private void pruneExpired() {
+		long expireTimeMs = mempoolProperties.getTxExpireTimeInMinutes() * 60 * 1000L;
+		Instant cutoffTime = Instant.now().minusMillis(expireTimeMs);
+		mempoolStore.pruneExpiredTransactions(cutoffTime);
+	}
 
 	public MempoolResult addTx(@NonNull Tx tx) {
 		return addTx(tx, null, MempoolTxAddEvent.AddReason.NEW, false);
