@@ -113,6 +113,9 @@ public class BlockStateTransitions {
 					.receivedFrom(receivedFrom)
 					.receivedAt(receivedAt)
 					.connectedSource(source)
+					.hash(block.getHash())
+					.transactionIndex(StoredBlock.computeTransactionIndex(block))
+					.blockSize(block.getSize())
 					.build();
 
 			boolean isNewHead = false;

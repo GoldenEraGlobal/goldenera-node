@@ -23,8 +23,11 @@
  */
 package global.goldenera.node.core.storage.blockchain.serialization.impl.encoding;
 
+import java.util.Map;
+
 import org.apache.tuweni.bytes.Bytes;
 
+import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.block.BlockEncoder;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockEncodingStrategy;
@@ -40,5 +43,19 @@ public class StoredBlockV1EncodingStrategy implements StoredBlockEncodingStrateg
 		out.writeLongScalar(storedBlock.getReceivedAt().toEpochMilli());
 		out.writeBytes(storedBlock.getReceivedFrom());
 		out.writeIntScalar(storedBlock.getConnectedSource().getCode());
+
+		out.writeIntScalar(storedBlock.getBlockSize());
+
+		out.writeBytes32(storedBlock.getHash());
+		Map<Hash, Integer> txIndex = storedBlock.getTransactionIndex();
+
+		out.startList();
+		if (txIndex != null && !txIndex.isEmpty()) {
+			for (Map.Entry<Hash, Integer> entry : txIndex.entrySet()) {
+				out.writeBytes32(entry.getKey());
+				out.writeIntScalar(entry.getValue());
+			}
+		}
+		out.endList();
 	}
 }

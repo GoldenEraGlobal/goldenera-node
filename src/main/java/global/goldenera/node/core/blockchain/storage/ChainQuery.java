@@ -120,6 +120,10 @@ public class ChainQuery {
         return blockRepository.getBlocksByHashes(hashes);
     }
 
+    public List<StoredBlock> getStoredBlocksByHashes(List<Hash> hashes) {
+        return blockRepository.getStoredBlocksByHashes(hashes);
+    }
+
     public Optional<BlockHeader> getBlockHeaderByHash(Hash hash) {
         return blockRepository.getBlockHeaderByHash(hash);
     }

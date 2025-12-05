@@ -25,10 +25,16 @@ package global.goldenera.node.core.storage.blockchain.domain;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import org.springframework.modulith.NamedInterface;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
@@ -53,11 +59,48 @@ public class StoredBlock {
 	Instant receivedAt;
 	Address receivedFrom;
 	ConnectedSource connectedSource;
-	int size;
+	int size; // Size of StoredBlock object in bytes
+	int blockSize; // Size of Block object in bytes
 	boolean isPartial;
 
+	// Optimized fields (persisted in DB to avoid recalculation)
+	Hash hash;
+	Map<Hash, Integer> transactionIndex;
+
 	public Hash getHash() {
-		return block.getHash();
+		return hash;
+	}
+
+	public Map<Hash, Integer> getTransactionIndex() {
+		return transactionIndex;
+	}
+
+	public Optional<Tx> getTransactionByHash(Hash txHash) {
+		if (isPartial || transactionIndex == null) {
+			return Optional.empty();
+		}
+
+		Integer idx = transactionIndex.get(txHash);
+		if (idx != null) {
+			List<Tx> txs = block.getTxs();
+			if (idx >= 0 && idx < txs.size()) {
+				return Optional.of(txs.get(idx));
+			}
+		}
+
+		return Optional.empty();
+	}
+
+	public static Map<Hash, Integer> computeTransactionIndex(Block block) {
+		if (block.getTxs() == null || block.getTxs().isEmpty()) {
+			return Collections.emptyMap();
+		}
+		Map<Hash, Integer> index = new HashMap<>(block.getTxs().size());
+		List<Tx> txs = block.getTxs();
+		for (int i = 0; i < txs.size(); i++) {
+			index.put(txs.get(i).getHash(), i);
+		}
+		return index;
 	}
 
 	public long getHeight() {
@@ -69,5 +112,9 @@ public class StoredBlock {
 			throw new IllegalStateException("Cannot get size of partial block");
 		}
 		return size;
+	}
+
+	public int getBlockSize() {
+		return blockSize;
 	}
 }

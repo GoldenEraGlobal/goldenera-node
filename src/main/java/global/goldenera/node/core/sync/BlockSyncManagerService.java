@@ -424,6 +424,9 @@ public class BlockSyncManagerService {
 							.receivedAt(block.getHeader().getTimestamp())
 							.receivedFrom(peer.getIdentity())
 							.connectedSource(ConnectedSource.REORG)
+							.hash(block.getHash())
+							.transactionIndex(StoredBlock.computeTransactionIndex(block))
+							.blockSize(block.getSize())
 							.build();
 
 					allDownloadedBlocks.add(storedBlock);

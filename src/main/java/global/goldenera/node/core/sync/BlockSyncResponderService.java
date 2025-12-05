@@ -35,13 +35,13 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesRequestedEvent;
 import global.goldenera.node.core.p2p.events.P2PHeadersRequestedEvent;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -108,15 +108,23 @@ public class BlockSyncResponderService {
 		long start = System.currentTimeMillis();
 		List<Hash> hashes = event.getHashes();
 
+		if (hashes.isEmpty()) {
+			return;
+		}
+
+		if (hashes.size() > 5) {
+			hashes = hashes.subList(0, 5); // Limit to 5 blocks
+		}
+
 		// Batch fetch all blocks at once (uses multiGet internally)
-		List<Block> blocks = chainQueryService.getBlocksByHashes(hashes);
+		List<StoredBlock> blocks = chainQueryService.getStoredBlocksByHashes(hashes);
 
 		// Extract transaction lists, maintaining order
 		List<List<Tx>> bodies = new ArrayList<>(hashes.size());
 		int blockIdx = 0;
 		for (Hash hash : hashes) {
 			if (blockIdx < blocks.size() && blocks.get(blockIdx).getHash().equals(hash)) {
-				bodies.add(blocks.get(blockIdx).getTxs());
+				bodies.add(blocks.get(blockIdx).getBlock().getTxs());
 				blockIdx++;
 			} else {
 				// Block not found, add empty list

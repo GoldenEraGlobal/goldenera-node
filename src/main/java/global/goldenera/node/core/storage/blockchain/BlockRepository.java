@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.rocksdb.RocksDBException;
@@ -125,15 +126,17 @@ public class BlockRepository {
 				.orElseThrow(() -> new GENotFoundException("Block not found: " + hash));
 	}
 
-	/**
-	 * Batch get multiple blocks by their hashes using multiGet.
-	 * Much more efficient than calling getBlockByHash() in a loop.
-	 */
 	public List<Block> getBlocksByHashes(List<Hash> hashes) {
+		return getStoredBlocksByHashes(hashes).stream()
+				.map(StoredBlock::getBlock)
+				.collect(java.util.stream.Collectors.toList());
+	}
+
+	public List<StoredBlock> getStoredBlocksByHashes(List<Hash> hashes) {
 		if (hashes.isEmpty())
 			return new ArrayList<>();
 
-		List<Block> blocks = new ArrayList<>(hashes.size());
+		List<StoredBlock> blocks = new ArrayList<>(hashes.size());
 		List<Integer> missingIndices = new ArrayList<>();
 		List<byte[]> missingKeys = new ArrayList<>();
 
@@ -142,7 +145,7 @@ public class BlockRepository {
 			Hash hash = hashes.get(i);
 			StoredBlock cached = blockCache.getIfPresent(hash);
 			if (cached != null) {
-				blocks.add(cached.getBlock());
+				blocks.add(cached);
 			} else {
 				blocks.add(null); // Placeholder
 				missingIndices.add(i);
@@ -154,18 +157,27 @@ public class BlockRepository {
 		if (!missingKeys.isEmpty()) {
 			try {
 				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
-				for (int j = 0; j < values.size(); j++) {
+
+				// Parallel decoding for performance
+				StoredBlock[] decodedBlocks = new StoredBlock[values.size()];
+				IntStream.range(0, values.size()).parallel().forEach(j -> {
 					byte[] data = values.get(j);
 					if (data != null) {
-						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
+						decodedBlocks[j] = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
+					}
+				});
+
+				for (int j = 0; j < values.size(); j++) {
+					StoredBlock storedBlock = decodedBlocks[j];
+					if (storedBlock != null) {
 						if (!storedBlock.isPartial()) {
 							blockCache.put(hashes.get(missingIndices.get(j)), storedBlock);
 						}
-						blocks.set(missingIndices.get(j), storedBlock.getBlock());
+						blocks.set(missingIndices.get(j), storedBlock);
 					}
 				}
 			} catch (RocksDBException e) {
-				log.error("MultiGet failed in getBlocksByHashes", e);
+				log.error("MultiGet failed in getStoredBlocksByHashes", e);
 			}
 		}
 
@@ -291,15 +303,13 @@ public class BlockRepository {
 				return Optional.empty();
 
 			StoredBlock storedBlock = storedBlockOpt.get();
-			Block block = storedBlock.getBlock();
 
-			List<Tx> txs = block.getTxs();
-			for (int i = 0; i < txs.size(); i++) {
-				Tx tx = txs.get(i);
-				if (tx.getHash().equals(txHash)) {
-					txCache.put(txHash, tx);
-					return Optional.of(tx);
-				}
+			// Optimized lookup using index
+			Optional<Tx> txOpt = storedBlock.getTransactionByHash(txHash);
+			if (txOpt.isPresent()) {
+				Tx tx = txOpt.get();
+				txCache.put(txHash, tx);
+				return Optional.of(tx);
 			}
 			return Optional.empty();
 		} catch (RocksDBException e) {
@@ -386,10 +396,19 @@ public class BlockRepository {
 		if (!missingKeys.isEmpty()) {
 			try {
 				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
-				for (int j = 0; j < values.size(); j++) {
+
+				// Parallel decoding for performance
+				StoredBlock[] decodedBlocks = new StoredBlock[values.size()];
+				java.util.stream.IntStream.range(0, values.size()).parallel().forEach(j -> {
 					byte[] data = values.get(j);
 					if (data != null) {
-						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
+						decodedBlocks[j] = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
+					}
+				});
+
+				for (int j = 0; j < values.size(); j++) {
+					StoredBlock storedBlock = decodedBlocks[j];
+					if (storedBlock != null) {
 						if (!storedBlock.isPartial()) {
 							blockCache.put(hashes.get(missingIndices.get(j)), storedBlock);
 						}
@@ -470,11 +489,20 @@ public class BlockRepository {
 		if (!missingKeys.isEmpty()) {
 			try {
 				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
-				for (int j = 0; j < values.size(); j++) {
+
+				// Parallel decoding for performance
+				BlockHeader[] decodedHeaders = new BlockHeader[values.size()];
+				IntStream.range(0, values.size()).parallel().forEach(j -> {
 					byte[] data = values.get(j);
 					if (data != null) {
 						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
-						BlockHeader header = storedBlock.getBlock().getHeader();
+						decodedHeaders[j] = storedBlock.getBlock().getHeader();
+					}
+				});
+
+				for (int j = 0; j < values.size(); j++) {
+					BlockHeader header = decodedHeaders[j];
+					if (header != null) {
 						headerCache.put(hashes.get(missingIndices.get(j)), header);
 						headers.set(missingIndices.get(j), header);
 					}

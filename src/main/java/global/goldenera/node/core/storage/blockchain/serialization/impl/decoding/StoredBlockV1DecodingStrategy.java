@@ -25,11 +25,14 @@ package global.goldenera.node.core.storage.blockchain.serialization.impl.decodin
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.apache.tuweni.bytes.Bytes;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.block.BlockDecoder;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
@@ -49,6 +52,18 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 		int connectedSourceCode = input.readIntScalar();
 		ConnectedSource connectedSource = ConnectedSource.fromCode(connectedSourceCode);
 
+		int blockSize = input.readIntScalar();
+
+		Hash hash = Hash.wrap(input.readBytes32());
+		int txIndexSize = input.enterList();
+		Map<Hash, Integer> transactionIndex = new HashMap<>(txIndexSize);
+		while (!input.isEndOfCurrentList()) {
+			Hash txHash = Hash.wrap(input.readBytes32());
+			int txIndex = input.readIntScalar();
+			transactionIndex.put(txHash, txIndex);
+		}
+		input.leaveList();
+
 		return StoredBlock.builder()
 				.block(block)
 				.cumulativeDifficulty(cumulativeDifficulty)
@@ -56,6 +71,9 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 				.receivedFrom(receivedFrom)
 				.connectedSource(connectedSource)
 				.isPartial(withoutBody)
+				.hash(hash)
+				.transactionIndex(transactionIndex)
+				.blockSize(blockSize)
 				.build();
 	}
 
