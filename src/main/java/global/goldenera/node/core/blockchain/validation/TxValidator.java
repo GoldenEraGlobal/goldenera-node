@@ -227,11 +227,20 @@ public class TxValidator {
 	// ------------------------------------------------------------------------------------------
 
 	private void validateTokenName(String name) {
-		if (name == null || !name.matches("[A-Z0-9_]{1,16}")) {
-			throw new GEValidationException("Invalid token name: " + name);
+		if (name == null || name.isEmpty()) {
+			throw new GEValidationException("Token name cannot be null or empty");
+		}
+		if (name.length() > 32) {
+			throw new GEValidationException("Token name too long (max 32 characters): " + name);
+		}
+		// Allow uppercase, lowercase letters, numbers, underscores, and single spaces
+		if (!name.matches("[A-Za-z0-9_]+([ ][A-Za-z0-9_]+)*")) {
+			throw new GEValidationException(
+					"Invalid token name: '" + name
+							+ "'. Only letters, numbers, underscores and single spaces allowed.");
 		}
 		if (name.startsWith("_") || name.endsWith("_")) {
-			throw new GEValidationException("Token name can not start or end with '_'.");
+			throw new GEValidationException("Token name cannot start or end with '_': " + name);
 		}
 	}
 
