@@ -23,11 +23,12 @@
  */
 package global.goldenera.node.shared.utils;
 
+import java.util.List;
+
 import global.goldenera.node.shared.exceptions.GEValidationException;
 
 public class PaginationUtil {
 	public static final int MAX_PAGE_SIZE = 100;
-	public static final int MAX_BLOCK_RANGE_LIMIT = 500;
 
 	public static void validatePageRequest(int pageNumber, int pageSize) {
 		if (pageNumber < 0) {
@@ -39,7 +40,7 @@ public class PaginationUtil {
 		}
 	}
 
-	public static void validateRangeRequest(long fromHeight, long toHeight) {
+	public static void validateRangeRequest(long fromHeight, long toHeight, long maxRangeLimit) {
 		if (fromHeight < 0L || toHeight < 0L) {
 			throw new GEValidationException("From height and to height must be greater than or equal to 0");
 		}
@@ -47,10 +48,23 @@ public class PaginationUtil {
 			throw new GEValidationException("From height must be less than to height");
 		}
 		long range = (toHeight - fromHeight) + 1;
-		if (range > MAX_BLOCK_RANGE_LIMIT) {
+		if (range > maxRangeLimit) {
 			throw new GEValidationException(
 					String.format("Requested range (%d) exceeds the maximum allowed limit (%d).",
-							range, MAX_BLOCK_RANGE_LIMIT));
+							range, maxRangeLimit));
 		}
+	}
+
+	public static <T> List<T> getListRange(List<T> data, Integer fromIndex, Integer toIndex) {
+		if (data.isEmpty()) {
+			return data;
+		}
+		int from = (fromIndex != null) ? Math.max(0, fromIndex) : 0;
+		int to = (toIndex != null) ? Math.min(toIndex, data.size() - 1) : data.size() - 1;
+
+		if (from > to || from >= data.size()) {
+			return List.of();
+		}
+		return data.subList(from, to + 1);
 	}
 }

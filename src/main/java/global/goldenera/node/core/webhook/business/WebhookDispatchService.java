@@ -287,6 +287,7 @@ public class WebhookDispatchService {
 		Map<String, Object> metadata = new HashMap<>();
 		metadata.put("numOfTxs", block.getTxs().size());
 		metadata.put("size", block.getSize());
+		metadata.put("hash", block.getHash());
 		Map<String, Object> payload = createPayload(WebhookEventType.NEW_BLOCK, block.getHeader(), metadata);
 
 		for (WebhookSubscription sub : newBlockSubscriptions) {
@@ -297,6 +298,8 @@ public class WebhookDispatchService {
 	public void processAddressActivityEvent(Block block, Tx tx, TxStatus status) {
 		Map<String, Object> metadata = new HashMap<>();
 		metadata.put("block", block != null ? Map.of("hash", block.getHash(), "height", block.getHeight()) : null);
+		metadata.put("size", tx.getSize());
+		metadata.put("hash", tx.getHash());
 		metadata.put("status", status.name());
 		Map<String, Object> payload = createPayload(WebhookEventType.ADDRESS_ACTIVITY, tx, metadata);
 

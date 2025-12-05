@@ -52,6 +52,8 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExBlockHeaderCoreService {
 
+    static final long MAX_BLOCK_HEADER_RANGE = 1000;
+
     ExBlockHeaderRepository exBlockHeaderRepository;
 
     @Transactional(readOnly = true)
@@ -149,7 +151,7 @@ public class ExBlockHeaderCoreService {
             long toHeight,
             Address coinbase,
             Integer minNumberOfTxs) {
-        PaginationUtil.validateRangeRequest(fromHeight, toHeight);
+        PaginationUtil.validateRangeRequest(fromHeight, toHeight, MAX_BLOCK_HEADER_RANGE);
 
         Specification<ExBlockHeader> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();

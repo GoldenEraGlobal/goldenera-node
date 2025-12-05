@@ -117,4 +117,11 @@ public class StoredBlock {
 	public int getBlockSize() {
 		return blockSize;
 	}
+
+	public int getTxCount() {
+		if (block.getTxs() == null) {
+			return transactionIndex.size();
+		}
+		return block.getTxs().size();
+	}
 }
