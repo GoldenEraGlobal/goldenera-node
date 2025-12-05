@@ -25,8 +25,6 @@ package global.goldenera.node.core.storage.blockchain.serialization.impl.decodin
 
 import java.math.BigInteger;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.Map;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -55,14 +53,33 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 		int blockSize = input.readIntScalar();
 
 		Hash hash = Hash.wrap(input.readBytes32());
-		int txIndexSize = input.enterList();
-		Map<Hash, Integer> transactionIndex = new HashMap<>(txIndexSize);
-		while (!input.isEndOfCurrentList()) {
-			Hash txHash = Hash.wrap(input.readBytes32());
-			int txIndex = input.readIntScalar();
-			transactionIndex.put(txHash, txIndex);
+
+		// Read transaction hashes array - use list size for exact allocation
+		int hashCount = input.enterList();
+		Hash[] hashes = new Hash[hashCount];
+		for (int i = 0; i < hashCount; i++) {
+			hashes[i] = Hash.wrap(input.readBytes32());
 		}
 		input.leaveList();
+
+		// Read transaction sizes array
+		int sizesCount = input.enterList();
+		int[] sizes = new int[sizesCount];
+		for (int i = 0; i < sizesCount; i++) {
+			sizes[i] = input.readIntScalar();
+		}
+		input.leaveList();
+
+		// Read transaction senders array
+		int sendersCount = input.enterList();
+		Address[] senders = new Address[sendersCount];
+		for (int i = 0; i < sendersCount; i++) {
+			senders[i] = Address.wrap(input.readBytes());
+		}
+		input.leaveList();
+
+		// Create TxIndex from stored data (derives hash maps internally)
+		StoredBlock.TxIndex txIndex = StoredBlock.TxIndex.fromStored(hashes, sizes, senders);
 
 		return StoredBlock.builder()
 				.block(block)
@@ -72,8 +89,8 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 				.connectedSource(connectedSource)
 				.isPartial(withoutBody)
 				.hash(hash)
-				.transactionIndex(transactionIndex)
 				.blockSize(blockSize)
+				.txIndex(txIndex)
 				.build();
 	}
 

@@ -481,7 +481,7 @@ public class BlockRepository {
 
 		// Put the block into cache immediately so it's available for serving
 		// (instead of just invalidating, which would require a DB read on next access)
-		StoredBlock cachedBlock = storedBlock.toBuilder().size(encoded.size()).build();
+		StoredBlock cachedBlock = storedBlock.toBuilder().encodedSize(encoded.size()).build();
 		scheduleInvalidation(() -> blockCache.put(storedBlock.getHash(), cachedBlock));
 		scheduleInvalidation(() -> headerCache.invalidate(storedBlock.getHash())); // Invalidate partial cache
 

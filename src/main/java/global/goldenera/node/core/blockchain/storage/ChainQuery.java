@@ -190,11 +190,24 @@ public class ChainQuery {
 
         return blockRepository.getTransactionBlockHash(txHash)
                 .flatMap(blockHash -> getCanonicalStoredBlockByHash(blockHash))
-                .flatMap(storedBlock -> {
-                    Optional<Tx> txOpt = storedBlock.getTransactionByHash(txHash);
-                    txOpt.ifPresent(tx -> blockRepository.cacheTransaction(txHash, tx));
-                    return txOpt;
+                .map(storedBlock -> {
+                    Tx tx = storedBlock.getTransactionByHash(txHash);
+                    if (tx != null) {
+                        blockRepository.cacheTransaction(txHash, tx);
+                    }
+                    return tx;
                 });
+    }
+
+    /**
+     * Gets transaction with its containing StoredBlock from canonical chain.
+     * Useful when you need access to pre-computed metadata from TxIndex.
+     * 
+     * @return StoredBlock containing the transaction, or empty if not found
+     */
+    public Optional<StoredBlock> getTransactionBlock(Hash txHash) {
+        return blockRepository.getTransactionBlockHash(txHash)
+                .flatMap(this::getCanonicalStoredBlockByHash);
     }
 
     /**

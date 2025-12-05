@@ -448,9 +448,7 @@ public class BlockSyncManagerService {
 							.receivedAt(block.getHeader().getTimestamp())
 							.receivedFrom(peer.getIdentity())
 							.connectedSource(ConnectedSource.REORG)
-							.hash(header.getHash()) // Cached from validateBatch(), O(1)
-							.transactionIndex(StoredBlock.computeTransactionIndex(block))
-							.blockSize(header.getSize()) // Cached from validateBatch(), O(1)
+							.computeIndexes()
 							.build();
 
 					allDownloadedBlocks.add(storedBlock);

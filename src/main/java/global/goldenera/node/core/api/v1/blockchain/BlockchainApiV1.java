@@ -36,12 +36,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AccountSummaryDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
+import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.mempool.MempoolStore;
@@ -75,6 +76,7 @@ public class BlockchainApiV1 {
     MempoolStore mempoolStore;
 
     BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
+    BlockchainTxMapper blockchainTxMapper;
 
     // ========================
     // Block Header endpoints (use partial loading for efficiency)
@@ -135,15 +137,15 @@ public class BlockchainApiV1 {
     // ========================
 
     @GetMapping("block/by-hash/{hash}/txs")
-    public ResponseEntity<List<Tx>> getBlockTxsByHash(
+    public ResponseEntity<List<BlockchainTxDtoV1>> getBlockTxsByHash(
             @PathVariable Hash hash,
             @RequestParam(required = true) Integer fromIndex,
             @RequestParam(required = true) Integer toIndex) {
         PaginationUtil.validateRangeRequest(fromIndex, toIndex, MAX_TX_RANGE);
-        List<Tx> txs = chainQuery.getStoredBlockByHash(hash)
-                .map(sb -> sb.getBlock().getTxs())
+        StoredBlock storedBlock = chainQuery.getStoredBlockByHash(hash)
                 .orElseThrow(() -> new GENotFoundException("Block not found"));
-        return ResponseEntity.ok(PaginationUtil.getListRange(txs, fromIndex, toIndex));
+
+        return ResponseEntity.ok(blockchainTxMapper.mapRange(storedBlock, fromIndex, toIndex));
     }
 
     // ========================
@@ -151,9 +153,11 @@ public class BlockchainApiV1 {
     // ========================
 
     @GetMapping("tx/by-hash/{hash}")
-    public ResponseEntity<Tx> getTransactionByHash(@PathVariable Hash hash) {
-        return ResponseEntity.ok(chainQuery.getTransactionByHash(hash)
-                .orElseThrow(() -> new GENotFoundException("Transaction not found")));
+    public ResponseEntity<BlockchainTxDtoV1> getTransactionByHash(@PathVariable Hash hash) {
+        StoredBlock storedBlock = chainQuery.getTransactionBlock(hash)
+                .orElseThrow(() -> new GENotFoundException("Transaction not found"));
+
+        return ResponseEntity.ok(blockchainTxMapper.map(storedBlock, hash));
     }
 
     @GetMapping("tx/by-hash/{hash}/confirmations")

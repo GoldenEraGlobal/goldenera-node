@@ -23,10 +23,9 @@
  */
 package global.goldenera.node.core.storage.blockchain.serialization.impl.encoding;
 
-import java.util.Map;
-
 import org.apache.tuweni.bytes.Bytes;
 
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.block.BlockEncoder;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
@@ -45,15 +44,31 @@ public class StoredBlockV1EncodingStrategy implements StoredBlockEncodingStrateg
 		out.writeIntScalar(storedBlock.getConnectedSource().getCode());
 
 		out.writeIntScalar(storedBlock.getBlockSize());
-
 		out.writeBytes32(storedBlock.getHash());
-		Map<Hash, Integer> txIndex = storedBlock.getTransactionIndex();
 
+		Hash[] txHashes = storedBlock.getTransactionHashes();
 		out.startList();
-		if (txIndex != null && !txIndex.isEmpty()) {
-			for (Map.Entry<Hash, Integer> entry : txIndex.entrySet()) {
-				out.writeBytes32(entry.getKey());
-				out.writeIntScalar(entry.getValue());
+		if (txHashes != null && txHashes.length > 0) {
+			for (Hash txHash : txHashes) {
+				out.writeBytes32(txHash);
+			}
+		}
+		out.endList();
+
+		int[] txSizes = storedBlock.getTransactionSizes();
+		out.startList();
+		if (txSizes != null && txSizes.length > 0) {
+			for (int size : txSizes) {
+				out.writeIntScalar(size);
+			}
+		}
+		out.endList();
+
+		Address[] txSenders = storedBlock.getTransactionSenders();
+		out.startList();
+		if (txSenders != null && txSenders.length > 0) {
+			for (Address sender : txSenders) {
+				out.writeBytes(sender);
 			}
 		}
 		out.endList();

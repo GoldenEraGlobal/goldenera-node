@@ -64,7 +64,7 @@ public class CacheConfig {
 	public Cache<Hash, StoredBlock> blockCache() {
 		return Caffeine.newBuilder()
 				.maximumWeight(256 * 1024 * 1024) // 256MB
-				.weigher((Hash key, StoredBlock value) -> value.getSize())
+				.weigher((Hash key, StoredBlock value) -> value.getEncodedSize())
 				.expireAfterWrite(1, TimeUnit.HOURS)
 				.build();
 	}

@@ -25,12 +25,9 @@ package global.goldenera.node.core.api.v1.mempool;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,12 +41,11 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.tx.TxDecoder;
 import global.goldenera.node.core.api.v1.mempool.dtos.MempoolSubmitTxDtoV1;
+import global.goldenera.node.core.api.v1.mempool.dtos.MempoolTxDtoV1;
 import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
-import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolStore;
-import global.goldenera.node.core.properties.MempoolProperties;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -62,8 +58,7 @@ public class MempoolApiV1 {
 
 	MempoolManager mempoolManager;
 	MempoolStore mempoolStore;
-	ChainHeadStateCache chainHeadStateCache;
-	MempoolProperties mempoolProperties;
+	MempoolTxMapper mempoolTxMapper;
 
 	@PostMapping("submit")
 	public ResponseEntity<MempoolManager.MempoolResult> submitTx(@RequestBody MempoolSubmitTxDtoV1 input) {
@@ -74,9 +69,10 @@ public class MempoolApiV1 {
 	}
 
 	@GetMapping("by-hash/{hash}")
-	public ResponseEntity<Tx> getMempoolTransactionByHash(@PathVariable Hash hash) {
-		return ResponseEntity.ok(mempoolStore.getTxByHash(hash)
-				.orElseThrow(() -> new GENotFoundException("Transaction not found")).getTx());
+	public ResponseEntity<MempoolTxDtoV1> getMempoolTransactionByHash(@PathVariable Hash hash) {
+		Tx tx = mempoolStore.getTxByHash(hash)
+				.orElseThrow(() -> new GENotFoundException("Transaction not found")).getTx();
+		return ResponseEntity.ok(mempoolTxMapper.map(tx));
 	}
 
 	@GetMapping("inventory")
@@ -91,77 +87,12 @@ public class MempoolApiV1 {
 
 	@GetMapping("recommended-fees")
 	public ResponseEntity<RecommendedFeesDtoV1> getRecommendedFees() {
-		final long AVERAGE_TX_SIZE = 150L;
-		NetworkParamsState networkParams = chainHeadStateCache.getHeadState().getParams();
-		Wei networkMinBaseFee = networkParams.getMinTxBaseFee();
-		Wei networkMinByteFee = networkParams.getMinTxByteFee();
-		Wei nodeMinFee = Wei.valueOf(mempoolProperties.getMinAcceptableFeeWei());
-		Wei networkMinTotal = networkMinBaseFee.add(networkMinByteFee.multiply(AVERAGE_TX_SIZE));
-		Wei effectiveMinTotal = networkMinTotal.compareTo(nodeMinFee) >= 0 ? networkMinTotal : nodeMinFee;
-
-		Wei minBaseFee = networkMinBaseFee;
-		Wei minByteFee;
-		if (effectiveMinTotal.compareTo(networkMinTotal) > 0) {
-			minByteFee = effectiveMinTotal.subtract(minBaseFee).divide(AVERAGE_TX_SIZE);
-		} else {
-			minByteFee = networkMinByteFee;
-		}
-
-		MempoolStore.FeeStatistics feeStats = mempoolStore.getFeeStatistics();
-
-		RecommendedFeesDtoV1.FeeLevel slow = new RecommendedFeesDtoV1.FeeLevel(
-				minBaseFee,
-				minByteFee,
-				effectiveMinTotal);
-
-		Wei standardByteFee;
-		if (feeStats.txCount() == 0 || feeStats.medianFeePerByte() <= 0) {
-			standardByteFee = minByteFee.multiply(110).divide(100);
-		} else {
-			Wei medianFromMempool = Wei.valueOf(BigDecimal.valueOf(feeStats.medianFeePerByte())
-					.setScale(0, RoundingMode.CEILING)
-					.toBigInteger());
-			standardByteFee = medianFromMempool.compareTo(minByteFee) >= 0 ? medianFromMempool : minByteFee;
-		}
-		Wei standardTotal = minBaseFee.add(standardByteFee.multiply(AVERAGE_TX_SIZE));
-		RecommendedFeesDtoV1.FeeLevel standard = new RecommendedFeesDtoV1.FeeLevel(
-				minBaseFee,
-				standardByteFee,
-				standardTotal);
-
-		Wei fastByteFee;
-		if (feeStats.txCount() == 0 || feeStats.fastFeePerByte() <= 0) {
-			fastByteFee = minByteFee.multiply(125).divide(100);
-		} else {
-			Wei fastFromMempool = Wei.valueOf(BigDecimal.valueOf(feeStats.fastFeePerByte())
-					.setScale(0, RoundingMode.CEILING)
-					.toBigInteger());
-			if (fastFromMempool.compareTo(standardByteFee) > 0) {
-				fastByteFee = fastFromMempool;
-			} else {
-				fastByteFee = standardByteFee.multiply(120).divide(100);
-			}
-		}
-		Wei fastTotal = minBaseFee.add(fastByteFee.multiply(AVERAGE_TX_SIZE));
-		RecommendedFeesDtoV1.FeeLevel fast = new RecommendedFeesDtoV1.FeeLevel(
-				minBaseFee,
-				fastByteFee,
-				fastTotal);
-
-		RecommendedFeesDtoV1 response = new RecommendedFeesDtoV1(
-				slow,
-				standard,
-				fast,
-				mempoolStore.getCount());
-
-		return ResponseEntity.ok(response);
+		return ResponseEntity.ok(mempoolTxMapper.mapRecommendedFees());
 	}
 
 	@GetMapping("pending-txs/{address}")
-	public ResponseEntity<List<Tx>> getPendingTransactionsByAddress(@PathVariable Address address) {
-		List<Tx> pendingTxs = mempoolStore.getTxsBySender(address).stream()
-				.map(entry -> entry.getTx())
-				.toList();
-		return ResponseEntity.ok(pendingTxs);
+	public ResponseEntity<List<MempoolTxDtoV1>> getPendingTransactionsByAddress(@PathVariable Address address) {
+		return ResponseEntity.ok(mempoolTxMapper.mapEntries(mempoolStore.getTxsBySender(address)));
 	}
+
 }
