@@ -104,7 +104,7 @@ public class StressTestController {
 		// miningService.stopMining();
 		resetStats("STEP_1");
 
-		Block latestBlock = chainQueryService.getLatestBlockOrThrow();
+		Block latestBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
 		WorldState latestState = worldStateFactory.createForValidation(latestBlock.getHeader().getStateRootHash());
 		AccountNonceState startNonceData = latestState.getNonce(RICH_ADDRESS);
 		long startNonce = startNonceData.getNonce() + 1;
@@ -188,7 +188,7 @@ public class StressTestController {
 		resetStats("STEP_2");
 
 		Address sampleAddress = context.step1Recipients.get(0).getAddress();
-		Block latestBlock = chainQueryService.getLatestBlockOrThrow();
+		Block latestBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
 		WorldState state = worldStateFactory.createForValidation(latestBlock.getHeader().getStateRootHash());
 		if (state.getBalance(sampleAddress, Address.NATIVE_TOKEN).getBalance().isZero()) {
 			throw new RuntimeException("Step 1 funds are not mined yet! Wait for blocks to be confirmed.");

@@ -31,6 +31,7 @@ import java.math.BigInteger;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -41,6 +42,10 @@ import com.fasterxml.jackson.databind.Module;
 import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
+
+import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.Tx;
 
 @Configuration
 public class JacksonConfig {
@@ -63,7 +68,41 @@ public class JacksonConfig {
 		module.addSerializer(BigDecimal.class, ToStringSerializer.instance);
 		module.addSerializer(BigInteger.class, ToStringSerializer.instance);
 
+		// 4. MIXINS for Block/BlockHeader/Tx - prevent automatic lazy getter invocation
+		// These methods recalculate values lazily - we don't want Jackson to call them
+		module.setMixInAnnotation(Block.class, BlockMixin.class);
+		module.setMixInAnnotation(BlockHeader.class, BlockHeaderMixin.class);
+		module.setMixInAnnotation(Tx.class, TxMixin.class);
+
 		return module;
+	}
+
+	/**
+	 * Mixin for Block interface - ignores lazy-calculated properties.
+	 * - hash: recalculated on every call
+	 * - size: recalculated on every call
+	 */
+	@JsonIgnoreProperties({ "hash", "size" })
+	abstract static class BlockMixin {
+	}
+
+	/**
+	 * Mixin for BlockHeader interface - ignores lazy-calculated properties.
+	 * - hash: recalculated on every call
+	 * - size: recalculated on every call
+	 */
+	@JsonIgnoreProperties({ "hash", "size" })
+	abstract static class BlockHeaderMixin {
+	}
+
+	/**
+	 * Mixin for Tx interface - ignores lazy-calculated properties.
+	 * - hash: recalculated on every call
+	 * - size: recalculated on every call
+	 * - sender: recovered from signature on every call (expensive ECDSA recovery)
+	 */
+	@JsonIgnoreProperties({ "hash", "size", "sender" })
+	abstract static class TxMixin {
 	}
 
 	@SuppressWarnings({ "unchecked", "rawtypes" })

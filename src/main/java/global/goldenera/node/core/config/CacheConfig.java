@@ -37,7 +37,6 @@ import org.springframework.context.annotation.Configuration;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
-import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -71,9 +70,9 @@ public class CacheConfig {
 	}
 
 	@Bean("headerCache")
-	public Cache<Hash, BlockHeader> headerCache() {
+	public Cache<Hash, StoredBlock> headerCache() {
 		return Caffeine.newBuilder()
-				.maximumSize(50_000)
+				.maximumSize(50_000) // Partial blocks are smaller (no tx body)
 				.expireAfterWrite(1, TimeUnit.HOURS)
 				.build();
 	}

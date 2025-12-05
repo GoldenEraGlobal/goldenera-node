@@ -29,7 +29,6 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
@@ -70,7 +69,7 @@ public class ExIndexerSyncService {
 		log.info("Checking Explorer synchronization status...");
 		long explorerHeight = validateAndRepairStatus();
 
-		long coreHeight = chainQuery.getLatestBlock().map(Block::getHeight).orElse(-1L);
+		long coreHeight = chainQuery.getLatestBlockHeight().orElse(-1L);
 		log.info("Explorer Height: {}, Core Height: {}", explorerHeight, coreHeight);
 
 		// 1. Handle Reorgs
@@ -102,12 +101,14 @@ public class ExIndexerSyncService {
 	private long handleStartupReorgs(long explorerHeight) {
 		while (explorerHeight >= 0) {
 			Hash explorerHash = exStatusCoreService.getStatus().map(ExStatus::getSyncedBlockHash).orElse(null);
-			Block coreBlock = chainQuery.getBlockByHeight(explorerHeight).orElse(null);
-			if (explorerHash != null && coreBlock != null && coreBlock.getHash().equals(explorerHash)) {
+			// Use StoredBlock instead of Block, use StoredBlock.getHash() for pre-computed
+			// hash
+			StoredBlock coreStoredBlock = chainQuery.getStoredBlockByHeight(explorerHeight).orElse(null);
+			if (explorerHash != null && coreStoredBlock != null && coreStoredBlock.getHash().equals(explorerHash)) {
 				return explorerHeight;
 			}
 			log.warn("Explorer DETECTED FORK at startup on block #{}. ExplorerHash: {}, CoreHash: {}. Reverting...",
-					explorerHeight, explorerHash, (coreBlock != null ? coreBlock.getHash() : "null"));
+					explorerHeight, explorerHash, (coreStoredBlock != null ? coreStoredBlock.getHash() : "null"));
 
 			exRevertService.revertBlock(explorerHash, explorerHeight);
 			explorerHeight--;

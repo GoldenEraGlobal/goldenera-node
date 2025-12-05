@@ -33,12 +33,12 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -57,14 +57,15 @@ public class ChainHeadStateCache {
 	}
 
 	public void init() {
-		Block latestBlock = chainQueryService.getLatestBlockOrThrow();
-		log.info("Initializing ChainHeadState at height {}", latestBlock.getHeight());
-		refreshState(latestBlock.getHeader().getStateRootHash());
+		StoredBlock latestStored = chainQueryService.getLatestStoredBlockOrThrow();
+		log.info("Initializing ChainHeadState at height {}", latestStored.getHeight());
+		refreshState(latestStored.getBlock().getHeader().getStateRootHash());
 	}
 
 	public WorldState getHeadState() {
 		WorldState current = activeState.get();
-		Hash expectedRootHash = chainQueryService.getLatestBlockOrThrow().getHeader().getStateRootHash();
+		Hash expectedRootHash = chainQueryService.getLatestStoredBlockOrThrow().getBlock().getHeader()
+				.getStateRootHash();
 		if (current != null && Objects.equals(current.getFinalStateRoot(), expectedRootHash)) {
 			return current;
 		}

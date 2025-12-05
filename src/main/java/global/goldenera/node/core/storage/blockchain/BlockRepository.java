@@ -41,7 +41,6 @@ import org.springframework.stereotype.Repository;
 import com.github.benmanes.caffeine.cache.Cache;
 
 import global.goldenera.cryptoj.common.Block;
-import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.enums.StoredBlockVersion;
@@ -54,6 +53,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Low-level repository for blockchain data storage in RocksDB.
+ * Returns raw storage objects (StoredBlock) and index data (Hash, height).
+ * 
+ * IMPORTANT: Always use StoredBlock.getHash() instead of Block.getHash() or
+ * BlockHeader.getHash() - the latter recalculate the hash every time!
+ */
 @Slf4j
 @Repository
 @RequiredArgsConstructor
@@ -64,7 +70,7 @@ public class BlockRepository {
 	RocksDBRepository repository;
 	RocksDbColumnFamilies cf;
 	Cache<Hash, StoredBlock> blockCache;
-	Cache<Hash, BlockHeader> headerCache;
+	Cache<Hash, StoredBlock> headerCache; // Cache for partial (header-only) blocks
 	Cache<Long, Hash> heightCache;
 	Cache<Hash, Tx> txCache;
 	AtomicReference<StoredBlock> latestBlockCache = new AtomicReference<>();
@@ -79,6 +85,10 @@ public class BlockRepository {
 			action.run();
 		}
 	}
+
+	// ========================
+	// StoredBlock operations
+	// ========================
 
 	public Optional<StoredBlock> getStoredBlockByHash(Hash hash) {
 		StoredBlock cached = blockCache.getIfPresent(hash);
@@ -99,6 +109,37 @@ public class BlockRepository {
 		}
 	}
 
+	/**
+	 * Gets a partial StoredBlock containing only the header (no transactions).
+	 * More efficient when only header data is needed.
+	 * Use StoredBlock.getHash() to get the pre-computed hash!
+	 */
+	public Optional<StoredBlock> getStoredBlockHeaderByHash(Hash hash) {
+		// Check full block cache first - if we have full block, return it
+		StoredBlock fullCached = blockCache.getIfPresent(hash);
+		if (fullCached != null) {
+			return Optional.of(fullCached);
+		}
+		// Check header cache
+		StoredBlock headerCached = headerCache.getIfPresent(hash);
+		if (headerCached != null) {
+			return Optional.of(headerCached);
+		}
+		try {
+			byte[] data = repository.get(cf.blocks(), hash.toArray());
+			if (data == null)
+				return Optional.empty();
+
+			// Decode with withoutBody=true for efficiency
+			StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
+			// Cache partial block in headerCache
+			headerCache.put(hash, storedBlock);
+			return Optional.of(storedBlock);
+		} catch (RocksDBException e) {
+			throw new RuntimeException("Failed to read StoredBlock header " + hash, e);
+		}
+	}
+
 	public boolean hasBlockData(Hash hash) {
 		if (blockCache.getIfPresent(hash) != null)
 			return true;
@@ -115,21 +156,6 @@ public class BlockRepository {
 	public StoredBlock getStoredBlockByHashOrThrow(Hash hash) {
 		return getStoredBlockByHash(hash)
 				.orElseThrow(() -> new GENotFoundException("Block not found: " + hash));
-	}
-
-	public Optional<Block> getBlockByHash(Hash hash) {
-		return getStoredBlockByHash(hash).map(StoredBlock::getBlock);
-	}
-
-	public Block getBlockByHashOrThrow(Hash hash) {
-		return getBlockByHash(hash)
-				.orElseThrow(() -> new GENotFoundException("Block not found: " + hash));
-	}
-
-	public List<Block> getBlocksByHashes(List<Hash> hashes) {
-		return getStoredBlocksByHashes(hashes).stream()
-				.map(StoredBlock::getBlock)
-				.collect(java.util.stream.Collectors.toList());
 	}
 
 	public List<StoredBlock> getStoredBlocksByHashes(List<Hash> hashes) {
@@ -186,39 +212,73 @@ public class BlockRepository {
 		return blocks;
 	}
 
-	public Optional<Block> getCanonicalBlockByHash(Hash hash) {
-		return getStoredBlockByHash(hash).flatMap(storedBlock -> {
-			Optional<Hash> canonicalHash = getBlockHashByHeight(storedBlock.getBlock().getHeight());
-			if (canonicalHash.isPresent() && canonicalHash.get().equals(hash)) {
-				return Optional.of(storedBlock.getBlock());
-			}
-			return Optional.empty();
-		});
-	}
-
 	/**
-	 * Optimized version that only loads header - much faster for
-	 * findCommonAncestor.
+	 * Gets partial StoredBlocks (headers only) by hashes - more efficient for
+	 * header-only operations.
+	 * Use StoredBlock.getHash() to get the pre-computed hash!
 	 */
-	public Optional<BlockHeader> getCanonicalBlockHeaderByHash(Hash hash) {
-		return getBlockHeaderByHash(hash).flatMap(header -> {
-			Optional<Hash> canonicalHash = getBlockHashByHeight(header.getHeight());
-			if (canonicalHash.isPresent() && canonicalHash.get().equals(hash)) {
-				return Optional.of(header);
+	public List<StoredBlock> getStoredBlockHeadersByHashes(List<Hash> hashes) {
+		if (hashes.isEmpty())
+			return new ArrayList<>();
+
+		List<StoredBlock> blocks = new ArrayList<>(hashes.size());
+		List<Integer> missingIndices = new ArrayList<>();
+		List<byte[]> missingKeys = new ArrayList<>();
+
+		// Check caches first (full blocks are fine, we just need header data)
+		for (int i = 0; i < hashes.size(); i++) {
+			Hash hash = hashes.get(i);
+			StoredBlock fullCached = blockCache.getIfPresent(hash);
+			if (fullCached != null) {
+				blocks.add(fullCached);
+			} else {
+				StoredBlock headerCached = headerCache.getIfPresent(hash);
+				if (headerCached != null) {
+					blocks.add(headerCached);
+				} else {
+					blocks.add(null); // Placeholder
+					missingIndices.add(i);
+					missingKeys.add(hash.toArray());
+				}
 			}
-			return Optional.empty();
-		});
+		}
+
+		// MultiGet for cache misses (using withoutBody=true for efficiency)
+		if (!missingKeys.isEmpty()) {
+			try {
+				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
+
+				// Parallel decoding for performance
+				StoredBlock[] decodedBlocks = new StoredBlock[values.size()];
+				IntStream.range(0, values.size()).parallel().forEach(j -> {
+					byte[] data = values.get(j);
+					if (data != null) {
+						// Use withoutBody=true for header-only decoding
+						decodedBlocks[j] = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
+					}
+				});
+
+				for (int j = 0; j < values.size(); j++) {
+					StoredBlock storedBlock = decodedBlocks[j];
+					if (storedBlock != null) {
+						// Cache in headerCache
+						headerCache.put(hashes.get(missingIndices.get(j)), storedBlock);
+						blocks.set(missingIndices.get(j), storedBlock);
+					}
+				}
+			} catch (RocksDBException e) {
+				log.error("MultiGet failed in getStoredBlockHeadersByHashes", e);
+			}
+		}
+
+		// Remove nulls
+		blocks.removeIf(b -> b == null);
+		return blocks;
 	}
 
-	public Optional<StoredBlock> getCanonicalStoredBlockByHash(Hash hash) {
-		return getStoredBlockByHash(hash).flatMap(storedBlock -> {
-			Optional<Hash> canonicalHash = getBlockHashByHeight(storedBlock.getBlock().getHeight());
-			if (canonicalHash.isPresent() && canonicalHash.get().equals(hash)) {
-				return Optional.of(storedBlock);
-			}
-			return Optional.empty();
-		});
-	}
+	// ========================
+	// Height index operations
+	// ========================
 
 	public Optional<Hash> getBlockHashByHeight(long height) {
 		Hash cached = heightCache.getIfPresent(height);
@@ -241,9 +301,18 @@ public class BlockRepository {
 		return getBlockHashByHeight(height).flatMap(this::getStoredBlockByHash);
 	}
 
-	public Optional<Block> getBlockByHeight(long height) {
-		return getBlockHashByHeight(height).flatMap(this::getBlockByHash);
+	/**
+	 * Gets partial StoredBlock (header only) by height - more efficient for
+	 * header-only operations.
+	 * Use StoredBlock.getHash() to get the pre-computed hash!
+	 */
+	public Optional<StoredBlock> getStoredBlockHeaderByHeight(long height) {
+		return getBlockHashByHeight(height).flatMap(this::getStoredBlockHeaderByHash);
 	}
+
+	// ========================
+	// Latest block operations
+	// ========================
 
 	public Optional<Hash> getLatestBlockHash() {
 		StoredBlock cachedLatest = latestBlockCache.get();
@@ -258,20 +327,6 @@ public class BlockRepository {
 		}
 	}
 
-	public Optional<Block> getLatestBlock() {
-		return getLatestStoredBlock().map(StoredBlock::getBlock);
-	}
-
-	public Block getLatestBlockOrThrow() {
-		return getLatestStoredBlock().map(StoredBlock::getBlock)
-				.orElseThrow(() -> new GENotFoundException("No latest block found"));
-	}
-
-	public StoredBlock getLatestStoredBlockOrThrow() {
-		return getLatestStoredBlock()
-				.orElseThrow(() -> new GENotFoundException("No latest block found"));
-	}
-
 	public Optional<StoredBlock> getLatestStoredBlock() {
 		StoredBlock cachedLatest = latestBlockCache.get();
 		if (cachedLatest != null) {
@@ -282,68 +337,14 @@ public class BlockRepository {
 		return loaded;
 	}
 
-	public List<Tx> getTxsByBlockHash(Hash blockHash) {
-		return getBlockByHashOrThrow(blockHash).getTxs();
-	}
-
-	public Optional<Tx> getTransactionByHash(Hash txHash) {
-		Tx cachedTx = txCache.getIfPresent(txHash);
-		if (cachedTx != null) {
-			return Optional.of(cachedTx);
-		}
-		try {
-			byte[] blockHashBytes = repository.get(cf.txIndex(), txHash.toArray());
-			if (blockHashBytes == null)
-				return Optional.empty();
-
-			Hash blockHash = Hash.wrap(blockHashBytes);
-
-			Optional<StoredBlock> storedBlockOpt = getCanonicalStoredBlockByHash(blockHash);
-			if (storedBlockOpt.isEmpty())
-				return Optional.empty();
-
-			StoredBlock storedBlock = storedBlockOpt.get();
-
-			// Optimized lookup using index
-			Optional<Tx> txOpt = storedBlock.getTransactionByHash(txHash);
-			if (txOpt.isPresent()) {
-				Tx tx = txOpt.get();
-				txCache.put(txHash, tx);
-				return Optional.of(tx);
-			}
-			return Optional.empty();
-		} catch (RocksDBException e) {
-			throw new RuntimeException("Failed to read TxIndex " + txHash, e);
-		}
-	}
-
-	/**
-	 * Gets the block height where a transaction is included.
-	 * More efficient than getTransactionByHash when only height is needed.
-	 */
-	public Optional<Long> getTransactionBlockHeight(Hash txHash) {
-		try {
-			byte[] blockHashBytes = repository.get(cf.txIndex(), txHash.toArray());
-			if (blockHashBytes == null)
-				return Optional.empty();
-
-			Hash blockHash = Hash.wrap(blockHashBytes);
-
-			// Use header-only loading for efficiency
-			return getBlockHeaderByHash(blockHash)
-					.filter(header -> {
-						// Verify the block is still canonical
-						Optional<Hash> canonicalHash = getBlockHashByHeight(header.getHeight());
-						return canonicalHash.isPresent() && canonicalHash.get().equals(blockHash);
-					})
-					.map(BlockHeader::getHeight);
-		} catch (RocksDBException e) {
-			throw new RuntimeException("Failed to read TxIndex " + txHash, e);
-		}
+	public StoredBlock getLatestStoredBlockOrThrow() {
+		return getLatestStoredBlock()
+				.orElseThrow(() -> new GENotFoundException("No latest block found"));
 	}
 
 	/**
 	 * Gets the height of the latest block in the canonical chain.
+	 * Uses cached StoredBlock.getHeight() which is already computed.
 	 */
 	public Optional<Long> getLatestBlockHeight() {
 		StoredBlock cachedLatest = latestBlockCache.get();
@@ -353,104 +354,53 @@ public class BlockRepository {
 		return getLatestStoredBlock().map(StoredBlock::getHeight);
 	}
 
-	public List<Block> findByHeightRange(long fromHeight, long toHeight) {
-		if (fromHeight > toHeight)
-			return new ArrayList<>();
+	// ========================
+	// Transaction operations
+	// ========================
 
-		// Step 1: Collect all hashes using iterator (fast - just reading index)
-		List<Hash> hashes = new ArrayList<>();
-		try (RocksIterator iterator = repository.newIterator(cf.hashByHeight())) {
-			iterator.seek(longToBytes(fromHeight));
-			while (iterator.isValid()) {
-				long currentHeight = bytesToLong(iterator.key());
-				if (currentHeight > toHeight)
-					break;
-				Hash hash = Hash.wrap(iterator.value());
-				heightCache.put(currentHeight, hash);
-				hashes.add(hash);
-				iterator.next();
-			}
-		}
-
-		if (hashes.isEmpty())
-			return new ArrayList<>();
-
-		// Step 2: Check cache first, then batch fetch missing from DB
-		List<Block> blocks = new ArrayList<>(hashes.size());
-		List<Integer> missingIndices = new ArrayList<>();
-		List<byte[]> missingKeys = new ArrayList<>();
-
-		for (int i = 0; i < hashes.size(); i++) {
-			Hash hash = hashes.get(i);
-			StoredBlock cached = blockCache.getIfPresent(hash);
-			if (cached != null) {
-				blocks.add(cached.getBlock());
-			} else {
-				blocks.add(null); // Placeholder
-				missingIndices.add(i);
-				missingKeys.add(hash.toArray());
-			}
-		}
-
-		// Step 3: MultiGet for cache misses
-		if (!missingKeys.isEmpty()) {
-			try {
-				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
-
-				// Parallel decoding for performance
-				StoredBlock[] decodedBlocks = new StoredBlock[values.size()];
-				java.util.stream.IntStream.range(0, values.size()).parallel().forEach(j -> {
-					byte[] data = values.get(j);
-					if (data != null) {
-						decodedBlocks[j] = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data));
-					}
-				});
-
-				for (int j = 0; j < values.size(); j++) {
-					StoredBlock storedBlock = decodedBlocks[j];
-					if (storedBlock != null) {
-						if (!storedBlock.isPartial()) {
-							blockCache.put(hashes.get(missingIndices.get(j)), storedBlock);
-						}
-						blocks.set(missingIndices.get(j), storedBlock.getBlock());
-					}
-				}
-			} catch (RocksDBException e) {
-				log.error("MultiGet failed in findByHeightRange", e);
-			}
-		}
-
-		// Remove nulls (blocks that weren't found)
-		blocks.removeIf(b -> b == null);
-		return blocks;
-	}
-
-	public Optional<BlockHeader> getBlockHeaderByHash(Hash hash) {
-		BlockHeader cached = headerCache.getIfPresent(hash);
-		if (cached != null)
-			return Optional.of(cached);
+	/**
+	 * Gets the block hash where a transaction is stored.
+	 * This is raw index lookup - does not verify canonical status.
+	 */
+	public Optional<Hash> getTransactionBlockHash(Hash txHash) {
 		try {
-			byte[] data = repository.get(cf.blocks(), hash.toArray());
-			if (data == null)
+			byte[] blockHashBytes = repository.get(cf.txIndex(), txHash.toArray());
+			if (blockHashBytes == null)
 				return Optional.empty();
-
-			StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
-			BlockHeader header = storedBlock.getBlock().getHeader();
-			headerCache.put(hash, header);
-			return Optional.of(header);
-		} catch (Exception e) {
-			log.error("Failed to read BlockHeader " + hash, e);
-			return Optional.empty();
+			return Optional.of(Hash.wrap(blockHashBytes));
+		} catch (RocksDBException e) {
+			throw new RuntimeException("Failed to read TxIndex " + txHash, e);
 		}
 	}
 
-	public List<BlockHeader> findHeadersByHeightRange(long fromHeight, long toHeight) {
+	/**
+	 * Gets a cached transaction by hash, or empty if not cached.
+	 */
+	public Optional<Tx> getCachedTransaction(Hash txHash) {
+		Tx cached = txCache.getIfPresent(txHash);
+		return Optional.ofNullable(cached);
+	}
+
+	/**
+	 * Puts a transaction into the cache.
+	 */
+	public void cacheTransaction(Hash txHash, Tx tx) {
+		txCache.put(txHash, tx);
+	}
+
+	// ========================
+	// Range queries
+	// ========================
+
+	/**
+	 * Finds StoredBlocks by height range. Returns full blocks.
+	 */
+	public List<StoredBlock> findStoredBlocksByHeightRange(long fromHeight, long toHeight) {
 		if (fromHeight > toHeight)
 			return new ArrayList<>();
 
 		// Step 1: Collect all hashes using iterator (fast - just reading index)
 		List<Hash> hashes = new ArrayList<>();
-		List<Long> heights = new ArrayList<>();
 		try (RocksIterator iterator = repository.newIterator(cf.hashByHeight())) {
 			iterator.seek(longToBytes(fromHeight));
 			while (iterator.isValid()) {
@@ -460,7 +410,6 @@ public class BlockRepository {
 				Hash hash = Hash.wrap(iterator.value());
 				heightCache.put(currentHeight, hash);
 				hashes.add(hash);
-				heights.add(currentHeight);
 				iterator.next();
 			}
 		}
@@ -468,54 +417,44 @@ public class BlockRepository {
 		if (hashes.isEmpty())
 			return new ArrayList<>();
 
-		// Step 2: Check header cache first, then batch fetch missing from DB
-		List<BlockHeader> headers = new ArrayList<>(hashes.size());
-		List<Integer> missingIndices = new ArrayList<>();
-		List<byte[]> missingKeys = new ArrayList<>();
-
-		for (int i = 0; i < hashes.size(); i++) {
-			Hash hash = hashes.get(i);
-			BlockHeader cached = headerCache.getIfPresent(hash);
-			if (cached != null) {
-				headers.add(cached);
-			} else {
-				headers.add(null); // Placeholder
-				missingIndices.add(i);
-				missingKeys.add(hash.toArray());
-			}
-		}
-
-		// Step 3: MultiGet for cache misses (using withoutBody=true for efficiency)
-		if (!missingKeys.isEmpty()) {
-			try {
-				List<byte[]> values = repository.multiGet(cf.blocks(), missingKeys);
-
-				// Parallel decoding for performance
-				BlockHeader[] decodedHeaders = new BlockHeader[values.size()];
-				IntStream.range(0, values.size()).parallel().forEach(j -> {
-					byte[] data = values.get(j);
-					if (data != null) {
-						StoredBlock storedBlock = StoredBlockDecoder.INSTANCE.decode(Bytes.wrap(data), true);
-						decodedHeaders[j] = storedBlock.getBlock().getHeader();
-					}
-				});
-
-				for (int j = 0; j < values.size(); j++) {
-					BlockHeader header = decodedHeaders[j];
-					if (header != null) {
-						headerCache.put(hashes.get(missingIndices.get(j)), header);
-						headers.set(missingIndices.get(j), header);
-					}
-				}
-			} catch (RocksDBException e) {
-				log.error("MultiGet failed in findHeadersByHeightRange", e);
-			}
-		}
-
-		// Remove nulls (headers that weren't found)
-		headers.removeIf(h -> h == null);
-		return headers;
+		// Step 2: Batch fetch using existing method
+		return getStoredBlocksByHashes(hashes);
 	}
+
+	/**
+	 * Finds partial StoredBlocks (headers only) by height range.
+	 * More efficient when only header data is needed.
+	 * Use StoredBlock.getHash() to get the pre-computed hash!
+	 */
+	public List<StoredBlock> findStoredBlockHeadersByHeightRange(long fromHeight, long toHeight) {
+		if (fromHeight > toHeight)
+			return new ArrayList<>();
+
+		// Step 1: Collect all hashes using iterator (fast - just reading index)
+		List<Hash> hashes = new ArrayList<>();
+		try (RocksIterator iterator = repository.newIterator(cf.hashByHeight())) {
+			iterator.seek(longToBytes(fromHeight));
+			while (iterator.isValid()) {
+				long currentHeight = bytesToLong(iterator.key());
+				if (currentHeight > toHeight)
+					break;
+				Hash hash = Hash.wrap(iterator.value());
+				heightCache.put(currentHeight, hash);
+				hashes.add(hash);
+				iterator.next();
+			}
+		}
+
+		if (hashes.isEmpty())
+			return new ArrayList<>();
+
+		// Step 2: Batch fetch headers only
+		return getStoredBlockHeadersByHashes(hashes);
+	}
+
+	// ========================
+	// Helper methods
+	// ========================
 
 	private static byte[] longToBytes(long val) {
 		return ByteBuffer.allocate(8).putLong(val).array();
@@ -525,12 +464,16 @@ public class BlockRepository {
 		return ByteBuffer.wrap(bytes).getLong();
 	}
 
+	// ========================
+	// Write operations
+	// ========================
+
 	/**
 	 * Saves StoredBlock (Block + Metadata) and indexes transactions.
 	 */
 	public void saveBlockDataToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
 		Block block = storedBlock.getBlock();
-		byte[] hashBytes = block.getHash().toArray();
+		byte[] hashBytes = storedBlock.getHash().toArray();
 
 		// 1. Save StoredBlock
 		Bytes encoded = StoredBlockEncoder.INSTANCE.encode(storedBlock, StoredBlockVersion.V1);
@@ -539,12 +482,12 @@ public class BlockRepository {
 		// Put the block into cache immediately so it's available for serving
 		// (instead of just invalidating, which would require a DB read on next access)
 		StoredBlock cachedBlock = storedBlock.toBuilder().size(encoded.size()).build();
-		scheduleInvalidation(() -> blockCache.put(block.getHash(), cachedBlock));
-		scheduleInvalidation(() -> headerCache.put(block.getHash(), block.getHeader()));
+		scheduleInvalidation(() -> blockCache.put(storedBlock.getHash(), cachedBlock));
+		scheduleInvalidation(() -> headerCache.invalidate(storedBlock.getHash())); // Invalidate partial cache
 
 		// Update latestBlockCache if we are updating the current tip
 		StoredBlock currentLatest = latestBlockCache.get();
-		if (currentLatest != null && currentLatest.getHash().equals(block.getHash())) {
+		if (currentLatest != null && currentLatest.getHash().equals(storedBlock.getHash())) {
 			scheduleInvalidation(() -> latestBlockCache.set(cachedBlock));
 		}
 
@@ -558,12 +501,11 @@ public class BlockRepository {
 	}
 
 	public void connectBlockIndexToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
-		Block block = storedBlock.getBlock();
-		byte[] hashBytes = block.getHash().toArray();
+		byte[] hashBytes = storedBlock.getHash().toArray();
 		batch.put(cf.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, hashBytes);
-		batch.put(cf.hashByHeight(), Bytes.ofUnsignedLong(block.getHeight()).toArray(), hashBytes);
+		batch.put(cf.hashByHeight(), Bytes.ofUnsignedLong(storedBlock.getHeight()).toArray(), hashBytes);
 		// Put height->hash mapping into cache immediately
-		scheduleInvalidation(() -> heightCache.put(block.getHeight(), block.getHash()));
+		scheduleInvalidation(() -> heightCache.put(storedBlock.getHeight(), storedBlock.getHash()));
 		scheduleInvalidation(() -> latestBlockCache.set(storedBlock));
 	}
 

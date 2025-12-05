@@ -62,6 +62,7 @@ import global.goldenera.node.core.exceptions.GETxValidationFailedException;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.properties.MiningProperties;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.randomx.RandomXVM;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PreDestroy;
@@ -240,7 +241,7 @@ public class MiningService {
 				Block parentBlock;
 				masterChainLock.lock();
 				try {
-					parentBlock = chainQueryService.getLatestBlockOrThrow();
+					parentBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
 				} finally {
 					masterChainLock.unlock();
 				}
@@ -418,10 +419,10 @@ public class MiningService {
 
 		masterChainLock.lock();
 		try {
-			Block currentTip = chainQueryService.getLatestBlockOrThrow();
+			StoredBlock currentTipStored = chainQueryService.getLatestStoredBlockOrThrow();
 
-			// Check if we are still on the correct parent
-			if (template.getPreviousHash().equals(currentTip.getHash())) {
+			// Check if we are still on the correct parent - use StoredBlock.getHash()
+			if (template.getPreviousHash().equals(currentTipStored.getHash())) {
 				log.info("SUCCESS: Block mined #{} in {}s (Nonce: {})",
 						template.getHeight(), String.format("%.2f", durationMs / 1000.0), nonce);
 
@@ -453,7 +454,7 @@ public class MiningService {
 			} else {
 				log.warn("STALE: Block mined but chain moved (Target: {} -> Tip: {})",
 						template.getPreviousHash().toShortLogString(),
-						currentTip.getHash().toShortLogString());
+						currentTipStored.getHash().toShortLogString());
 			}
 		} finally {
 			masterChainLock.unlock();

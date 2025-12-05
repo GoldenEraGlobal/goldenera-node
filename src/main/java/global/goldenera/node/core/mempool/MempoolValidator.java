@@ -100,7 +100,7 @@ public class MempoolValidator {
 						+ mempoolProperties.getMinAcceptableFeeWei() + " Wei.");
 			}
 
-			Block chainTip = chainQueryService.getLatestBlockOrThrow();
+			Block chainTip = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
 			if (!skipValidation) {
 				txValidator.validateStateless(tx);
 			}

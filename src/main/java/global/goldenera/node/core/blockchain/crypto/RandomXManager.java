@@ -42,7 +42,6 @@ import java.util.function.Function;
 import org.apache.tuweni.bytes.Bytes;
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -130,7 +129,7 @@ public class RandomXManager {
 		log.info("Initializing RandomX with Genesis seed...");
 		// Initial load does not need locks as no other threads are running yet,
 		// but for consistency, we treat it as an update.
-		long height = chainQuery.getLatestBlock().map(Block::getHeight).orElse(0L);
+		long height = chainQuery.getLatestBlockHeight().orElse(0L);
 		ensureInitializedForHeight(height);
 	}
 

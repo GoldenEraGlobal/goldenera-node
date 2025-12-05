@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,6 +44,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.consensus.state.AccountBalanceState;
 import global.goldenera.node.shared.consensus.state.AccountNonceState;
 import global.goldenera.node.shared.consensus.state.AddressAliasState;
@@ -65,22 +67,30 @@ public class BlockchainApiV1 {
     ChainHeadStateCache chainHeadStateCache;
     EntityIndexRepository entityIndexRepository;
 
+    // ========================
+    // Block Header endpoints (use partial loading for efficiency)
+    // ========================
+
     @GetMapping("block-header/latest")
     public ResponseEntity<BlockHeader> getLatestBlockHeader() {
+        // Use partial loading - extract BlockHeader for JSON serialization
         return ResponseEntity.ok(chainQuery.getLatestBlockHash()
-                .flatMap(chainQuery::getBlockHeaderByHash)
+                .flatMap(chainQuery::getStoredBlockHeaderByHash)
+                .map(sb -> sb.getBlock().getHeader())
                 .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
     @GetMapping("block-header/by-height/{height}")
     public ResponseEntity<BlockHeader> getBlockHeaderByHeight(@PathVariable Long height) {
-        return ResponseEntity.ok(chainQuery.getBlockHeaderByHeight(height)
+        return ResponseEntity.ok(chainQuery.getStoredBlockHeaderByHeight(height)
+                .map(sb -> sb.getBlock().getHeader())
                 .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
     @GetMapping("block-header/by-hash/{hash}")
     public ResponseEntity<BlockHeader> getBlockHeaderByHash(@PathVariable Hash hash) {
-        return ResponseEntity.ok(chainQuery.getBlockHeaderByHash(hash)
+        return ResponseEntity.ok(chainQuery.getStoredBlockHeaderByHash(hash)
+                .map(sb -> sb.getBlock().getHeader())
                 .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
@@ -88,35 +98,49 @@ public class BlockchainApiV1 {
     public ResponseEntity<List<BlockHeader>> getBlockHeaderByRange(@RequestParam long fromHeight,
             @RequestParam long toHeight) {
         PaginationUtil.validateRangeRequest(fromHeight, toHeight);
-        return ResponseEntity.ok(chainQuery.findHeadersByHeightRange(fromHeight, toHeight));
+        // Get partial StoredBlocks and extract headers for JSON serialization
+        List<BlockHeader> headers = chainQuery.findStoredBlockHeadersByHeightRange(fromHeight, toHeight).stream()
+                .map(sb -> sb.getBlock().getHeader())
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(headers);
     }
+
+    // ========================
+    // Full Block endpoints
+    // ========================
 
     @GetMapping("block/latest")
     public ResponseEntity<Block> getLatestBlock() {
-        return ResponseEntity.ok(chainQuery.getLatestBlockOrThrow());
+        return ResponseEntity.ok(chainQuery.getLatestStoredBlockOrThrow().getBlock());
     }
 
     @GetMapping("block/by-height/{height}")
     public ResponseEntity<Block> getBlockByHeight(@PathVariable Long height) {
-        return ResponseEntity
-                .ok(chainQuery.getBlockByHeight(height).orElseThrow(() -> new GENotFoundException("Block not found")));
+        return ResponseEntity.ok(chainQuery.getStoredBlockByHeight(height)
+                .map(StoredBlock::getBlock)
+                .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
     @GetMapping("block/by-hash/{hash}")
     public ResponseEntity<Block> getBlockByHash(@PathVariable Hash hash) {
-        return ResponseEntity.ok(chainQuery.getBlockByHashOrThrow(hash));
+        return ResponseEntity.ok(chainQuery.getStoredBlockByHashOrThrow(hash).getBlock());
     }
 
     @GetMapping("block/by-hash/{hash}/txs")
     public ResponseEntity<List<Tx>> getBlockTxsByHash(@PathVariable Hash hash) {
-        return ResponseEntity.ok(chainQuery.getBlockByHashOrThrow(hash).getTxs());
+        return ResponseEntity.ok(chainQuery.getStoredBlockByHashOrThrow(hash).getBlock().getTxs());
     }
 
     @GetMapping("block/by-height/{height}/txs")
     public ResponseEntity<List<Tx>> getBlockTxsByHeight(@PathVariable Long height) {
-        return ResponseEntity.ok(chainQuery.getBlockByHeight(height).map(Block::getTxs)
+        return ResponseEntity.ok(chainQuery.getStoredBlockByHeight(height)
+                .map(sb -> sb.getBlock().getTxs())
                 .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
+
+    // ========================
+    // Transaction endpoints
+    // ========================
 
     @GetMapping("tx/by-hash/{hash}")
     public ResponseEntity<Tx> getTransactionByHash(@PathVariable Hash hash) {
@@ -129,6 +153,10 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(chainQuery.getTransactionConfirmations(hash)
                 .orElseThrow(() -> new GENotFoundException("Transaction not found or not in canonical chain")));
     }
+
+    // ========================
+    // WorldState endpoints
+    // ========================
 
     @GetMapping("worldstate/account/{address}/{tokenAddress}/balance")
     public ResponseEntity<AccountBalanceState> getWorldStateAccountBalance(@PathVariable Address address,

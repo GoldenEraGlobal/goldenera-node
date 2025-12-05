@@ -35,8 +35,6 @@ import java.util.stream.Collectors;
 import org.springframework.modulith.NamedInterface;
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Block;
-import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -47,6 +45,25 @@ import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * High-level chain query service providing clean API for blockchain data.
+ * 
+ * IMPORTANT: This service returns StoredBlock objects, NOT Block or
+ * BlockHeader.
+ * This is intentional to prevent accidental hash recalculation:
+ * - Block.getHash() and BlockHeader.getHash() RECALCULATE the hash (lazy,
+ * expensive)
+ * - StoredBlock.getHash() returns the PRE-COMPUTED hash stored in DB (fast)
+ * 
+ * Callers should use StoredBlock.getHash() for hash comparisons, and only call
+ * storedBlock.getBlock() when they specifically need Block data (e.g., for
+ * serialization).
+ * 
+ * Method naming convention:
+ * - getStoredBlock*: Returns full StoredBlock with transactions
+ * - getStoredBlockHeader*: Returns partial StoredBlock (header only, no tx
+ * body) - more efficient
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -56,13 +73,9 @@ public class ChainQuery {
 
     BlockRepository blockRepository;
 
-    public Optional<Block> getBlockByHash(Hash hash) {
-        return blockRepository.getBlockByHash(hash);
-    }
-
-    public Block getBlockByHashOrThrow(Hash hash) {
-        return blockRepository.getBlockByHashOrThrow(hash);
-    }
+    // ========================
+    // Full StoredBlock operations
+    // ========================
 
     public Optional<StoredBlock> getStoredBlockByHash(Hash hash) {
         return blockRepository.getStoredBlockByHash(hash);
@@ -72,28 +85,61 @@ public class ChainQuery {
         return blockRepository.getStoredBlockByHashOrThrow(hash);
     }
 
-    public Optional<Hash> getBlockHashByHeight(long height) {
-        return blockRepository.getBlockHashByHeight(height);
-    }
-
-    public Optional<Block> getBlockByHeight(long height) {
-        return blockRepository.getBlockByHeight(height);
-    }
-
     public Optional<StoredBlock> getStoredBlockByHeight(long height) {
         return blockRepository.getStoredBlockByHeight(height);
     }
 
+    public List<StoredBlock> getStoredBlocksByHashes(List<Hash> hashes) {
+        return blockRepository.getStoredBlocksByHashes(hashes);
+    }
+
+    public List<StoredBlock> findStoredBlocksByHeightRange(long fromHeight, long toHeight) {
+        return blockRepository.findStoredBlocksByHeightRange(fromHeight, toHeight);
+    }
+
+    // ========================
+    // Partial StoredBlock (header only) operations - more efficient
+    // ========================
+
+    /**
+     * Gets partial StoredBlock by hash (header only, no transactions).
+     * Use storedBlock.getHash() for the pre-computed hash!
+     */
+    public Optional<StoredBlock> getStoredBlockHeaderByHash(Hash hash) {
+        return blockRepository.getStoredBlockHeaderByHash(hash);
+    }
+
+    /**
+     * Gets partial StoredBlock by height (header only, no transactions).
+     * Use storedBlock.getHash() for the pre-computed hash!
+     */
+    public Optional<StoredBlock> getStoredBlockHeaderByHeight(long height) {
+        return blockRepository.getStoredBlockHeaderByHeight(height);
+    }
+
+    /**
+     * Finds partial StoredBlocks by height range (headers only, no transactions).
+     * Optimized for serving header sync requests.
+     * Use storedBlock.getHash() for the pre-computed hash!
+     */
+    public List<StoredBlock> findStoredBlockHeadersByHeightRange(long fromHeight, long toHeight) {
+        return blockRepository.findStoredBlockHeadersByHeightRange(fromHeight, toHeight);
+    }
+
+    /**
+     * Gets partial StoredBlocks by hashes (headers only, no transactions).
+     * Use storedBlock.getHash() for the pre-computed hash!
+     */
+    public List<StoredBlock> getStoredBlockHeadersByHashes(List<Hash> hashes) {
+        return blockRepository.getStoredBlockHeadersByHashes(hashes);
+    }
+
+    // ========================
+    // Latest block operations
+    // ========================
+
     public Optional<Hash> getLatestBlockHash() {
         return blockRepository.getLatestBlockHash();
-    }
-
-    public Block getLatestBlockOrThrow() {
-        return blockRepository.getLatestBlockOrThrow();
-    }
-
-    public Optional<Block> getLatestBlock() {
-        return blockRepository.getLatestBlock();
     }
 
     public Optional<StoredBlock> getLatestStoredBlock() {
@@ -104,77 +150,171 @@ public class ChainQuery {
         return blockRepository.getLatestStoredBlockOrThrow();
     }
 
+    /**
+     * Gets the latest block height. Uses cached StoredBlock.getHeight().
+     */
+    public Optional<Long> getLatestBlockHeight() {
+        return blockRepository.getLatestBlockHeight();
+    }
+
+    // ========================
+    // Height index operations
+    // ========================
+
+    public Optional<Hash> getBlockHashByHeight(long height) {
+        return blockRepository.getBlockHashByHeight(height);
+    }
+
+    public boolean hasBlockData(Hash hash) {
+        return blockRepository.hasBlockData(hash);
+    }
+
+    // ========================
+    // Transaction operations
+    // ========================
+
     public List<Tx> getTxsByBlockHash(Hash blockHash) {
-        return blockRepository.getTxsByBlockHash(blockHash);
+        return blockRepository.getStoredBlockByHashOrThrow(blockHash).getBlock().getTxs();
     }
 
+    /**
+     * Gets transaction by hash from canonical chain.
+     * Uses StoredBlock's transactionIndex for O(1) lookup within the block.
+     */
     public Optional<Tx> getTransactionByHash(Hash txHash) {
-        return blockRepository.getTransactionByHash(txHash);
+        // Check cache first
+        Optional<Tx> cached = blockRepository.getCachedTransaction(txHash);
+        if (cached.isPresent()) {
+            return cached;
+        }
+
+        return blockRepository.getTransactionBlockHash(txHash)
+                .flatMap(blockHash -> getCanonicalStoredBlockByHash(blockHash))
+                .flatMap(storedBlock -> {
+                    Optional<Tx> txOpt = storedBlock.getTransactionByHash(txHash);
+                    txOpt.ifPresent(tx -> blockRepository.cacheTransaction(txHash, tx));
+                    return txOpt;
+                });
     }
 
-    public List<Block> findByHeightRange(long fromHeight, long toHeight) {
-        return blockRepository.findByHeightRange(fromHeight, toHeight);
+    /**
+     * Gets the number of confirmations for a transaction.
+     * Confirmations = (current chain height - tx block height) + 1
+     * 
+     * @param txHash
+     *            the transaction hash
+     * @return number of confirmations, or empty if tx not found in canonical chain
+     */
+    public Optional<Long> getTransactionConfirmations(Hash txHash) {
+        return getTransactionBlockHeight(txHash)
+                .flatMap(txBlockHeight -> blockRepository.getLatestBlockHeight()
+                        .map(currentHeight -> currentHeight - txBlockHeight + 1));
     }
 
-    public List<Block> getBlocksByHashes(List<Hash> hashes) {
-        return blockRepository.getBlocksByHashes(hashes);
+    /**
+     * Gets the block height where a transaction is included in canonical chain.
+     */
+    public Optional<Long> getTransactionBlockHeight(Hash txHash) {
+        return blockRepository.getTransactionBlockHash(txHash)
+                .flatMap(blockHash -> {
+                    // Use header-only loading for efficiency
+                    return blockRepository.getStoredBlockHeaderByHash(blockHash)
+                            .filter(storedBlock -> {
+                                // Verify the block is still canonical using pre-computed hash
+                                Optional<Hash> canonicalHash = blockRepository
+                                        .getBlockHashByHeight(storedBlock.getHeight());
+                                return canonicalHash.isPresent() && canonicalHash.get().equals(storedBlock.getHash());
+                            })
+                            .map(StoredBlock::getHeight);
+                });
     }
 
-    public List<StoredBlock> getStoredBlocksByHashes(List<Hash> hashes) {
-        return blockRepository.getStoredBlocksByHashes(hashes);
+    // ========================
+    // Canonical chain operations
+    // ========================
+
+    /**
+     * Gets canonical StoredBlock by hash - verifies the block is on the main chain.
+     * Uses StoredBlock.getHash() for comparison (pre-computed, not recalculated).
+     */
+    public Optional<StoredBlock> getCanonicalStoredBlockByHash(Hash hash) {
+        return blockRepository.getStoredBlockByHash(hash).flatMap(storedBlock -> {
+            // Use pre-computed hash from StoredBlock
+            Optional<Hash> canonicalHash = blockRepository.getBlockHashByHeight(storedBlock.getHeight());
+            if (canonicalHash.isPresent() && canonicalHash.get().equals(storedBlock.getHash())) {
+                return Optional.of(storedBlock);
+            }
+            return Optional.empty();
+        });
     }
 
-    public Optional<BlockHeader> getBlockHeaderByHash(Hash hash) {
-        return blockRepository.getBlockHeaderByHash(hash);
+    /**
+     * Gets canonical partial StoredBlock (header only) by hash.
+     * Uses StoredBlock.getHash() for comparison (pre-computed, not recalculated).
+     */
+    public Optional<StoredBlock> getCanonicalStoredBlockHeaderByHash(Hash hash) {
+        return blockRepository.getStoredBlockHeaderByHash(hash).flatMap(storedBlock -> {
+            // Use pre-computed hash from StoredBlock
+            Optional<Hash> canonicalHash = blockRepository.getBlockHashByHeight(storedBlock.getHeight());
+            if (canonicalHash.isPresent() && canonicalHash.get().equals(storedBlock.getHash())) {
+                return Optional.of(storedBlock);
+            }
+            return Optional.empty();
+        });
     }
 
-    public Optional<BlockHeader> getBlockHeaderByHeight(long height) {
-        return blockRepository.getBlockHashByHeight(height).flatMap(this::getBlockHeaderByHash);
-    }
+    // ========================
+    // Chain traversal operations
+    // ========================
 
-    public List<BlockHeader> findHeadersByHeightRange(long fromHeight, long toHeight) {
-        return blockRepository.findHeadersByHeightRange(fromHeight, toHeight);
-    }
-
-    public List<Block> findChainFrom(Hash commonAncestorHash, Hash currentBestBlockHash) {
-        // First pass: collect all hashes we need (walking backwards)
+    /**
+     * Finds the chain of StoredBlocks from common ancestor to current best block.
+     * Uses header-only loading for walking backwards, then batch fetches full
+     * blocks.
+     */
+    public List<StoredBlock> findChainFrom(Hash commonAncestorHash, Hash currentBestBlockHash) {
+        // First pass: collect all hashes we need (walking backwards using headers only)
         List<Hash> hashesToFetch = new ArrayList<>();
         Hash currentHash = currentBestBlockHash;
 
-        // We need to walk backwards to find the chain, but we'll do it in batches
         while (currentHash != null && !currentHash.equals(commonAncestorHash)) {
             hashesToFetch.add(currentHash);
 
             // Get just the header to find parent hash (much faster than full block)
-            Optional<BlockHeader> headerOpt = blockRepository.getBlockHeaderByHash(currentHash);
-            if (headerOpt.isEmpty()) {
+            Optional<StoredBlock> storedBlockOpt = blockRepository.getStoredBlockHeaderByHash(currentHash);
+            if (storedBlockOpt.isEmpty()) {
                 throw new GENotFoundException("Chain break at: " + currentHash);
             }
 
-            BlockHeader header = headerOpt.get();
-            if (header.getHeight() == 0) {
-                if (!currentHash.equals(commonAncestorHash)) {
+            StoredBlock storedBlock = storedBlockOpt.get();
+            if (storedBlock.getHeight() == 0) {
+                // Use pre-computed hash for comparison
+                if (!storedBlock.getHash().equals(commonAncestorHash)) {
                     throw new GEFailedException("Reached genesis without finding ancestor " + commonAncestorHash);
                 }
                 break;
             }
-            currentHash = header.getPreviousHash();
+            currentHash = storedBlock.getBlock().getHeader().getPreviousHash();
         }
 
         if (hashesToFetch.isEmpty()) {
             return new ArrayList<>();
         }
 
-        // Second pass: batch fetch all blocks using multiGet
-        List<Block> chain = blockRepository.getBlocksByHashes(hashesToFetch);
+        // Second pass: batch fetch all full blocks using multiGet
+        List<StoredBlock> chain = getStoredBlocksByHashes(hashesToFetch);
 
         // Reverse because we collected backwards
         Collections.reverse(chain);
         return chain;
     }
 
+    /**
+     * Generates locator hashes for block sync protocol.
+     * Uses StoredBlock.getHash() to avoid hash recalculation.
+     */
     public LinkedHashSet<Hash> getLocatorHashes() {
-        Block bestBlock = blockRepository.getLatestBlockOrThrow();
+        StoredBlock bestBlock = blockRepository.getLatestStoredBlockOrThrow();
         List<Long> heights = new ArrayList<>();
         long height = bestBlock.getHeight();
         long step = 1;
@@ -199,44 +339,18 @@ public class ChainQuery {
     }
 
     /**
-     * Finds the common ancestor block header from locator hashes.
-     * Returns only the header to avoid loading the full block.
+     * Finds the common ancestor StoredBlock (header only) from locator hashes.
+     * Uses header-only loading for efficiency.
+     * Use StoredBlock.getHash() for the pre-computed hash!
      */
-    public Optional<BlockHeader> findCommonAncestor(LinkedHashSet<Hash> locatorHashes) {
+    public Optional<StoredBlock> findCommonAncestor(LinkedHashSet<Hash> locatorHashes) {
         for (Hash hash : locatorHashes) {
             // Check if it's canonical using header-only (fast)
-            Optional<BlockHeader> header = getCanonicalBlockHeaderByHash(hash);
-            if (header.isPresent()) {
-                return header;
+            Optional<StoredBlock> storedBlock = getCanonicalStoredBlockHeaderByHash(hash);
+            if (storedBlock.isPresent()) {
+                return storedBlock;
             }
         }
         return Optional.empty();
     }
-
-    public Optional<BlockHeader> getCanonicalBlockHeaderByHash(Hash hash) {
-        return blockRepository.getCanonicalBlockHeaderByHash(hash);
-    }
-
-    public Optional<Block> getCanonicalBlockByHash(Hash hash) {
-        return blockRepository.getCanonicalBlockByHash(hash);
-    }
-
-    public Optional<StoredBlock> getCanonicalStoredBlockByHash(Hash hash) {
-        return blockRepository.getCanonicalStoredBlockByHash(hash);
-    }
-
-    /**
-     * Gets the number of confirmations for a transaction.
-     * Confirmations = (current chain height - tx block height) + 1
-     * 
-     * @param txHash
-     *            the transaction hash
-     * @return number of confirmations, or empty if tx not found in canonical chain
-     */
-    public Optional<Long> getTransactionConfirmations(Hash txHash) {
-        return blockRepository.getTransactionBlockHeight(txHash)
-                .flatMap(txBlockHeight -> blockRepository.getLatestBlockHeight()
-                        .map(currentHeight -> currentHeight - txBlockHeight + 1));
-    }
-
 }

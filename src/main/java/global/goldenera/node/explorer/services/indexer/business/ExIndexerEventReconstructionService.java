@@ -87,7 +87,8 @@ public class ExIndexerEventReconstructionService {
                 }
 
                 // --- NORMAL BLOCK RECONSTRUCTION ---
-                Block prevBlock = chainQuery.getBlockByHash(block.getHeader().getPreviousHash())
+                Block prevBlock = chainQuery.getStoredBlockByHash(block.getHeader().getPreviousHash())
+                                .map(sb -> sb.getBlock())
                                 .orElseThrow(() -> new IllegalStateException(
                                                 "Parent block not found for reconstruction: " + height));
 

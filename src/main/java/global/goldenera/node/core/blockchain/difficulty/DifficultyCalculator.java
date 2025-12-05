@@ -65,7 +65,8 @@ public class DifficultyCalculator {
 
 		try {
 			final long anchorHeight = params.getAsertAnchorHeight();
-			final Block anchorBlock = chainQueryService.getBlockByHeight(anchorHeight)
+			final Block anchorBlock = chainQueryService.getStoredBlockByHeight(anchorHeight)
+					.map(sb -> sb.getBlock())
 					.orElseThrow(() -> new GENotFoundException("Anchor block " + anchorHeight + " not found"));
 
 			long timeDelta = parentBlock.getTimestamp().toEpochMilli()

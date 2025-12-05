@@ -186,30 +186,30 @@ public class BlockSyncManagerService {
 
 	private void checkAndSync() {
 		try {
-			Block localBest = chainQueryService.getLatestBlockOrThrow();
-			Optional<RemotePeer> bestPeerOpt = peerRegistry.getSyncCandidate(localBest.getHeight());
+			StoredBlock localBestStored = chainQueryService.getLatestStoredBlockOrThrow();
+			Optional<RemotePeer> bestPeerOpt = peerRegistry.getSyncCandidate(localBestStored.getHeight());
 			if (bestPeerOpt.isEmpty()) {
 				if (!synced) {
-					log.info("Node synced at height {}", localBest.getHeight());
+					log.info("Node synced at height {}", localBestStored.getHeight());
 					synced = true;
 				}
 				miningService.resumeMining();
 				return;
 			}
 			RemotePeer bestPeer = bestPeerOpt.get();
-			if (bestPeer.getHeadHeight() > localBest.getHeight()) {
-				log.info("Sync needed: local height {} vs peer height {} ({})", localBest.getHeight(),
+			if (bestPeer.getHeadHeight() > localBestStored.getHeight()) {
+				log.info("Sync needed: local height {} vs peer height {} ({})", localBestStored.getHeight(),
 						bestPeer.getHeadHeight(), bestPeer.getIdentity());
 				synced = false;
 
-				boolean success = performSync(bestPeer, localBest);
+				boolean success = performSync(bestPeer, localBestStored.getBlock());
 
 				if (success) {
 					signalQueue.offer(new Object());
 				}
 			} else {
 				if (!synced) {
-					log.info("Node synced at height {}", localBest.getHeight());
+					log.info("Node synced at height {}", localBestStored.getHeight());
 					synced = true;
 				}
 				miningService.resumeMining();
@@ -312,7 +312,7 @@ public class BlockSyncManagerService {
 				// Validate first header connects to something we have
 				if (allHeaders.isEmpty() && !batch.isEmpty()) {
 					Hash firstParent = batch.get(0).getPreviousHash();
-					if (!blockRepository.hasBlockData(firstParent)) {
+					if (!chainQueryService.hasBlockData(firstParent)) {
 						throw new GEValidationException("Peer sent header " + batch.get(0).getHash()
 								+ " whose parent " + firstParent + " is missing from our DB");
 					}
@@ -490,17 +490,17 @@ public class BlockSyncManagerService {
 		}
 
 		try {
-			Block localBest = chainQueryService.getLatestBlockOrThrow();
+			StoredBlock localBestStored = chainQueryService.getLatestStoredBlockOrThrow();
 
 			// Skip blocks that are too old - they can't possibly extend our chain
 			// Only process if:
 			// 1. Block extends our tip (height > localBest)
 			// 2. OR block is at same height as tip (potential uncle/reorg)
 			// 3. OR block is slightly behind but parent exists (potential short reorg)
-			if (header.getHeight() < localBest.getHeight() - 10) {
+			if (header.getHeight() < localBestStored.getHeight() - 10) {
 				// Block is more than 10 blocks behind - too old to care about
 				log.debug("Ignoring old broadcast block #{} (local tip: {})",
-						header.getHeight(), localBest.getHeight());
+						header.getHeight(), localBestStored.getHeight());
 				pendingBroadcastDownloads.remove(header.getHash());
 				return;
 			}
@@ -508,7 +508,7 @@ public class BlockSyncManagerService {
 			// Check if parent exists (must exist to process this block)
 			boolean parentExists = chainQueryService.getStoredBlockByHash(header.getPreviousHash()).isPresent();
 
-			if (header.getHeight() > localBest.getHeight()) {
+			if (header.getHeight() > localBestStored.getHeight()) {
 				// This block extends our chain - definitely want it
 				// If parent is missing, we'll need to sync anyway
 				if (!parentExists) {

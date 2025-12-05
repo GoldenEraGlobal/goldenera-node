@@ -96,36 +96,29 @@ public class ChainSwitchService {
         masterChainLock.lock();
         try {
             StoredBlock currentBestBlock = chainQueryService.getLatestStoredBlockOrThrow();
-            List<Block> oldChain = chainQueryService.findChainFrom(
-                    commonAncestor.getBlock().getHash(), currentBestBlock.getBlock().getHash());
-            Collections.reverse(oldChain);
+            // findChainFrom returns List<StoredBlock> - use StoredBlock.getHash() for
+            // comparison
+            List<StoredBlock> oldChainStored = chainQueryService.findChainFrom(
+                    commonAncestor.getHash(), currentBestBlock.getHash());
+            Collections.reverse(oldChainStored);
 
             List<BlockDisconnectedEvent> blockDisconnectedEvents = new ArrayList<>();
             List<BlockConnectedEvent> blockConnectedEvents = new ArrayList<>();
 
             log.info("REORG STARTING: disconnecting {} blocks, connecting {} blocks (common ancestor at height {})",
-                    oldChain.size(), newChainHeaders.size(), commonAncestor.getBlock().getHeight());
+                    oldChainStored.size(), newChainHeaders.size(), commonAncestor.getHeight());
 
             try {
                 blockRepository.getRepository().executeAtomicBatch(batch -> {
-                    for (Block blockToDisconnect : oldChain) {
-                        StoredBlock storedBlockToDisconnect = chainQueryService
-                                .getStoredBlockByHash(blockToDisconnect.getHash())
-                                .orElse(null);
+                    for (StoredBlock storedBlockToDisconnect : oldChainStored) {
+                        Block blockToDisconnect = storedBlockToDisconnect.getBlock();
 
                         StoredBlock parent = chainQueryService
                                 .getStoredBlockByHash(blockToDisconnect.getHeader().getPreviousHash())
                                 .orElseThrow(() -> new GEFailedException("Reorg parent not found"));
 
-                        if (storedBlockToDisconnect == null) {
-                            log.warn(
-                                    "Corruption detected! Block {} to disconnect not found in DB. Forcing index removal.",
-                                    blockToDisconnect.getHash());
-                            blockRepository.forceDisconnectBlockIndex(batch, blockToDisconnect.getHeight(),
-                                    parent.getHash());
-                        } else {
-                            blockRepository.addDisconnectBlockIndexToBatch(batch, storedBlockToDisconnect, parent);
-                        }
+                        // Use StoredBlock.getHash() for pre-computed hash
+                        blockRepository.addDisconnectBlockIndexToBatch(batch, storedBlockToDisconnect, parent);
 
                         entityIndexRepository.revertEntities(batch, blockToDisconnect);
                         blockDisconnectedEvents.add(new BlockDisconnectedEvent(this, blockToDisconnect));

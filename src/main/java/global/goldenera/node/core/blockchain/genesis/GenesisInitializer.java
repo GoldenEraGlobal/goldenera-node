@@ -73,7 +73,7 @@ public class GenesisInitializer {
 	WorldStateFactory worldStateFactory;
 
 	public void checkAndInitGenesisBlock() throws Exception {
-		if (chainQuery.getBlockByHeight(GENESIS_HEIGHT).isPresent()) {
+		if (chainQuery.getStoredBlockByHeight(GENESIS_HEIGHT).isPresent()) {
 			return;
 		}
 		log.warn("Genesis block missing. Initializing from Hardcoded Constants...");

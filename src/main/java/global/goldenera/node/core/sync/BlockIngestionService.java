@@ -95,10 +95,10 @@ public class BlockIngestionService {
 				result = IngestionResult.SUCCESS;
 				return result;
 			} else {
-				Block localBest = chainQueryService.getLatestBlockOrThrow();
-				if (block.getHeight() > localBest.getHeight() + 1) {
+				StoredBlock localBestStored = chainQueryService.getLatestStoredBlockOrThrow();
+				if (block.getHeight() > localBestStored.getHeight() + 1) {
 					log.debug("Gap detected | Block: {} | Local: {}", block.getHeight(),
-							localBest.getHeight());
+							localBestStored.getHeight());
 					result = IngestionResult.GAP_DETECTED;
 					return result;
 				} else {

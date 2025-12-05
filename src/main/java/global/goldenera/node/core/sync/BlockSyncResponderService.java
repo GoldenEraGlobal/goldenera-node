@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
@@ -64,12 +65,14 @@ public class BlockSyncResponderService {
 		List<BlockHeader> headersToSend = new ArrayList<>();
 
 		long findAncestorStart = System.currentTimeMillis();
-		Optional<BlockHeader> commonAncestorOpt = chainQueryService
+		// findCommonAncestor now returns Optional<StoredBlock>
+		Optional<StoredBlock> commonAncestorOpt = chainQueryService
 				.findCommonAncestor(new LinkedHashSet<>(locators));
 		long findAncestorTime = System.currentTimeMillis() - findAncestorStart;
 
 		if (commonAncestorOpt.isPresent()) {
-			BlockHeader ancestor = commonAncestorOpt.get();
+			StoredBlock ancestor = commonAncestorOpt.get();
+			// Use StoredBlock.getHeight() - pre-computed
 			long startHeight = ancestor.getHeight() + 1;
 			if (startHeight == 0)
 				startHeight = 1;
@@ -77,20 +80,25 @@ public class BlockSyncResponderService {
 			int limit = batchSize > 0 ? Math.min(batchSize, 2000) : 500;
 			long endHeight = startHeight + limit - 1; // -1 because range is inclusive
 
-			// Use header instead of full block for stopHash check
+			// Use header-only for stopHash check
 			if (stopHash != null) {
-				Optional<BlockHeader> stopHeader = chainQueryService.getBlockHeaderByHash(stopHash);
-				if (stopHeader.isPresent()) {
-					endHeight = Math.min(endHeight, stopHeader.get().getHeight());
+				Optional<StoredBlock> stopBlock = chainQueryService.getStoredBlockHeaderByHash(stopHash);
+				if (stopBlock.isPresent()) {
+					endHeight = Math.min(endHeight, stopBlock.get().getHeight());
 				}
 			}
 
-			// Use latest stored block height (already cached)
-			long myTipHeight = chainQueryService.getLatestBlockOrThrow().getHeight();
+			// Use latest block height directly (cached, no full block load)
+			long myTipHeight = chainQueryService.getLatestBlockHeight().orElse(0L);
 			endHeight = Math.min(endHeight, myTipHeight);
 
 			long headersStart = System.currentTimeMillis();
-			headersToSend = chainQueryService.findHeadersByHeightRange(startHeight, endHeight);
+			// Get partial StoredBlocks and extract BlockHeaders for P2P protocol
+			List<StoredBlock> storedBlocks = chainQueryService.findStoredBlockHeadersByHeightRange(startHeight,
+					endHeight);
+			headersToSend = storedBlocks.stream()
+					.map(sb -> sb.getBlock().getHeader())
+					.collect(Collectors.toList());
 			long headersTime = System.currentTimeMillis() - headersStart;
 
 			long totalTime = System.currentTimeMillis() - start;
@@ -120,6 +128,7 @@ public class BlockSyncResponderService {
 		List<StoredBlock> blocks = chainQueryService.getStoredBlocksByHashes(hashes);
 
 		// Extract transaction lists, maintaining order
+		// Use StoredBlock.getHash() for comparison (pre-computed, not recalculated)
 		List<List<Tx>> bodies = new ArrayList<>(hashes.size());
 		int blockIdx = 0;
 		for (Hash hash : hashes) {
