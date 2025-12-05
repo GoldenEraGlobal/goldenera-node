@@ -87,6 +87,25 @@ public class BlockchainApiV1 {
                 .orElseThrow(() -> new GENotFoundException("Block not found")));
     }
 
+    @GetMapping("block-hash/by-height/{height}")
+    public ResponseEntity<Hash> getBlockHashByHeight(@PathVariable Long height) {
+        return ResponseEntity.ok(chainQuery.getBlockHashByHeight(height)
+                .orElseThrow(() -> new GENotFoundException("Block not found at height " + height)));
+    }
+
+    @GetMapping("block-height/by-hash/{hash}")
+    public ResponseEntity<Long> getBlockHeightByHash(@PathVariable Hash hash) {
+        return ResponseEntity.ok(chainQuery.getStoredBlockHeaderByHash(hash)
+                .map(sb -> sb.getHeight())
+                .orElseThrow(() -> new GENotFoundException("Block not found for hash " + hash)));
+    }
+
+    @GetMapping("latest-height")
+    public ResponseEntity<Long> getLatestBlockHeight() {
+        return ResponseEntity.ok(chainQuery.getLatestBlockHeight()
+                .orElseThrow(() -> new GENotFoundException("No blocks found")));
+    }
+
     @GetMapping("block-header/by-hash/{hash}")
     public ResponseEntity<BlockHeader> getBlockHeaderByHash(@PathVariable Hash hash) {
         return ResponseEntity.ok(chainQuery.getStoredBlockHeaderByHash(hash)
@@ -151,6 +170,12 @@ public class BlockchainApiV1 {
     @GetMapping("tx/by-hash/{hash}/confirmations")
     public ResponseEntity<Long> getTransactionConfirmations(@PathVariable Hash hash) {
         return ResponseEntity.ok(chainQuery.getTransactionConfirmations(hash)
+                .orElseThrow(() -> new GENotFoundException("Transaction not found or not in canonical chain")));
+    }
+
+    @GetMapping("tx/by-hash/{hash}/block-height")
+    public ResponseEntity<Long> getTransactionBlockHeight(@PathVariable Hash hash) {
+        return ResponseEntity.ok(chainQuery.getTransactionBlockHeight(hash)
                 .orElseThrow(() -> new GENotFoundException("Transaction not found or not in canonical chain")));
     }
 
