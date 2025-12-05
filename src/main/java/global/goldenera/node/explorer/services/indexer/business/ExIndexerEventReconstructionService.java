@@ -94,6 +94,13 @@ public class ExIndexerEventReconstructionService {
 
                 Hash startStateRoot = prevBlock.getHeader().getStateRootHash();
 
+                block.getTxs().parallelStream().forEach(tx -> {
+                        // Warmup cache
+                        tx.getHash();
+                        tx.getSize();
+                        tx.getSender();
+                });
+
                 // 1. Create WorldState (Validation Mode = No Journal, Initial State Capture ON)
                 WorldState worldState = worldStateFactory.createForValidation(startStateRoot);
                 NetworkParamsState params = worldState.getParams();

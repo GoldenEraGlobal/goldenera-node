@@ -44,7 +44,7 @@ public class BlockchainBlockHeaderMapper {
                 in.getBlock().getHeader(),
                 new BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1(
                         in.getHash(),
-                        in.getSize(),
+                        in.getBlockSize(),
                         in.getTxCount()));
     }
 

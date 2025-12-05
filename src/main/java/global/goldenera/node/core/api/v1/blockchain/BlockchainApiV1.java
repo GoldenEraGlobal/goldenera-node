@@ -129,13 +129,13 @@ public class BlockchainApiV1 {
     // Full Block endpoints
     // ========================
 
-    @GetMapping("block/by-height/{height}/txs")
-    public ResponseEntity<List<Tx>> getBlockTxsByHeight(
-            @PathVariable Long height,
+    @GetMapping("block/by-hash/{hash}/txs")
+    public ResponseEntity<List<Tx>> getBlockTxsByHash(
+            @PathVariable Hash hash,
             @RequestParam(required = true) Integer fromIndex,
             @RequestParam(required = true) Integer toIndex) {
         PaginationUtil.validateRangeRequest(fromIndex, toIndex, MAX_TX_RANGE);
-        List<Tx> txs = chainQuery.getStoredBlockByHeight(height)
+        List<Tx> txs = chainQuery.getStoredBlockByHash(hash)
                 .map(sb -> sb.getBlock().getTxs())
                 .orElseThrow(() -> new GENotFoundException("Block not found"));
         return ResponseEntity.ok(PaginationUtil.getListRange(txs, fromIndex, toIndex));

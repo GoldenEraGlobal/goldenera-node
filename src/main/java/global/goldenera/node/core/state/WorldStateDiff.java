@@ -23,10 +23,13 @@
  */
 package global.goldenera.node.core.state;
 
+import org.springframework.modulith.NamedInterface;
+
 import global.goldenera.node.shared.consensus.state.StateDiff;
 import lombok.Value;
 
 @Value
+@NamedInterface("world-state-diff")
 public class WorldStateDiff<T> implements StateDiff<T> {
 	T oldValue;
 	T newValue;
