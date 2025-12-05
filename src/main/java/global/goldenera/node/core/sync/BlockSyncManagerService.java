@@ -235,6 +235,13 @@ public class BlockSyncManagerService {
 
 			log.info("Downloaded {} headers in {}ms", headersToSync.size(), headerTime);
 
+			// Validate headers in parallel AND warm up lazy getters (hash, size)
+			// BlockHeaderImpl caches these values internally after first call
+			long validateStart = System.currentTimeMillis();
+			validateBatch(headersToSync);
+			long validateTime = System.currentTimeMillis() - validateStart;
+			log.info("Validated {} headers in {}ms", headersToSync.size(), validateTime);
+
 			long bodyStart = System.currentTimeMillis();
 			List<StoredBlock> newChainBlocks = downloadAndPersistBodies(peer, headersToSync);
 			long bodyTime = System.currentTimeMillis() - bodyStart;
@@ -264,8 +271,9 @@ public class BlockSyncManagerService {
 			registry.counter("blockchain.sync.blocks_downloaded").increment(newChainBlocks.size());
 			return true;
 		} catch (Exception e) {
-			log.warn("Sync failed with peer {}: {}", peer.getIdentity(), e.getMessage());
-			peer.disconnect("Sync failed: " + e.getMessage());
+			String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+			log.warn("Sync failed with peer {}: {}", peer.getIdentity(), errorMsg);
+			peer.disconnect("Sync failed: " + errorMsg);
 			peerReputationService.recordFailure(peer.getIdentity());
 			return false;
 		} finally {
@@ -283,6 +291,9 @@ public class BlockSyncManagerService {
 			log.warn("SLOW getLocatorHashes: {}ms for {} locators at height {}",
 					locatorTime, currentLocators.size(), localBest.getHeight());
 		}
+
+		// Cache for the last header hash across batches (to avoid recalculating)
+		Hash lastCachedHash = null;
 
 		while (allHeaders.size() < SYNC_CHUNK_SIZE_HEADERS) {
 			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
@@ -306,33 +317,37 @@ public class BlockSyncManagerService {
 				if (batch == null || batch.isEmpty())
 					break;
 
+				// Cache previous hash to avoid repeated getHash() calls
 				Hash expectedPrev = (allHeaders.isEmpty()) ? null
-						: allHeaders.get(allHeaders.size() - 1).getHash();
+						: lastCachedHash; // Use cached hash from previous iteration
 
 				// Validate first header connects to something we have
 				if (allHeaders.isEmpty() && !batch.isEmpty()) {
 					Hash firstParent = batch.get(0).getPreviousHash();
 					if (!chainQueryService.hasBlockData(firstParent)) {
-						throw new GEValidationException("Peer sent header " + batch.get(0).getHash()
+						throw new GEValidationException("Peer sent header at height " + batch.get(0).getHeight()
 								+ " whose parent " + firstParent + " is missing from our DB");
 					}
 				}
 
+				// Validate linkage and compute hashes once per header
+				Hash currentHash = null;
 				for (BlockHeader h : batch) {
 					if (expectedPrev != null && !h.getPreviousHash().equals(expectedPrev)) {
 						throw new GEValidationException("Broken header linkage");
 					}
-					expectedPrev = h.getHash();
+					currentHash = h.getHash(); // Compute once, cache for next iteration
+					expectedPrev = currentHash;
 				}
 
 				allHeaders.addAll(batch);
+				lastCachedHash = currentHash; // Save for next batch's expectedPrev
 
-				BlockHeader lastHeader = batch.get(batch.size() - 1);
-				if (lastHeader.getHash().equals(stopHash) || batch.size() < remaining)
+				if (lastCachedHash.equals(stopHash) || batch.size() < remaining)
 					break;
 
 				currentLocators.clear();
-				currentLocators.add(lastHeader.getHash());
+				currentLocators.add(lastCachedHash); // Use cached hash
 
 			} catch (Exception e) {
 				pendingHeaderRequests.remove(reqId);
@@ -340,19 +355,24 @@ public class BlockSyncManagerService {
 			}
 		}
 
-		if (!allHeaders.isEmpty()) {
-			validateBatch(allHeaders);
-		}
-
 		return allHeaders;
 	}
 
+	/**
+	 * Validates headers in parallel AND warms up lazy getters (hash, size).
+	 * BlockHeaderImpl caches these values internally after first call,
+	 * so subsequent calls to getHash()/getSize() are O(1).
+	 */
 	private void validateBatch(List<BlockHeader> headers) {
-		Map<Long, Hash> contextMap = new java.util.HashMap<>();
-		for (BlockHeader h : headers) {
-			contextMap.put(h.getHeight(), h.getHash());
-		}
+		// Build contextMap - this also warms up getHash() for each header
+		Map<Long, Hash> contextMap = new ConcurrentHashMap<>();
+
+		// Parallel: compute hash AND size for each header (warms up lazy cache)
+		// Also validate PoW in parallel
 		headers.parallelStream().forEach(h -> {
+			h.getHash(); // Warm up hash cache
+			h.getSize(); // Warm up size cache
+			contextMap.put(h.getHeight(), h.getHash()); // Now cached, O(1)
 			blockValidationService.validateHeader(h, contextMap);
 		});
 	}
@@ -361,6 +381,8 @@ public class BlockSyncManagerService {
 		List<StoredBlock> allDownloadedBlocks = new ArrayList<>();
 		if (headers.isEmpty())
 			return allDownloadedBlocks;
+
+		// Header hashes are already cached from validateBatch()
 
 		Hash firstParentHash = headers.get(0).getPreviousHash();
 		BigInteger currentCumulativeDifficulty = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash)
@@ -377,7 +399,8 @@ public class BlockSyncManagerService {
 				int startIdx = nextBatchIndex;
 				int endIdx = Math.min(nextBatchIndex + BODY_DOWNLOAD_BATCH_SIZE, headers.size());
 				List<BlockHeader> batchHeaders = headers.subList(startIdx, endIdx);
-				List<Hash> hashes = batchHeaders.stream().map(h -> h.getHash()).collect(Collectors.toList());
+				// getHash() is now O(1) - cached from validateBatch()
+				List<Hash> hashes = batchHeaders.stream().map(BlockHeader::getHash).collect(Collectors.toList());
 
 				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
 				long reqId = peer.reserveRequestId();
@@ -405,12 +428,13 @@ public class BlockSyncManagerService {
 					Long height = header.getHeight();
 					List<Tx> txs = bodies.get(j);
 
+					txs.parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
+
 					Hash calculatedRoot = TxRootUtil.txRootHash(txs);
 					if (!calculatedRoot.equals(header.getTxRootHash())) {
 						throw new GEValidationException("Invalid Merkle Root at height " + height);
 					}
 
-					txs.parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
 					currentCumulativeDifficulty = currentCumulativeDifficulty.add(header.getDifficulty());
 
 					Block block = BlockImpl.builder()
@@ -424,9 +448,9 @@ public class BlockSyncManagerService {
 							.receivedAt(block.getHeader().getTimestamp())
 							.receivedFrom(peer.getIdentity())
 							.connectedSource(ConnectedSource.REORG)
-							.hash(block.getHash())
+							.hash(header.getHash()) // Cached from validateBatch(), O(1)
 							.transactionIndex(StoredBlock.computeTransactionIndex(block))
-							.blockSize(block.getSize())
+							.blockSize(header.getSize()) // Cached from validateBatch(), O(1)
 							.build();
 
 					allDownloadedBlocks.add(storedBlock);
@@ -477,14 +501,16 @@ public class BlockSyncManagerService {
 	 * Logic for HEADERS-FIRST propagation.
 	 */
 	private void handleBroadcastHeader(RemotePeer peer, BlockHeader header) {
-		if (chainQueryService.getStoredBlockByHash(header.getHash()).isPresent()) {
+		Hash headerHash = header.getHash();
+
+		if (chainQueryService.getStoredBlockByHash(headerHash).isPresent()) {
 			return;
 		}
-		if (blockIngestionService.isOrphan(header.getHash())) {
+		if (blockIngestionService.isOrphan(headerHash)) {
 			return;
 		}
 		// Check if we are already downloading this block
-		if (!pendingBroadcastDownloads.add(header.getHash())) {
+		if (!pendingBroadcastDownloads.add(headerHash)) {
 			log.debug("Already downloading broadcast block #{}", header.getHeight());
 			return;
 		}
@@ -501,7 +527,7 @@ public class BlockSyncManagerService {
 				// Block is more than 10 blocks behind - too old to care about
 				log.debug("Ignoring old broadcast block #{} (local tip: {})",
 						header.getHeight(), localBestStored.getHeight());
-				pendingBroadcastDownloads.remove(header.getHash());
+				pendingBroadcastDownloads.remove(headerHash);
 				return;
 			}
 
@@ -515,14 +541,14 @@ public class BlockSyncManagerService {
 					// Gap detected - trigger sync instead of trying to download single block
 					log.debug("Broadcast block #{} has missing parent, will sync", header.getHeight());
 					signalQueue.offer(new Object());
-					pendingBroadcastDownloads.remove(header.getHash());
+					pendingBroadcastDownloads.remove(headerHash);
 					return;
 				}
 			} else if (!parentExists) {
 				// Block is at or below our height AND parent doesn't exist
 				// This is an orphan on a different chain - ignore it
 				log.debug("Ignoring broadcast block #{} - no parent and not extending tip", header.getHeight());
-				pendingBroadcastDownloads.remove(header.getHash());
+				pendingBroadcastDownloads.remove(headerHash);
 				return;
 			}
 
@@ -535,7 +561,7 @@ public class BlockSyncManagerService {
 
 			log.debug("Headers-First: Requesting body for #{} from {}", header.getHeight(), peer.getIdentity());
 
-			peer.sendGetBlockBodies(new ArrayList<>(List.of(header.getHash())), reqId);
+			peer.sendGetBlockBodies(new ArrayList<>(List.of(headerHash)), reqId);
 
 			future.orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
 					.thenAcceptAsync(bodies -> {
@@ -580,11 +606,11 @@ public class BlockSyncManagerService {
 						return null;
 					})
 					.whenComplete((v, e) -> {
-						pendingBroadcastDownloads.remove(header.getHash());
+						pendingBroadcastDownloads.remove(headerHash);
 					});
 		} catch (Exception e) {
 			log.error("Failed to handle broadcast header", e);
-			pendingBroadcastDownloads.remove(header.getHash());
+			pendingBroadcastDownloads.remove(headerHash);
 		}
 	}
 

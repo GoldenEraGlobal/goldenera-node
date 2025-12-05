@@ -28,6 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -72,10 +73,10 @@ public class BlockValidator {
 	 * Heavy PoW check (Header only).
 	 */
 	public void validateHeader(@NonNull BlockHeader header) {
-		validateHeader(header, java.util.Collections.emptyMap());
+		validateHeader(header, Collections.emptyMap());
 	}
 
-	public void validateHeader(@NonNull BlockHeader header, @NonNull java.util.Map<Long, Hash> batchContext) {
+	public void validateHeader(@NonNull BlockHeader header, @NonNull Map<Long, Hash> batchContext) {
 		try {
 			// 1. Header Size sanity check
 			checkArgument(header.getSize() <= Constants.MAX_HEADER_SIZE,

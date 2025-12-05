@@ -156,6 +156,7 @@ public class BlockIngestionService {
 		blockValidationService.validateHeaderContext(childBlock.getHeader(), parentBlock.getHeader(),
 				params);
 		childBlock.getTxs().parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
+
 		StateProcessor.ExecutionResult result = stateProcessor.executeTransactions(worldState,
 				new SimpleBlock(childBlock), childBlock.getTxs(), params);
 
