@@ -16,6 +16,7 @@ To run a node successfully, your system **must** meet the following minimum requ
 
 ---
 
+
 ## 🛠️ Prerequisites
 
 Before proceeding with the installation, ensure that **Docker** and the **Docker Compose** plugin are installed on your system.
