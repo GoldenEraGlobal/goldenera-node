@@ -34,6 +34,7 @@ import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.processing.TxExecutionContext;
 import global.goldenera.node.core.state.WorldState;
+import global.goldenera.node.shared.consensus.state.TokenState;
 import global.goldenera.node.shared.consensus.state.impl.AccountBalanceStateImpl;
 import global.goldenera.node.shared.consensus.state.impl.TokenStateImpl;
 
@@ -60,15 +61,17 @@ public class TransferHandler implements TxHandler {
 		Address tokenAddr = tx.getTokenAddress();
 		Wei amount = tx.getAmount();
 
+		// Validate token exists
+		TokenState tokenState = state.getToken(tokenAddr);
+		checkArgument(tokenState.exists(), "Token does not exist");
+
 		AccountBalanceStateImpl senderBal = (AccountBalanceStateImpl) state.getBalance(sender, tokenAddr);
 		AccountBalanceStateImpl newSenderBal = senderBal.debit(amount, block.getHeight(), block.getTimestamp());
 		state.setBalance(sender, tokenAddr, newSenderBal);
 
 		if (recipient.equals(Address.ZERO)) {
-			TokenStateImpl tokenState = (TokenStateImpl) state.getToken(tokenAddr);
-			checkArgument(tokenState.exists(), "Cannot burn token that does not exist in state");
 			checkArgument(tokenState.isUserBurnable(), "Token is not burnable");
-			TokenStateImpl newTokenState = tokenState.burn(
+			TokenStateImpl newTokenState = ((TokenStateImpl) tokenState).burn(
 					amount,
 					tx.getHash(),
 					block.getHeight(),
