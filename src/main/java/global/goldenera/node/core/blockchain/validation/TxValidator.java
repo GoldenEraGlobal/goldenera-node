@@ -59,7 +59,7 @@ public class TxValidator {
 	public void validateStateless(@NonNull Tx tx) {
 		try {
 			// 1. Basic Size & Limits (Cheap)
-			if (tx.getSize() > Constants.MAX_TX_SIZE_IN_BYTES) {
+			if (tx.getSize() > Constants.getSettings().maxTxSizeInBytes()) {
 				throw new GEValidationException("Tx too large: " + tx.getSize());
 			}
 

@@ -27,10 +27,8 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.tuweni.units.ethereum.Wei;
-
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.cryptoj.utils.Amounts;
 import global.goldenera.node.shared.utils.VersionUtil;
 import lombok.experimental.UtilityClass;
@@ -38,70 +36,153 @@ import lombok.experimental.UtilityClass;
 @UtilityClass
 public class Constants {
 
-    // Node config
+    // =============================================
+    // GLOBAL CONSTANTS (same for all networks)
+    // =============================================
     public static final String NODE_VERSION = VersionUtil.getApplicationVersion();
     public static final long P2P_PROTOCOL_VERSION = 1;
 
-    // Directory config
-    public static final String DIRECTORY_HOST = "https://directory.goldenera.global";
-    public static final Address DIRECTORY_IDENTITY_ADDRESS = Address
-            .fromHexString("0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4");
-
-    // General config
-    public static final long MAX_HEADER_SIZE = 600; // 600 bytes
-    public static final long MAX_TX_SIZE_IN_BYTES = 100_000; // 100KB
-    public static final long MAX_BLOCK_SIZE_IN_BYTES = 5_000_000; // 5MB
-    public static final long MAX_TX_COUNT_PER_BLOCK = 100_000; // 100K transactions
-    public static final long BIP_EXPIRATION_PERIOD_MS = 86400000; // 24 hours
-    public static final long BIP_APPROVAL_THRESHOLD_BPS = 5100; // 51%
-
-    // Network parameters
-    public static final Wei GENESIS_NETWORK_BLOCK_REWARD = Amounts.tokens(1);
-    public static final Address GENESIS_NETWORK_BLOCK_REWARD_POOL_ADDRESS = Address
-            .fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76");
-    public static final long GENESIS_NETWORK_TARGET_MINING_TIME_MS = 15000; // 15 seconds
-    public static final long GENESIS_NETWORK_ASERT_HALF_LIFE_BLOCKS = 15;
-    public static final BigInteger GENESIS_NETWORK_MIN_DIFFICULTY = BigInteger.valueOf(1000);
-    public static final Wei GENESIS_NETWORK_MIN_TX_BASE_FEE = Amounts.tokensDecimal("0.0001");
-    public static final Wei GENESIS_NETWORK_MIN_TX_BYTE_FEE = Amounts.tokensDecimal("0.000001");
-
-    // Genesis authorities
-    public static final List<Address> GENESIS_AUTHORITY_ADDRESSES = List.of(
-            Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"));
-
-    // Block
-    public static final long GENESIS_BLOCK_TIMESTAMP = 1764806403777L;
-    public static final BigInteger GENESIS_BLOCK_DIFFICULTY = GENESIS_NETWORK_MIN_DIFFICULTY;
-
-    // Native token
-    public static final String GENESIS_NATIVE_TOKEN_NAME = "GoldenEraCoin";
-    public static final String GENESIS_NATIVE_TOKEN_TICKER = "GEC";
-    public static final int GENESIS_NATIVE_TOKEN_DECIMALS = 9;
-    public static final String GENESIS_NATIVE_TOKEN_WEBSITE = "https://goldenera.global";
-    public static final String GENESIS_NATIVE_TOKEN_LOGO = "https://goldenera.global/TokenTicker/logo.png";
-    public static final boolean GENESIS_NATIVE_TOKEN_USER_BURNABLE = false;
-
-    // Fork config
-    public static final Map<ForkName, Long> FORK_ACTIVATION_BLOCKS = Map.of(
-            ForkName.GENESIS, 0L);
-
-    // Checkpoints
-    public static final Map<Long, Hash> BLOCK_CHECKPOINTS = Map.of();
-
-    // RandomX
-    public static final long RANDOMX_EPOCH_LENGTH = 2048;
-    public static final String RANDOMX_GENESIS_KEY = "GLDNR_RNDX_GENESIS_KEY";
-    public static final int RANDOMX_BATCH_SIZE = 32768;
-
+    // =============================================
+    // FORK NAMES
+    // =============================================
     public enum ForkName {
         GENESIS;
     }
 
+    // =============================================
+    // NETWORK CONFIGURATIONS
+    // =============================================
+    public static final Map<Network, NetworkSettings> NETWORK_SETTINGS = Map.of(
+            Network.MAINNET, NetworkSettings.builder()
+                    // Directory configuration
+                    .directoryHost("https://directory.goldenera.global")
+                    .directoryIdentityAddress(
+                            Address.fromHexString("0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"))
+                    // Size limits
+                    .maxHeaderSizeInBytes(500L)
+                    .maxTxSizeInBytes(100_000L)
+                    .maxBlockSizeInBytes(5_000_000L)
+                    .maxTxCountPerBlock(100_000L)
+                    // BIP configuration
+                    .bipExpirationPeriodMs(86400000L)
+                    .bipApprovalThresholdBps(5100L)
+                    // Genesis network parameters
+                    .genesisNetworkBlockReward(Amounts.tokens(1))
+                    .genesisNetworkBlockRewardPoolAddress(
+                            Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"))
+                    .genesisNetworkTargetMiningTimeMs(15000L)
+                    .genesisNetworkAsertHalfLifeBlocks(15L)
+                    .genesisNetworkMinDifficulty(BigInteger.valueOf(1000))
+                    .genesisNetworkMinTxBaseFee(Amounts.tokensDecimal("0.0001"))
+                    .genesisNetworkMinTxByteFee(Amounts.tokensDecimal("0.000001"))
+                    // Genesis authorities
+                    .genesisAuthorityAddresses(List.of(
+                            Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76")))
+                    // Genesis block
+                    .genesisBlockTimestamp(1764806403777L)
+                    .genesisBlockDifficulty(BigInteger.valueOf(1000))
+                    // Native token
+                    .genesisNativeTokenName("GoldenEraCoin")
+                    .genesisNativeTokenTicker("GEC")
+                    .genesisNativeTokenDecimals(9)
+                    .genesisNativeTokenWebsite("https://goldenera.global")
+                    .genesisNativeTokenLogo("https://goldenera.global/TokenTicker/logo.png")
+                    .genesisNativeTokenUserBurnable(false)
+                    // Forks
+                    .forkActivationBlocks(Map.of(ForkName.GENESIS, 0L))
+                    // Checkpoints
+                    .blockCheckpoints(Map.of())
+                    // RandomX
+                    .randomXEpochLength(2048L)
+                    .randomXGenesisKey("GLDNR_RNDX_GENESIS_KEY")
+                    .randomXBatchSize(32768)
+                    .build(),
+
+            Network.TESTNET, NetworkSettings.builder()
+                    // Directory configuration
+                    .directoryHost("https://directory.goldenera.global")
+                    .directoryIdentityAddress(
+                            Address.fromHexString("0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"))
+                    // Size limits
+                    .maxHeaderSizeInBytes(500L)
+                    .maxTxSizeInBytes(100_000L)
+                    .maxBlockSizeInBytes(5_000_000L)
+                    .maxTxCountPerBlock(100_000L)
+                    // BIP configuration
+                    .bipExpirationPeriodMs(86400000L)
+                    .bipApprovalThresholdBps(5100L)
+                    // Genesis network parameters
+                    .genesisNetworkBlockReward(Amounts.tokens(5))
+                    .genesisNetworkBlockRewardPoolAddress(
+                            Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"))
+                    .genesisNetworkTargetMiningTimeMs(15000L)
+                    .genesisNetworkAsertHalfLifeBlocks(25L)
+                    .genesisNetworkMinDifficulty(BigInteger.valueOf(500))
+                    .genesisNetworkMinTxBaseFee(Amounts.tokensDecimal("0.0001"))
+                    .genesisNetworkMinTxByteFee(Amounts.tokensDecimal("0.000001"))
+                    // Genesis authorities
+                    .genesisAuthorityAddresses(List.of(
+                            Address.fromHexString("0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76")))
+                    // Genesis block
+                    .genesisBlockTimestamp(1764806403777L)
+                    .genesisBlockDifficulty(BigInteger.valueOf(500))
+                    // Native token
+                    .genesisNativeTokenName("TestEraCoin")
+                    .genesisNativeTokenTicker("tGEC")
+                    .genesisNativeTokenDecimals(9)
+                    .genesisNativeTokenWebsite("https://goldenera.global")
+                    .genesisNativeTokenLogo("https://goldenera.global/TokenTicker/logo.png")
+                    .genesisNativeTokenUserBurnable(false)
+                    // Forks
+                    .forkActivationBlocks(Map.of(ForkName.GENESIS, 0L))
+                    // Checkpoints
+                    .blockCheckpoints(Map.of())
+                    // RandomX
+                    .randomXEpochLength(10240L)
+                    .randomXGenesisKey("GLDNR_RNDX_GENESIS_KEY")
+                    .randomXBatchSize(32768)
+                    .build());
+
+    // =============================================
+    // CONVENIENCE METHODS
+    // =============================================
+
+    /**
+     * Get the currently active network.
+     * Reads from application.properties (ge.general.network) via Spring,
+     * with fallback to NETWORK environment variable for early initialization.
+     */
+    public static Network getActiveNetwork() {
+        return NetworkSettingsProvider.getActiveNetwork();
+    }
+
+    /**
+     * Get settings for the currently active network.
+     */
+    public static NetworkSettings getSettings() {
+        return NETWORK_SETTINGS.get(getActiveNetwork());
+    }
+
+    /**
+     * Get settings for a specific network.
+     */
+    public static NetworkSettings getSettings(Network network) {
+        return NETWORK_SETTINGS.get(network);
+    }
+
+    /**
+     * Check if a fork is active at the given block height for the active network.
+     */
     public static boolean isForkActive(ForkName fork, long blockHeight) {
-        Long activationHeight = FORK_ACTIVATION_BLOCKS.get(fork);
-        if (activationHeight == null) {
-            return false;
-        }
-        return blockHeight >= activationHeight;
+        Long activationHeight = getSettings().forkActivationBlocks().get(fork);
+        return activationHeight != null && blockHeight >= activationHeight;
+    }
+
+    /**
+     * Check if a fork is active at the given block height for a specific network.
+     */
+    public static boolean isForkActive(Network network, ForkName fork, long blockHeight) {
+        Long activationHeight = getSettings(network).forkActivationBlocks().get(fork);
+        return activationHeight != null && blockHeight >= activationHeight;
     }
 }

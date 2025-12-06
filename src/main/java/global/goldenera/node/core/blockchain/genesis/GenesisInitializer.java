@@ -42,6 +42,7 @@ import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.enums.BlockVersion;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.node.Constants;
+import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.state.BlockStateTransitions;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -77,8 +78,9 @@ public class GenesisInitializer {
 			return;
 		}
 		log.warn("Genesis block missing. Initializing from Hardcoded Constants...");
-		Instant timestamp = Instant.ofEpochMilli(Constants.GENESIS_BLOCK_TIMESTAMP);
-		List<Address> authorities = Constants.GENESIS_AUTHORITY_ADDRESSES;
+		NetworkSettings settings = Constants.getSettings();
+		Instant timestamp = Instant.ofEpochMilli(settings.genesisBlockTimestamp());
+		List<Address> authorities = settings.genesisAuthorityAddresses();
 
 		if (authorities.isEmpty()) {
 			throw new GEFailedException("Genesis authorities are empty");
@@ -95,7 +97,7 @@ public class GenesisInitializer {
 				.height(GENESIS_HEIGHT)
 				.timestamp(timestamp)
 				.previousHash(Hash.ZERO)
-				.difficulty(Constants.GENESIS_BLOCK_DIFFICULTY)
+				.difficulty(settings.genesisBlockDifficulty())
 				.txRootHash(txRootHash)
 				.stateRootHash(stateRootHash)
 				.coinbase(Address.ZERO)
@@ -114,17 +116,18 @@ public class GenesisInitializer {
 	}
 
 	private void executeGenesisStateExplicitly(WorldState worldState, List<Address> authorities, Instant timestamp) {
+		NetworkSettings settings = Constants.getSettings();
 		// 1. Network Params
 		NetworkParamsStateImpl params = NetworkParamsStateImpl.builder()
 				.version(NetworkParamsStateVersion.V1)
-				.blockReward(Constants.GENESIS_NETWORK_BLOCK_REWARD)
-				.targetMiningTimeMs(Constants.GENESIS_NETWORK_TARGET_MINING_TIME_MS)
-				.blockRewardPoolAddress(Constants.GENESIS_NETWORK_BLOCK_REWARD_POOL_ADDRESS)
-				.asertHalfLifeBlocks(Constants.GENESIS_NETWORK_ASERT_HALF_LIFE_BLOCKS)
+				.blockReward(settings.genesisNetworkBlockReward())
+				.targetMiningTimeMs(settings.genesisNetworkTargetMiningTimeMs())
+				.blockRewardPoolAddress(settings.genesisNetworkBlockRewardPoolAddress())
+				.asertHalfLifeBlocks(settings.genesisNetworkAsertHalfLifeBlocks())
 				.asertAnchorHeight(GENESIS_HEIGHT)
-				.minDifficulty(Constants.GENESIS_NETWORK_MIN_DIFFICULTY)
-				.minTxBaseFee(Constants.GENESIS_NETWORK_MIN_TX_BASE_FEE)
-				.minTxByteFee(Constants.GENESIS_NETWORK_MIN_TX_BYTE_FEE)
+				.minDifficulty(settings.genesisNetworkMinDifficulty())
+				.minTxBaseFee(settings.genesisNetworkMinTxBaseFee())
+				.minTxByteFee(settings.genesisNetworkMinTxByteFee())
 				.currentAuthorityCount(authorities.size())
 				.updatedByTxHash(Hash.ZERO)
 				.updatedAtBlockHeight(GENESIS_HEIGHT)
@@ -135,12 +138,12 @@ public class GenesisInitializer {
 		// 2. Native Token
 		TokenStateImpl token = TokenStateImpl.builder()
 				.version(TokenStateVersion.V1)
-				.name(Constants.GENESIS_NATIVE_TOKEN_NAME)
-				.smallestUnitName(Constants.GENESIS_NATIVE_TOKEN_TICKER)
-				.numberOfDecimals(Constants.GENESIS_NATIVE_TOKEN_DECIMALS)
-				.websiteUrl(Constants.GENESIS_NATIVE_TOKEN_WEBSITE)
-				.logoUrl(Constants.GENESIS_NATIVE_TOKEN_LOGO)
-				.userBurnable(Constants.GENESIS_NATIVE_TOKEN_USER_BURNABLE)
+				.name(settings.genesisNativeTokenName())
+				.smallestUnitName(settings.genesisNativeTokenTicker())
+				.numberOfDecimals(settings.genesisNativeTokenDecimals())
+				.websiteUrl(settings.genesisNativeTokenWebsite())
+				.logoUrl(settings.genesisNativeTokenLogo())
+				.userBurnable(settings.genesisNativeTokenUserBurnable())
 				.maxSupply(null) // Native token has no max supply
 				.totalSupply(Wei.ZERO)
 				.originTxHash(Hash.ZERO)

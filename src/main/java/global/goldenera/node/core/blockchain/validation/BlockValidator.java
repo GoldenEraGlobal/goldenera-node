@@ -79,7 +79,7 @@ public class BlockValidator {
 	public void validateHeader(@NonNull BlockHeader header, @NonNull Map<Long, Hash> batchContext) {
 		try {
 			// 1. Header Size sanity check
-			checkArgument(header.getSize() <= Constants.MAX_HEADER_SIZE,
+			checkArgument(header.getSize() <= Constants.getSettings().getMaxHeaderSizeInBytes(header.getHeight()),
 					"Header size exceeded: %s", header.getSize());
 
 			// 2. Checkpoint (Fast fail)
@@ -158,19 +158,18 @@ public class BlockValidator {
 			checkArgument(block.getHeader().getCoinbase() != null,
 					"Block coinbase address cannot be null");
 
-			// 3. Full Block Size Limit
-			checkArgument(block.getSize() <= Constants.MAX_BLOCK_SIZE_IN_BYTES,
+			List<Tx> txs = block.getTxs();
+			long blockHeight = block.getHeight();
+
+			// 3. Full Block Size Limit (height-aware for fork overrides)
+			checkArgument(txs.size() <= Constants.getSettings().getMaxTxCountPerBlock(blockHeight),
+					"Transaction count exceeded limit: %s (max: %s)",
+					txs.size(), Constants.getSettings().getMaxTxCountPerBlock(blockHeight));
+
+			checkArgument(block.getSize() <= Constants.getSettings().getMaxBlockSizeInBytes(blockHeight),
 					"Block size exceeded limit: %s", block.getSize());
 
-			// 4. Transaction Existence
-			List<Tx> txs = block.getTxs();
-
-			// 5. Transaction Count Limit
-			checkArgument(txs.size() <= Constants.MAX_TX_COUNT_PER_BLOCK,
-					"Transaction count exceeded limit: %s (max: %s)",
-					txs.size(), Constants.MAX_TX_COUNT_PER_BLOCK);
-
-			// 6. MERKLE ROOT CHECK
+			// 4. MERKLE ROOT CHECK
 			Hash calculatedRoot = TxRootUtil.txRootHash(txs);
 			if (!calculatedRoot.equals(block.getHeader().getTxRootHash())) {
 				throw new GEValidationException(String.format(
@@ -178,7 +177,7 @@ public class BlockValidator {
 						block.getHeader().getTxRootHash(), calculatedRoot));
 			}
 
-			// 7. Transaction Validation (Signatures, Formats)
+			// 5. Transaction Validation (Signatures, Formats)
 			txs.parallelStream().forEach(txValidator::validateStateless);
 		} catch (IllegalArgumentException e) {
 			throw new GEValidationException("Full Block Validation failed: " + e.getMessage(), e);

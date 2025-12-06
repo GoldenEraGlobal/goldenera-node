@@ -70,7 +70,7 @@ public class BipCreateHandler implements TxHandler {
 		checkArgument(!state.getBip(bipHash).exists(), "BIP with this hash already exists");
 
 		long currentAuthorityCount = params.getCurrentAuthorityCount();
-		long approvalThresholdBps = Constants.BIP_APPROVAL_THRESHOLD_BPS;
+		long approvalThresholdBps = Constants.getSettings().bipApprovalThresholdBps();
 		checkArgument(currentAuthorityCount > 0, "Cannot create BIP: no authorities are defined");
 
 		long requiredVotes = (currentAuthorityCount * approvalThresholdBps + 9999L) / 10000L;
@@ -96,7 +96,7 @@ public class BipCreateHandler implements TxHandler {
 				.numberOfRequiredVotes(requiredVotes)
 				.approvers(new LinkedHashSet<>())
 				.disapprovers(new LinkedHashSet<>())
-				.expirationTimestamp(block.getTimestamp().plusMillis(Constants.BIP_EXPIRATION_PERIOD_MS))
+				.expirationTimestamp(block.getTimestamp().plusMillis(Constants.getSettings().bipExpirationPeriodMs()))
 				.metadata(metadata)
 				.originTxHash(bipHash)
 				.updatedByTxHash(bipHash)

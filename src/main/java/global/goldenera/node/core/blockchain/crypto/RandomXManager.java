@@ -476,16 +476,16 @@ public class RandomXManager {
 
 	private byte[] calculateSeedForHeight(long height,
 			Function<Long, Optional<byte[]>> seedBlockProvider) {
-		long epoch = height / Constants.RANDOMX_EPOCH_LENGTH;
+		long epoch = height / Constants.getSettings().randomXEpochLength();
 
 		if (epoch == 0) {
-			return Constants.RANDOMX_GENESIS_KEY.getBytes(StandardCharsets.UTF_8);
+			return Constants.getSettings().randomXGenesisKey().getBytes(StandardCharsets.UTF_8);
 		}
 
 		// Standard approach: Use the hash of the block that started the PREVIOUS epoch.
 		// This ensures the seed is unpredictable until that block is mined, preventing
 		// long-range pre-calculation.
-		long seedBlockHeight = (epoch - 1) * Constants.RANDOMX_EPOCH_LENGTH;
+		long seedBlockHeight = (epoch - 1) * Constants.getSettings().randomXEpochLength();
 
 		// Try the provider first (e.g. batch context)
 		Optional<byte[]> seed = seedBlockProvider.apply(seedBlockHeight);

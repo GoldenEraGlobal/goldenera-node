@@ -101,10 +101,11 @@ public class MiningBlockAssemblerService {
 		WorldState worldState = worldStateFactory.createForMining(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
 
-		// Dynamic block size based on mempool utilization
-		long maxBlockSize = calculateDynamicBlockSize();
-
 		long nextHeight = parentBlock.getHeight() + 1;
+
+		// Dynamic block size based on mempool utilization (height-aware for fork
+		// overrides)
+		long maxBlockSize = calculateDynamicBlockSize(nextHeight);
 		long now = Instant.now().toEpochMilli();
 		long timestamp = (now / 1000) * 1000;
 		timestamp = Math.max(timestamp, parentBlock.getHeader().getTimestamp().toEpochMilli() + 1);
@@ -188,10 +189,12 @@ public class MiningBlockAssemblerService {
 	 * Calculates the dynamic block size based on mempool utilization.
 	 * This prevents mining unnecessarily large blocks when there's low demand.
 	 *
+	 * @param blockHeight
+	 *            The target block height (for fork-aware limits)
 	 * @return The target block size in bytes
 	 */
-	private long calculateDynamicBlockSize() {
-		long maxBlockSize = Constants.MAX_BLOCK_SIZE_IN_BYTES;
+	private long calculateDynamicBlockSize(long blockHeight) {
+		long maxBlockSize = Constants.getSettings().getMaxBlockSizeInBytes(blockHeight);
 		long currentMempoolSize = mempoolService.getTransactionCount();
 		long maxMempoolSize = mempoolProperties.getMaxSize();
 

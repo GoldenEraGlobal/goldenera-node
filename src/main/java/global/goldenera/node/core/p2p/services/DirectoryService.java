@@ -168,7 +168,7 @@ public class DirectoryService {
 
 		Hash responseHash = Hash.hash(directoryApiV1Serializer.encodePongV1(response.getPayload()));
 		Signature responseSignature = Signature.wrap(Bytes.fromHexString(response.getSignature()));
-		if (!responseSignature.validate(responseHash, Constants.DIRECTORY_IDENTITY_ADDRESS)) {
+		if (!responseSignature.validate(responseHash, Constants.getSettings().directoryIdentityAddress())) {
 			log.warn("Directory: Response signature is invalid");
 			return;
 		}

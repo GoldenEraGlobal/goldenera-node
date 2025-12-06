@@ -44,11 +44,11 @@ import lombok.extern.slf4j.Slf4j;
 public class CheckpointRegistry {
 
 	public boolean isCheckpoint(long height) {
-		return Constants.BLOCK_CHECKPOINTS.containsKey(height);
+		return Constants.getSettings().blockCheckpoints().containsKey(height);
 	}
 
 	public boolean verifyCheckpoint(long height, Hash hash) {
-		Hash expected = Constants.BLOCK_CHECKPOINTS.get(height);
+		Hash expected = Constants.getSettings().blockCheckpoints().get(height);
 		if (expected == null) {
 			return true;
 		}

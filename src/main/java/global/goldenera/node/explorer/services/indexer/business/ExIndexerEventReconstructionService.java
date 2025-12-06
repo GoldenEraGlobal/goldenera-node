@@ -181,7 +181,7 @@ public class ExIndexerEventReconstructionService {
                 // list,
                 // not the state structure. The actual AuthorityState comes from the stored
                 // genesis.
-                List<Address> authorityAddresses = Constants.GENESIS_AUTHORITY_ADDRESSES;
+                List<Address> authorityAddresses = Constants.getSettings().genesisAuthorityAddresses();
                 Map<Address, AuthorityState> authoritiesToAdd = new LinkedHashMap<>();
                 for (Address authority : authorityAddresses) {
                         AuthorityState authState = genesisState.getAuthority(authority);
