@@ -65,6 +65,7 @@ import global.goldenera.node.core.webhook.entities.Webhook;
 import global.goldenera.node.core.webhook.entities.WebhookEvent;
 import global.goldenera.node.core.webhook.events.WebhookEventsUpdateEvent;
 import global.goldenera.node.core.webhook.events.WebhookUpdateEvent;
+import global.goldenera.node.shared.components.AESGCMComponent;
 import global.goldenera.node.shared.events.ApiKeyUpdatedEvent;
 import global.goldenera.node.shared.exceptions.GERuntimeException;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -99,6 +100,7 @@ public class WebhookDispatchService {
 	final TaskScheduler explorerScheduler;
 	final WebhookCoreService webhookCoreService;
 	final MeterRegistry registry;
+	final AESGCMComponent aesGCMComponent;
 
 	final Map<UUID, WebhookConfig> webhookConfigs = new ConcurrentHashMap<>();
 	final Map<Long, Set<UUID>> apiKeyToWebhookIds = new ConcurrentHashMap<>();
@@ -108,12 +110,13 @@ public class WebhookDispatchService {
 
 	public WebhookDispatchService(@Qualifier("webhookOkHttpClient") OkHttpClient webhookOkHttpClient,
 			ObjectMapper objectMapper, @Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
-			WebhookCoreService webhookCoreService, MeterRegistry registry) {
+			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent) {
 		this.okHttpClient = webhookOkHttpClient;
 		this.objectMapper = objectMapper;
 		this.explorerScheduler = explorerScheduler;
 		this.webhookCoreService = webhookCoreService;
 		this.registry = registry;
+		this.aesGCMComponent = aesGCMComponent;
 	}
 
 	@EventListener(CoreReadyEvent.class)
@@ -152,7 +155,9 @@ public class WebhookDispatchService {
 	}
 
 	private void updateConfigCache(Webhook webhook) {
-		webhookConfigs.put(webhook.getId(), new WebhookConfig(webhook.getUrl(), webhook.getSecretKey()));
+		Bytes secretKey = webhook.getSecretKey();
+		Bytes decryptedSecretKey = aesGCMComponent.decrypt(secretKey);
+		webhookConfigs.put(webhook.getId(), new WebhookConfig(webhook.getUrl(), decryptedSecretKey));
 	}
 
 	// --- EVENT LISTENERS (Update Cache/Index) ---

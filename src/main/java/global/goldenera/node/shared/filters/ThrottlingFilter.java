@@ -21,10 +21,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-/*
- * The MIT License (MIT)
- * ... (License Header) ...
- */
 package global.goldenera.node.shared.filters;
 
 import static lombok.AccessLevel.PRIVATE;
