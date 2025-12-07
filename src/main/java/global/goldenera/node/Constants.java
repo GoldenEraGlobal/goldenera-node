@@ -23,6 +23,8 @@
  */
 package global.goldenera.node;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
 
 import global.goldenera.cryptoj.enums.Network;
@@ -108,9 +110,35 @@ public class Constants {
                         Map.of());
 
         /**
+         * Generates DEV consensus settings with ALL forks activated at block 0.
+         * Used for local development to test all features immediately.
+         * Similar to Ethereum's --dev mode.
+         */
+        private static ConsensusSettings createDevConsensus() {
+                // Activate ALL forks at block 0
+                Map<ForkName, Long> allForksAtZero = new HashMap<>();
+                for (ForkName fork : ForkName.values()) {
+                        allForksAtZero.put(fork, 0L);
+                }
+                return new ConsensusSettings(
+                                Collections.unmodifiableMap(allForksAtZero),
+                                Map.of(), // No checkpoints for dev
+                                Map.of(), // No overrides
+                                Map.of(),
+                                Map.of(),
+                                Map.of());
+        }
+
+        /**
          * Get consensus settings for a specific network.
+         * For dev profile, returns settings with all forks activated at block 0.
          */
         public static ConsensusSettings getConsensusSettings(Network network) {
+                // For dev profile, activate all forks at block 0
+                if ("dev".equals(getActiveProfile())) {
+                        return createDevConsensus();
+                }
+
                 return switch (network) {
                         case MAINNET -> MAINNET_CONSENSUS;
                         case TESTNET -> TESTNET_CONSENSUS;
