@@ -70,13 +70,10 @@ public class WebhookEventApiV1 {
 			@RequestParam int pageSize,
 			@RequestParam(required = false) Sort.Direction direction,
 			@RequestParam(required = false) WebhookEventType type,
-			@RequestParam(required = false) String addressFilter,
-			@RequestParam(required = false) String tokenAddressFilter,
+			@RequestParam(required = false) Address addressFilter,
+			@RequestParam(required = false) Address tokenAddressFilter,
 			Authentication authentication) {
 		ApiKey apiKey = validateAuth(authentication);
-		Address addressFilterInBytes = addressFilter != null ? Address.fromHexString(addressFilter) : null;
-		Address tokenAddressFilterInBytes = tokenAddressFilter != null ? Address.fromHexString(tokenAddressFilter)
-				: null;
 		return webhookEventMapper
 				.map(webhookCoreService.getEventPage(
 						pageNumber,
@@ -85,8 +82,8 @@ public class WebhookEventApiV1 {
 						apiKey,
 						validateWebhookId(webhookId),
 						type,
-						addressFilterInBytes,
-						tokenAddressFilterInBytes));
+						addressFilter,
+						tokenAddressFilter));
 	}
 
 	@PostMapping("subscribe")

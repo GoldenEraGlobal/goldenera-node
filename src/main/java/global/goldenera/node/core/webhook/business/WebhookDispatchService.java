@@ -442,6 +442,8 @@ public class WebhookDispatchService {
 
 	private Map<String, Object> createPayload(WebhookEventType type, Object data, Map<String, Object> metadata) {
 		Map<String, Object> payload = new HashMap<>();
+		int version = 1;
+		payload.put("version", version);
 		payload.put("type", type.name());
 		payload.put("data", data);
 		payload.put("metadata", metadata);
