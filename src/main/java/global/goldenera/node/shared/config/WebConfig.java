@@ -25,10 +25,11 @@ package global.goldenera.node.shared.config;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.format.FormatterRegistry;
@@ -40,7 +41,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.node.shared.config.versioning.ApiVersionInterceptor;
-import global.goldenera.node.shared.config.versioning.VersionAwareHttpMessageConverter;
+import global.goldenera.node.shared.config.versioning.VersionedJsonMessageConverter;
 import global.goldenera.node.shared.converters.ReflectionEnumConverter;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import lombok.experimental.FieldDefaults;
@@ -49,10 +50,18 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class WebConfig implements WebMvcConfigurer {
 
+    ObjectMapper baseObjectMapper;
     ObjectMapper objectMapperV1;
+    // Future: ObjectMapper objectMapperV2;
 
-    public WebConfig(@Qualifier("jsonV1") ObjectMapper objectMapperV1) {
+    public WebConfig(
+            ObjectMapper baseObjectMapper,
+            @Qualifier("jsonV1") ObjectMapper objectMapperV1
+    // Future: @Qualifier("jsonV2") ObjectMapper objectMapperV2
+    ) {
+        this.baseObjectMapper = baseObjectMapper;
         this.objectMapperV1 = objectMapperV1;
+        // Future: this.objectMapperV2 = objectMapperV2;
     }
 
     @Override
@@ -89,19 +98,39 @@ public class WebConfig implements WebMvcConfigurer {
         });
     }
 
-    @Bean
-    public VersionAwareHttpMessageConverter versionAwareHttpMessageConverter() {
-        return new VersionAwareHttpMessageConverter(objectMapperV1);
-    }
-
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
         registry.addInterceptor(new ApiVersionInterceptor());
     }
 
+    /**
+     * Extends (not replaces!) Spring Boot's default message converters.
+     * 
+     * <p>
+     * We add our versioned JSON converter at the FRONT of the list so it takes
+     * priority for JSON responses. All other Spring Boot converters (for byte[],
+     * Resource, String, etc.) remain intact.
+     * 
+     * <p>
+     * This is the KEY difference from configureMessageConverters() which would
+     * REPLACE all converters and break Spring Boot's default handling.
+     */
     @Override
-    public void configureMessageConverters(List<HttpMessageConverter<?>> converters) {
-        converters.removeIf(converter -> converter instanceof MappingJackson2HttpMessageConverter);
-        converters.add(versionAwareHttpMessageConverter());
+    public void extendMessageConverters(List<HttpMessageConverter<?>> converters) {
+        // Build version -> ObjectMapper registry
+        // To add v2: just add another entry here
+        Map<String, ObjectMapper> versionedMappers = new HashMap<>();
+        versionedMappers.put("v1", objectMapperV1);
+        // Future: versionedMappers.put("v2", objectMapperV2);
+
+        // Create our versioned converter
+        VersionedJsonMessageConverter versionedConverter = new VersionedJsonMessageConverter(baseObjectMapper,
+                versionedMappers);
+
+        // Remove the default Jackson converter (we're replacing it with ours)
+        converters.removeIf(c -> c instanceof MappingJackson2HttpMessageConverter);
+
+        // Add our versioned converter at the front (high priority)
+        converters.add(0, versionedConverter);
     }
 }
