@@ -191,4 +191,12 @@ public class Constants {
                 Long activationHeight = getSettings(network).forkActivationBlocks().get(fork);
                 return activationHeight != null && blockHeight >= activationHeight;
         }
+
+        public static ForkName getActiveForkName(Network network, long blockHeight) {
+                return getSettings(network).forkActivationBlocks().entrySet().stream()
+                                .filter(entry -> entry.getValue() <= blockHeight)
+                                .max(Map.Entry.comparingByValue())
+                                .map(Map.Entry::getKey)
+                                .orElse(ForkName.GENESIS);
+        }
 }

@@ -30,6 +30,7 @@ import java.time.Instant;
 
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.node.Constants.ForkName;
 import lombok.Builder;
 import lombok.Value;
 import lombok.experimental.FieldDefaults;
@@ -43,6 +44,7 @@ public class NodeInfoDtoV1 {
 	String version;
 	Address identity;
 	Instant timestamp;
+	ForkName activeFork;
 
 	// Chain state
 	BlockHeader blockHeader;

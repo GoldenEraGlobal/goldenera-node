@@ -27,8 +27,8 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,14 +43,17 @@ import global.goldenera.node.explorer.api.v1.memtransfer.dtos.MemTransferDtoV1_P
 import global.goldenera.node.explorer.api.v1.memtransfer.mappers.MemTransferMapper;
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.explorer.services.core.ExMemTransferCoreService;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.security.GeneralApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@PreAuthorize("hasAuthority('READ_MEMPOOL_TX')")
+@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
 @RequestMapping(value = "api/explorer/v1/mem-transfer")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
+@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 public class MemTransferApiV1 {
 
 	ExMemTransferCoreService exMemTransferCoreService;

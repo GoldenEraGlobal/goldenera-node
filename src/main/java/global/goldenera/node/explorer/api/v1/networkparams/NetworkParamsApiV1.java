@@ -25,7 +25,7 @@ package global.goldenera.node.explorer.api.v1.networkparams;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -33,14 +33,17 @@ import org.springframework.web.bind.annotation.RestController;
 import global.goldenera.node.explorer.api.v1.networkparams.dtos.NetworkParamsDtoV1;
 import global.goldenera.node.explorer.api.v1.networkparams.mappers.NetworkParamsMapper;
 import global.goldenera.node.explorer.services.core.ExNetworkParamsCoreService;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.security.GeneralApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@PreAuthorize("hasAuthority('READ_NETWORK_PARAMS')")
+@GeneralApiSecurity(ApiKeyPermission.READ_NETWORK_PARAMS)
 @RequestMapping(value = "api/explorer/v1/network-params")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
+@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 public class NetworkParamsApiV1 {
 
         ExNetworkParamsCoreService networkParamsCoreService;

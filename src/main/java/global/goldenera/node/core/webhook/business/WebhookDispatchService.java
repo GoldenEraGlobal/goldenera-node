@@ -59,6 +59,8 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.enums.WebhookEventType;
+import global.goldenera.node.core.enums.WebhookTxStatus;
+import global.goldenera.node.core.webhook.business.dtos.WebhookEventDtoV1;
 import global.goldenera.node.core.webhook.core.WebhookCoreService;
 import global.goldenera.node.core.webhook.core.WebhookCoreService.WebhookEventFilter;
 import global.goldenera.node.core.webhook.entities.Webhook;
@@ -91,12 +93,14 @@ import okhttp3.Response;
 @FieldDefaults(level = PRIVATE)
 public class WebhookDispatchService {
 
+	private static final int DEFAULT_DTO_VERSION = 1;
+
 	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 	private static final int MAX_QUEUE_SIZE_PER_WEBHOOK = 10_000;
 	private static final int MAX_BATCH_SIZE = 2000;
 
 	final OkHttpClient okHttpClient;
-	final ObjectMapper objectMapper;
+	final ObjectMapper objectMapperV1;
 	final TaskScheduler explorerScheduler;
 	final WebhookCoreService webhookCoreService;
 	final MeterRegistry registry;
@@ -109,10 +113,11 @@ public class WebhookDispatchService {
 	final Map<UUID, java.util.Queue<Object>> pendingBatches = new ConcurrentHashMap<>();
 
 	public WebhookDispatchService(@Qualifier("webhookOkHttpClient") OkHttpClient webhookOkHttpClient,
-			ObjectMapper objectMapper, @Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
+			@Qualifier("jsonV1") ObjectMapper objectMapperV1,
+			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
 			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent) {
 		this.okHttpClient = webhookOkHttpClient;
-		this.objectMapper = objectMapper;
+		this.objectMapperV1 = objectMapperV1;
 		this.explorerScheduler = explorerScheduler;
 		this.webhookCoreService = webhookCoreService;
 		this.registry = registry;
@@ -157,7 +162,8 @@ public class WebhookDispatchService {
 	private void updateConfigCache(Webhook webhook) {
 		Bytes secretKey = webhook.getSecretKey();
 		Bytes decryptedSecretKey = aesGCMComponent.decrypt(secretKey);
-		webhookConfigs.put(webhook.getId(), new WebhookConfig(webhook.getUrl(), decryptedSecretKey));
+		webhookConfigs.put(webhook.getId(), new WebhookConfig(webhook.getUrl(), decryptedSecretKey,
+				webhook.getDtoVersion() == null ? DEFAULT_DTO_VERSION : webhook.getDtoVersion()));
 	}
 
 	// --- EVENT LISTENERS (Update Cache/Index) ---
@@ -289,24 +295,31 @@ public class WebhookDispatchService {
 	// --- PROCESSING LOGIC ---
 
 	public void processNewBlockEvent(Block block) {
-		Map<String, Object> metadata = new HashMap<>();
-		metadata.put("numOfTxs", block.getTxs().size());
-		metadata.put("size", block.getSize());
-		metadata.put("hash", block.getHash());
-		Map<String, Object> payload = createPayload(WebhookEventType.NEW_BLOCK, block.getHeader(), metadata);
+		WebhookEventDtoV1.NewBlockEvent event = new WebhookEventDtoV1.NewBlockEvent(
+				WebhookEventType.NEW_BLOCK,
+				block.getHeader(),
+				new WebhookEventDtoV1.NewBlockMetadata(block.getTxs().size(), block.getSize(), block.getHash()));
 
 		for (WebhookSubscription sub : newBlockSubscriptions) {
-			queuePayload(sub.getWebhookId(), payload);
+			queuePayload(sub.getWebhookId(), event);
 		}
 	}
 
-	public void processAddressActivityEvent(Block block, Tx tx, TxStatus status) {
-		Map<String, Object> metadata = new HashMap<>();
-		metadata.put("block", block != null ? Map.of("hash", block.getHash(), "height", block.getHeight()) : null);
-		metadata.put("size", tx.getSize());
-		metadata.put("hash", tx.getHash());
-		metadata.put("status", status.name());
-		Map<String, Object> payload = createPayload(WebhookEventType.ADDRESS_ACTIVITY, tx, metadata);
+	public void processAddressActivityEvent(Block block, Tx tx, WebhookTxStatus status) {
+		WebhookEventDtoV1.BlockMetadataInfo blockMetadataInfo = block != null
+				? new WebhookEventDtoV1.BlockMetadataInfo(block.getHash(), block.getHeight())
+				: null;
+
+		WebhookEventDtoV1.AddressActivityMetadata metadataDto = new WebhookEventDtoV1.AddressActivityMetadata(
+				blockMetadataInfo,
+				tx.getSize(),
+				tx.getHash(),
+				status);
+
+		WebhookEventDtoV1.AddressActivityEvent event = new WebhookEventDtoV1.AddressActivityEvent(
+				WebhookEventType.ADDRESS_ACTIVITY,
+				tx,
+				metadataDto);
 
 		Set<Address> involvedAddresses = getAddressesFromTx(tx);
 		Set<UUID> targetWebhookIds = new HashSet<>();
@@ -323,11 +336,11 @@ public class WebhookDispatchService {
 		}
 
 		for (UUID webhookId : targetWebhookIds) {
-			queuePayload(webhookId, payload);
+			queuePayload(webhookId, event);
 		}
 	}
 
-	private void queuePayload(UUID webhookId, Object payload) {
+	private void queuePayload(UUID webhookId, WebhookEventDtoV1 payload) {
 		if (!webhookConfigs.containsKey(webhookId))
 			return;
 
@@ -385,7 +398,7 @@ public class WebhookDispatchService {
 
 	private void sendBatch(WebhookConfig config, UUID webhookId, List<Object> payloads) {
 		try {
-			byte[] jsonBytes = objectMapper.writeValueAsBytes(payloads);
+			byte[] jsonBytes = objectMapperV1.writeValueAsBytes(payloads);
 			String timestamp = String.valueOf(Instant.now().getEpochSecond());
 			String signature = calculateSignature(config.secretKey, timestamp, jsonBytes);
 
@@ -472,6 +485,7 @@ public class WebhookDispatchService {
 	private static class WebhookConfig {
 		String url;
 		Bytes secretKey;
+		int dtoVersion;
 	}
 
 	/** Index entry - only IDs */
@@ -481,9 +495,5 @@ public class WebhookDispatchService {
 	private static class WebhookSubscription {
 		UUID webhookId;
 		Address tokenAddressFilter;
-	}
-
-	public static enum TxStatus {
-		CONFIRMED, PENDING, DROPPED, REVERTED, REPLACED;
 	}
 }

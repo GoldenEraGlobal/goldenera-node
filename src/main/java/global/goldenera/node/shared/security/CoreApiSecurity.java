@@ -21,39 +21,21 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.enums;
+package global.goldenera.node.shared.security;
 
-import static lombok.AccessLevel.PRIVATE;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
-import org.springframework.security.core.GrantedAuthority;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.experimental.FieldDefaults;
+@Target({ ElementType.METHOD, ElementType.TYPE })
+@Retention(RetentionPolicy.RUNTIME)
+public @interface CoreApiSecurity {
 
-@Getter
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum ApiKeyPermission implements GrantedAuthority {
-	READ_ACCOUNT(0), READ_ADDRESS_ALIAS(1), READ_AUTHORITY(
-			2), READ_BIP_STATE(3), READ_BLOCK_HEADER(4), READ_NETWORK_PARAMS(
-					5), READ_MEMPOOL_TX(6), READ_TOKEN(
-							7), READ_TX(8), READ_WRITE_WEBHOOK(9), READ_NODE_METRICS(10), SUBMIT_MEMPOOL_TX(11);
-
-	int code;
-
-	public static ApiKeyPermission fromCode(int code) {
-		for (ApiKeyPermission permission : values()) {
-			if (permission.getCode() == code) {
-				return permission;
-			}
-		}
-		throw new GEFailedException("Failed to get ApiKeyPermission from code: " + code);
-	}
-
-	@Override
-	public String getAuthority() {
-		return this.name();
-	}
+    /**
+     * The specific permission required to access this endpoint.
+     */
+    ApiKeyPermission value();
 }

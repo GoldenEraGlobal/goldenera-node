@@ -56,7 +56,9 @@ import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.security.CoreApiSecurity;
 import global.goldenera.node.shared.utils.PaginationUtil;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -82,12 +84,14 @@ public class BlockchainApiV1 {
     // Block Header endpoints (use partial loading for efficiency)
     // ========================
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("latest-height")
     public ResponseEntity<Long> getLatestBlockHeight() {
         return ResponseEntity.ok(chainQuery.getLatestBlockHeight()
                 .orElseThrow(() -> new GENotFoundException("No blocks found")));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/by-range")
     public ResponseEntity<List<BlockchainBlockHeaderDtoV1>> getBlockHeaderByRange(
             @RequestParam(required = true) long fromHeight,
@@ -97,6 +101,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeaders));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/latest")
     public ResponseEntity<BlockchainBlockHeaderDtoV1> getLatestBlockHeader() {
         StoredBlock storedBlockHeader = chainQuery.getLatestBlockHash()
@@ -105,6 +110,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/by-hash/{hash}")
     public ResponseEntity<BlockchainBlockHeaderDtoV1> getBlockHeaderByHash(@PathVariable Hash hash) {
         StoredBlock storedBlockHeader = chainQuery.getStoredBlockHeaderByHash(hash)
@@ -112,6 +118,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/by-height/{height}")
     public ResponseEntity<BlockchainBlockHeaderDtoV1> getBlockHeaderByHeight(@PathVariable Long height) {
         StoredBlock storedBlockHeader = chainQuery.getStoredBlockHeaderByHeight(height)
@@ -119,12 +126,14 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-hash/by-height/{height}")
     public ResponseEntity<Hash> getBlockHashByHeight(@PathVariable Long height) {
         return ResponseEntity.ok(chainQuery.getBlockHashByHeight(height)
                 .orElseThrow(() -> new GENotFoundException("Block not found at height " + height)));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-height/by-hash/{hash}")
     public ResponseEntity<Long> getBlockHeightByHash(@PathVariable Hash hash) {
         return ResponseEntity.ok(chainQuery.getStoredBlockHeaderByHash(hash)
@@ -136,6 +145,7 @@ public class BlockchainApiV1 {
     // Full Block endpoints
     // ========================
 
+    @CoreApiSecurity(ApiKeyPermission.READ_TX)
     @GetMapping("block/by-hash/{hash}/txs")
     public ResponseEntity<List<BlockchainTxDtoV1>> getBlockTxsByHash(
             @PathVariable Hash hash,
@@ -152,6 +162,7 @@ public class BlockchainApiV1 {
     // Transaction endpoints
     // ========================
 
+    @CoreApiSecurity(ApiKeyPermission.READ_TX)
     @GetMapping("tx/by-hash/{hash}")
     public ResponseEntity<BlockchainTxDtoV1> getTransactionByHash(@PathVariable Hash hash) {
         StoredBlock storedBlock = chainQuery.getTransactionBlock(hash)
@@ -160,12 +171,14 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(blockchainTxMapper.map(storedBlock, hash));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_TX)
     @GetMapping("tx/by-hash/{hash}/confirmations")
     public ResponseEntity<Long> getTransactionConfirmations(@PathVariable Hash hash) {
         return ResponseEntity.ok(chainQuery.getTransactionConfirmations(hash)
                 .orElseThrow(() -> new GENotFoundException("Transaction not found or not in canonical chain")));
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_TX)
     @GetMapping("tx/by-hash/{hash}/block-height")
     public ResponseEntity<Long> getTransactionBlockHeight(@PathVariable Hash hash) {
         return ResponseEntity.ok(chainQuery.getTransactionBlockHeight(hash)
@@ -176,6 +189,7 @@ public class BlockchainApiV1 {
     // WorldState endpoints
     // ========================
 
+    @CoreApiSecurity(ApiKeyPermission.READ_ACCOUNT)
     @GetMapping("worldstate/account/{address}/{tokenAddress}/balance")
     public ResponseEntity<AccountBalanceState> getWorldStateAccountBalance(@PathVariable Address address,
             @PathVariable Address tokenAddress) {
@@ -186,6 +200,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(accountBalanceState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_ACCOUNT)
     @GetMapping("worldstate/account/{address}/nonce")
     public ResponseEntity<AccountNonceState> getWorldStateAccountNonce(@PathVariable Address address) {
         AccountNonceState accountNonceState = chainHeadStateCache.getHeadState().getNonce(address);
@@ -195,6 +210,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(accountNonceState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_ADDRESS_ALIAS)
     @GetMapping("worldstate/address-alias/{alias}")
     public ResponseEntity<AddressAliasState> getWorldStateAddressAlias(@PathVariable String alias) {
         AddressAliasState addressAliasState = chainHeadStateCache.getHeadState().getAddressAlias(alias);
@@ -204,6 +220,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(addressAliasState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_AUTHORITY)
     @GetMapping("worldstate/authority/{address}")
     public ResponseEntity<AuthorityState> getWorldStateAuthority(@PathVariable Address address) {
         AuthorityState authorityState = chainHeadStateCache.getHeadState().getAuthority(address);
@@ -213,6 +230,7 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(authorityState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_BIP_STATE)
     @GetMapping("worldstate/bip-state/{hash}")
     public ResponseEntity<BipState> getWorldStateBipState(@PathVariable Hash hash) {
         BipState bipState = chainHeadStateCache.getHeadState().getBip(hash);
@@ -222,12 +240,14 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(bipState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_NETWORK_PARAMS)
     @GetMapping("worldstate/network-params")
     public ResponseEntity<NetworkParamsState> getWorldStateNetworkParams() {
         NetworkParamsState networkParamsState = chainHeadStateCache.getHeadState().getParams();
         return ResponseEntity.ok(networkParamsState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_TOKEN)
     @GetMapping("worldstate/token/{address}")
     public ResponseEntity<TokenState> getWorldStateToken(@PathVariable Address address) {
         TokenState tokenState = chainHeadStateCache.getHeadState().getToken(address);
@@ -237,11 +257,13 @@ public class BlockchainApiV1 {
         return ResponseEntity.ok(tokenState);
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_TOKEN)
     @GetMapping("worldstate/tokens")
     public ResponseEntity<Map<Address, TokenState>> getAllTokens() {
         return ResponseEntity.ok(entityIndexRepository.getAllTokensWithAddresses());
     }
 
+    @CoreApiSecurity(ApiKeyPermission.READ_AUTHORITY)
     @GetMapping("worldstate/authorities")
     public ResponseEntity<Map<Address, AuthorityState>> getAllAuthorities() {
         return ResponseEntity.ok(entityIndexRepository.getAllAuthoritiesWithAddresses());
@@ -251,6 +273,7 @@ public class BlockchainApiV1 {
     // Account Summary endpoint (wallet-friendly)
     // ========================
 
+    @CoreApiSecurity(ApiKeyPermission.READ_ACCOUNT)
     @GetMapping("account/{address}/summary")
     public ResponseEntity<AccountSummaryDtoV1> getAccountSummary(
             @PathVariable Address address,

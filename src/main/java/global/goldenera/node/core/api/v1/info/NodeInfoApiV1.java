@@ -39,6 +39,7 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.api.v1.info.dtos.NodeInfoDtoV1;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
@@ -88,6 +89,8 @@ public class NodeInfoApiV1 {
 			synced = true; // No peers = assume synced (solo node)
 		}
 
+		ForkName activeFork = Constants.getActiveForkName(Constants.getActiveNetwork(), localHeight);
+
 		return ResponseEntity.ok(NodeInfoDtoV1.builder()
 				.version(Constants.NODE_VERSION)
 				.identity(identity)
@@ -99,6 +102,7 @@ public class NodeInfoApiV1 {
 				.blocksBehind(blocksBehind)
 				.syncProgress(syncProgress)
 				.connectedPeers(connectedPeers)
+				.activeFork(activeFork)
 				.build());
 	}
 }

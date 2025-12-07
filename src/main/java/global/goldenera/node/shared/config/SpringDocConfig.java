@@ -31,14 +31,17 @@ import java.util.Iterator;
 
 import org.springdoc.core.models.GroupedOpenApi;
 import org.springdoc.core.utils.SpringDocUtils;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.swagger.v3.core.converter.AnnotatedType;
 import io.swagger.v3.core.converter.ModelConverter;
 import io.swagger.v3.core.converter.ModelConverterContext;
+import io.swagger.v3.core.jackson.ModelResolver;
 import io.swagger.v3.core.util.Json;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
@@ -64,6 +67,11 @@ public class SpringDocConfig {
 
 	static String API_KEY_SCHEME = "ApiKeyAuth";
 	static String BASIC_AUTH_SCHEME = "BasicAuth";
+
+	@Bean
+	public ModelResolver modelResolver(@Qualifier("jsonV1") ObjectMapper objectMapper) {
+		return new ModelResolver(objectMapper);
+	}
 
 	@Bean
 	public OpenAPI customOpenAPI() {

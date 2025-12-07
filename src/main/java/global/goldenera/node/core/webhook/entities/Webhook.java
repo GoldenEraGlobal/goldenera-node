@@ -81,6 +81,9 @@ public class Webhook {
 	@Column(name = "version", nullable = false, updatable = true)
 	Long version;
 
+	@Column(name = "dto_version", nullable = true, updatable = true)
+	Integer dtoVersion;
+
 	@Column(name = "label", nullable = false, updatable = true, length = 32)
 	String label;
 
@@ -112,8 +115,10 @@ public class Webhook {
 	@Column(name = "headers", columnDefinition = "jsonb", nullable = true, updatable = true)
 	Map<String, Object> headers;
 
-	public Webhook(String label, String description, String url, Bytes secretKey, ApiKey createdByApiKey,
+	public Webhook(Integer dtoVersion, String label, String description, String url, Bytes secretKey,
+			ApiKey createdByApiKey,
 			Map<String, Object> queryParams, Map<String, Object> headers) {
+		this.dtoVersion = dtoVersion;
 		this.label = label;
 		this.description = description;
 		this.url = url;

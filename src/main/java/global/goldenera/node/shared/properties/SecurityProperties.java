@@ -24,7 +24,7 @@
 package global.goldenera.node.shared.properties;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.stereotype.Component;
 
 import global.goldenera.node.shared.utils.ValidatorUtil;
 import jakarta.annotation.PostConstruct;
@@ -34,8 +34,8 @@ import lombok.Setter;
 
 @Getter
 @Setter
-@Configuration
 @ConfigurationProperties(prefix = "ge.security", ignoreUnknownFields = false)
+@Component("securityProperties")
 public class SecurityProperties {
 
 	@NonNull
@@ -43,6 +43,8 @@ public class SecurityProperties {
 
 	@NonNull
 	String aesGcmSecret;
+
+	boolean coreApiEnabled;
 
 	@PostConstruct
 	public void validate() {

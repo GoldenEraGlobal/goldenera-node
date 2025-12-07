@@ -23,16 +23,37 @@
  */
 package global.goldenera.node.shared.config;
 
+import static lombok.AccessLevel.PRIVATE;
+
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.format.FormatterRegistry;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import global.goldenera.node.shared.config.versioning.ApiVersionInterceptor;
+import global.goldenera.node.shared.config.versioning.VersionAwareHttpMessageConverter;
 import global.goldenera.node.shared.converters.ReflectionEnumConverter;
 import global.goldenera.node.shared.exceptions.GEValidationException;
+import lombok.experimental.FieldDefaults;
 
 @Configuration
+@FieldDefaults(level = PRIVATE, makeFinal = true)
 public class WebConfig implements WebMvcConfigurer {
+
+    ObjectMapper objectMapperV1;
+
+    public WebConfig(@Qualifier("jsonV1") ObjectMapper objectMapperV1) {
+        this.objectMapperV1 = objectMapperV1;
+    }
 
     @Override
     @SuppressWarnings({ "unchecked", "rawtypes" })
@@ -66,5 +87,21 @@ public class WebConfig implements WebMvcConfigurer {
                 }
             }
         });
+    }
+
+    @Bean
+    public VersionAwareHttpMessageConverter versionAwareHttpMessageConverter() {
+        return new VersionAwareHttpMessageConverter(objectMapperV1);
+    }
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new ApiVersionInterceptor());
+    }
+
+    @Override
+    public void configureMessageConverters(List<HttpMessageConverter<?>> converters) {
+        converters.removeIf(converter -> converter instanceof MappingJackson2HttpMessageConverter);
+        converters.add(versionAwareHttpMessageConverter());
     }
 }

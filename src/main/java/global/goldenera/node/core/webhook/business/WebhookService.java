@@ -57,6 +57,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class WebhookService {
 
+	private static final int DTO_VERSION = 1;
 	private static final int SECRET_KEY_LENGTH = 64;
 
 	AESGCMComponent aesGcmComponent;
@@ -97,6 +98,7 @@ public class WebhookService {
 		Bytes encryptedSecret = aesGcmComponent.encrypt(secretBytes);
 
 		Webhook webhook = webhookCoreService.create(new Webhook(
+				DTO_VERSION,
 				label,
 				description,
 				urlData.getUrl(),

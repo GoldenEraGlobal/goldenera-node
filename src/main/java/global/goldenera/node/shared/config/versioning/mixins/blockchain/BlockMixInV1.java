@@ -21,39 +21,46 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.enums;
+package global.goldenera.node.shared.config.versioning.mixins.blockchain;
 
-import static lombok.AccessLevel.PRIVATE;
+import java.util.List;
 
-import org.springframework.security.core.GrantedAuthority;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.experimental.FieldDefaults;
+import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.datatypes.Hash;
 
-@Getter
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum ApiKeyPermission implements GrantedAuthority {
-	READ_ACCOUNT(0), READ_ADDRESS_ALIAS(1), READ_AUTHORITY(
-			2), READ_BIP_STATE(3), READ_BLOCK_HEADER(4), READ_NETWORK_PARAMS(
-					5), READ_MEMPOOL_TX(6), READ_TOKEN(
-							7), READ_TX(8), READ_WRITE_WEBHOOK(9), READ_NODE_METRICS(10), SUBMIT_MEMPOOL_TX(11);
+@JsonPropertyOrder({
+        "header",
+        "txs"
+})
+public abstract class BlockMixInV1 implements Block {
 
-	int code;
+    // --- DATA ---
 
-	public static ApiKeyPermission fromCode(int code) {
-		for (ApiKeyPermission permission : values()) {
-			if (permission.getCode() == code) {
-				return permission;
-			}
-		}
-		throw new GEFailedException("Failed to get ApiKeyPermission from code: " + code);
-	}
+    @Override
+    @JsonProperty("header")
+    public abstract BlockHeader getHeader();
 
-	@Override
-	public String getAuthority() {
-		return this.name();
-	}
+    @Override
+    @JsonProperty("txs")
+    public abstract List<Tx> getTxs();
+
+    // --- IGNORED (Convenience delegates / Calculated) ---
+
+    @Override
+    @JsonIgnore
+    public abstract Hash getHash();
+
+    @Override
+    @JsonIgnore
+    public abstract long getHeight();
+
+    @Override
+    @JsonIgnore
+    public abstract int getSize();
 }

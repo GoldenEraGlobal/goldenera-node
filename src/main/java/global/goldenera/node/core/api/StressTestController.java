@@ -39,9 +39,13 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.ethereum.Wei;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -54,11 +58,9 @@ import global.goldenera.cryptoj.datatypes.PrivateKey;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.cryptoj.exceptions.CryptoJException;
-import global.goldenera.cryptoj.utils.Amounts;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.mempool.MempoolManager;
-import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import lombok.Builder;
@@ -70,51 +72,38 @@ import lombok.extern.slf4j.Slf4j;
 @RestController
 @RequestMapping("/api/core/v1/mempool/stress-test")
 @RequiredArgsConstructor
+@ConditionalOnProperty(prefix = "ge.stress-test", name = "enabled", havingValue = "true", matchIfMissing = false)
 public class StressTestController {
 
 	final WorldStateFactory worldStateFactory;
 	final ChainQuery chainQueryService;
 	private final MempoolManager mempoolManager;
-	private final MiningService miningService;
 
 	final Executor stressTestExecutor = Executors.newFixedThreadPool(4);
 
 	// --- Configuration ---
-	private static final int TX_COUNT = 35000;
 	private static final StressTestContext context = new StressTestContext();
 
-	private static final String RICH_WALLET_MNEMONIC = "message remember stamp keep domain vacuum brick drift master recycle lion enemy";
-	private static PrivateKey RICH_KEY;
-	private static Address RICH_ADDRESS;
-
-	static {
-		try {
-			RICH_KEY = PrivateKey.load(RICH_WALLET_MNEMONIC, null);
-			RICH_ADDRESS = RICH_KEY.getAddress();
-		} catch (CryptoJException e) {
-			e.printStackTrace();
-		}
-	}
-
 	@PostMapping("/step-1")
-	public StressTestResult startStep1() {
-		log.info("Starting Stress Test Step 1: Fan-out from {}", RICH_ADDRESS.toHexString());
+	public StressTestResult startStep1(@RequestBody StressTestStep1Input input) {
+		PrivateKey fromKey = PrivateKey.wrap(Bytes.fromHexString(input.fromAddressPrivateKeyHex));
+
+		log.info("Starting Stress Test Step 1: Fan-out from {}", fromKey.getAddress().toHexString());
 		context.pendingTxs.clear();
 		context.step1Recipients.clear();
-		// miningService.stopMining();
 		resetStats("STEP_1");
 
 		Block latestBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
 		WorldState latestState = worldStateFactory.createForValidation(latestBlock.getHeader().getStateRootHash());
-		AccountNonceState startNonceData = latestState.getNonce(RICH_ADDRESS);
+		AccountNonceState startNonceData = latestState.getNonce(fromKey.getAddress());
 		long startNonce = startNonceData.getNonce() + 1;
 
-		context.step1Recipients = new ArrayList<>(TX_COUNT);
+		context.step1Recipients = new ArrayList<>(input.txCount);
 
 		log.info("Generating keys and transactions...");
 		Instant startGen = Instant.now();
 
-		List<KeyTxPair> transactions = IntStream.range(0, TX_COUNT).parallel()
+		List<KeyTxPair> transactions = IntStream.range(0, input.txCount).parallel()
 				.mapToObj(i -> {
 					try {
 						PrivateKey newWallet = PrivateKey.create();
@@ -134,10 +123,12 @@ public class StressTestController {
 								.type(TxType.TRANSFER)
 								.network(Network.TESTNET)
 								.recipient(recipientKey.getAddress())
-								.amount(Amounts.tokensDecimal("2.0"))
-								.fee(Amounts.tokensDecimal("0.001"))
+								.amount(input.amount)
+								.fee(input.fee)
 								.nonce(nonce)
-								.sign(RICH_KEY);
+								.sign(fromKey);
+						tx.getSender(); // warm-up
+						tx.getHash(); // warm-up
 						return new KeyTxPair(recipientKey, tx);
 					} catch (CryptoJException e) {
 						e.printStackTrace();
@@ -205,8 +196,8 @@ public class StressTestController {
 								.type(TxType.TRANSFER)
 								.network(Network.TESTNET)
 								.recipient(randomRecipient)
-								.amount(Amounts.tokensDecimal("1.0"))
-								.fee(Amounts.tokensDecimal("0.001"))
+								.amount(context.stepTwoAmount)
+								.fee(context.stepTwoFee)
 								.nonce(0L)
 								.sign(senderKey);
 						tx.getSender(); // warm-up
@@ -236,7 +227,7 @@ public class StressTestController {
 						// LOG EVERY 2000 TX
 						int current = counter.incrementAndGet();
 						if (current % 2000 == 0) {
-							log.info("Step 2 Progress: Submitted {}/{}", current, TX_COUNT);
+							log.info("Step 2 Progress: Submitted {}/{}", current, context.txCount);
 						}
 					} catch (Exception e) {
 						log.error("Failed to add tx in Step 2", e);
@@ -337,15 +328,7 @@ public class StressTestController {
 								event.getBlock().getHeight());
 
 						if (context.pendingTxs.isEmpty()) {
-							log.info("StressTest: All transactions confirmed! STOPPING MINING & CLEANING UP.");
-
-							try {
-								Thread.sleep(100);
-							} catch (InterruptedException e) {
-							}
-
-							mempoolManager.clear();
-							log.info("StressTest: Cleanup complete. Ready for Step 2.");
+							log.info("StressTest: All transactions confirmed!");
 						}
 					}
 				} catch (Exception e) {
@@ -391,8 +374,15 @@ public class StressTestController {
 		Instant endTimeMempool;
 		Instant startTimeBlockchain;
 		Instant lastBlockTime;
+		int txCount;
+		Wei stepTwoAmount;
+		Wei stepTwoFee;
 	}
 
 	private record KeyTxPair(PrivateKey key, Tx tx) {
+	}
+
+	private record StressTestStep1Input(int txCount, String fromAddressPrivateKeyHex, Wei amount, Wei fee,
+			Wei stepTwoAmount, Wei stepTwoFee) {
 	}
 }

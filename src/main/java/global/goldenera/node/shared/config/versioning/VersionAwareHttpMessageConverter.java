@@ -21,39 +21,40 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.enums;
+package global.goldenera.node.shared.config.versioning;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import org.springframework.security.core.GrantedAuthority;
+import java.io.IOException;
+import java.lang.reflect.Type;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
+import org.springframework.http.HttpOutputMessage;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import lombok.experimental.FieldDefaults;
 
-@Getter
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum ApiKeyPermission implements GrantedAuthority {
-	READ_ACCOUNT(0), READ_ADDRESS_ALIAS(1), READ_AUTHORITY(
-			2), READ_BIP_STATE(3), READ_BLOCK_HEADER(4), READ_NETWORK_PARAMS(
-					5), READ_MEMPOOL_TX(6), READ_TOKEN(
-							7), READ_TX(8), READ_WRITE_WEBHOOK(9), READ_NODE_METRICS(10), SUBMIT_MEMPOOL_TX(11);
+public class VersionAwareHttpMessageConverter extends MappingJackson2HttpMessageConverter {
 
-	int code;
+    ObjectMapper objectMapperV1;
 
-	public static ApiKeyPermission fromCode(int code) {
-		for (ApiKeyPermission permission : values()) {
-			if (permission.getCode() == code) {
-				return permission;
-			}
-		}
-		throw new GEFailedException("Failed to get ApiKeyPermission from code: " + code);
-	}
+    public VersionAwareHttpMessageConverter(ObjectMapper objectMapperV1) {
+        super(objectMapperV1);
+        this.objectMapperV1 = objectMapperV1;
+    }
 
-	@Override
-	public String getAuthority() {
-		return this.name();
-	}
+    @Override
+    protected void writeInternal(Object object, Type type, HttpOutputMessage outputMessage) throws IOException {
+        String version = ApiVersionContext.getVersion();
+
+        if ("v1".equals(version)) {
+            this.setObjectMapper(objectMapperV1);
+        } else {
+            this.setObjectMapper(objectMapperV1);
+        }
+
+        super.writeInternal(object, type, outputMessage);
+    }
 }

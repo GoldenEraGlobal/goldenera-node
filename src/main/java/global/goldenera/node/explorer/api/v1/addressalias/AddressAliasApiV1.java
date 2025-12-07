@@ -28,8 +28,8 @@ import static lombok.AccessLevel.PRIVATE;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -42,14 +42,17 @@ import global.goldenera.node.explorer.api.v1.addressalias.dtos.AddressAliasDtoV1
 import global.goldenera.node.explorer.api.v1.addressalias.dtos.AddressAliasDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.addressalias.mappers.AddressAliasMapper;
 import global.goldenera.node.explorer.services.core.ExAddressAliasCoreService;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.security.GeneralApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
 @RequestMapping(value = "api/explorer/v1/address-alias")
-@PreAuthorize("hasAuthority('READ_ADDRESS_ALIAS')")
+@GeneralApiSecurity(ApiKeyPermission.READ_ADDRESS_ALIAS)
 @FieldDefaults(level = PRIVATE, makeFinal = true)
+@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 public class AddressAliasApiV1 {
 
         ExAddressAliasCoreService addressAliasCoreService;

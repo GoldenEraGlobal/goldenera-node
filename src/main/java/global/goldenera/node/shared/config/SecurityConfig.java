@@ -50,6 +50,7 @@ import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.filters.ApiKeyAuthFilter;
 import global.goldenera.node.shared.filters.ThrottlingFilter;
 import global.goldenera.node.shared.properties.GeneralProperties;
+import global.goldenera.node.shared.properties.SecurityProperties;
 import global.goldenera.node.shared.services.ApiKeyCoreService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -64,6 +65,7 @@ import lombok.extern.slf4j.Slf4j;
 public class SecurityConfig {
 
         GeneralProperties generalProperties;
+        SecurityProperties securityProperties;
 
         // generalProperties.isExplorerEnable() <----
 
@@ -117,8 +119,7 @@ public class SecurityConfig {
         }
 
         /**
-         * Filter chain for the CORE API, not protected, its fully public for other
-         * nodes.
+         * Filter chain for the CORE API
          */
         @Bean
         @Order(3)

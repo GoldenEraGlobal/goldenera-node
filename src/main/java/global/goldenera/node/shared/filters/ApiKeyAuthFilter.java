@@ -138,7 +138,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 		}
 
 		List<SimpleGrantedAuthority> authorities = apiKey.getPermissions().stream()
-				.map(permission -> new SimpleGrantedAuthority(permission.name()))
+				.map(permission -> new SimpleGrantedAuthority(permission.getAuthority()))
 				.collect(Collectors.toList());
 
 		UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(

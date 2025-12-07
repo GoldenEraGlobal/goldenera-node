@@ -28,8 +28,8 @@ import static lombok.AccessLevel.PRIVATE;
 import java.time.Instant;
 import java.util.List;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -42,14 +42,17 @@ import global.goldenera.node.explorer.api.v1.blockheader.dtos.BlockHeaderDtoV1;
 import global.goldenera.node.explorer.api.v1.blockheader.dtos.BlockHeaderDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.blockheader.mappers.BlockHeaderMapper;
 import global.goldenera.node.explorer.services.core.ExBlockHeaderCoreService;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.security.GeneralApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@PreAuthorize("hasAuthority('READ_BLOCK_HEADER')")
+@GeneralApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
 @RequestMapping(value = "api/explorer/v1/block-header")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
+@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 public class BlockHeaderApiV1 {
 
         ExBlockHeaderCoreService exBlockHeaderCoreService;

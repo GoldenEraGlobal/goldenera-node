@@ -177,6 +177,8 @@ POSTGRESQL_PASSWORD="postgres"
 # openssl rand -base64 32
 SECURITY_HMAC_SECRET=""
 SECURITY_AES_GCM_SECRET=""
+# If true, core-api security will be enabled (all endpoints will require API key)
+SECURITY_CORE_API_ENABLED=false
 
 # Admin
 ADMIN_USERNAME="admin"

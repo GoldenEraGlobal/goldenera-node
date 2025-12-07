@@ -32,6 +32,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
+import global.goldenera.node.core.enums.WebhookTxStatus;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -61,7 +62,7 @@ public class WebhookListenerService {
 		webhookDispatchService.processNewBlockEvent(event.getBlock());
 		for (Tx tx : event.getBlock().getTxs()) {
 			webhookDispatchService.processAddressActivityEvent(event.getBlock(), tx,
-					WebhookDispatchService.TxStatus.CONFIRMED);
+					WebhookTxStatus.CONFIRMED);
 		}
 	}
 
@@ -75,11 +76,11 @@ public class WebhookListenerService {
 		switch (event.getReason()) {
 			case NEW:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookDispatchService.TxStatus.PENDING);
+						WebhookTxStatus.PENDING);
 				break;
 			case REORG:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookDispatchService.TxStatus.REVERTED);
+						WebhookTxStatus.REVERTED);
 				break;
 		}
 	}
@@ -96,13 +97,13 @@ public class WebhookListenerService {
 				break;
 			case RBF:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookDispatchService.TxStatus.REPLACED);
+						WebhookTxStatus.REPLACED);
 				break;
 			case STALE_NONCE:
 			case EXPIRED:
 			case INVALID:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookDispatchService.TxStatus.DROPPED);
+						WebhookTxStatus.DROPPED);
 				break;
 		}
 	}
