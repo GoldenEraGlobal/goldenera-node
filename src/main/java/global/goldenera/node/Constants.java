@@ -130,7 +130,7 @@ public class Constants {
                                                         Address.fromHexString(
                                                                         "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76")))
                                         // Genesis block
-                                        .genesisBlockTimestamp(1765039061348L)
+                                        .genesisBlockTimestamp(1765133107049L)
                                         .genesisBlockDifficulty(BigInteger.valueOf(500))
                                         // Native token
                                         .genesisNativeTokenName("TestEraCoin")
