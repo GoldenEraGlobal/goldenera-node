@@ -1,0 +1,46 @@
+{
+  "_comment": "Copy this file to genesis-mainnet-dev.json and customize for local development",
+  "directory": {
+    "host": "https://directory.goldenera.global",
+    "identityAddress": "0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"
+  },
+  "limits": {
+    "maxHeaderSizeInBytes": 500,
+    "maxTxSizeInBytes": 100000,
+    "maxBlockSizeInBytes": 5000000,
+    "maxTxCountPerBlock": 100000
+  },
+  "bip": {
+    "expirationPeriodMs": 86400000,
+    "approvalThresholdBps": 5100
+  },
+  "networkParams": {
+    "blockReward": "1000000000",
+    "blockRewardPoolAddress": "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76",
+    "targetMiningTimeMs": 15000,
+    "asertHalfLifeBlocks": 15,
+    "minDifficulty": "1000",
+    "minTxBaseFee": "100000",
+    "minTxByteFee": "1000"
+  },
+  "authorities": [
+    "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
+  ],
+  "genesisBlock": {
+    "timestamp": 1764806403777,
+    "difficulty": "1000"
+  },
+  "nativeToken": {
+    "name": "GoldenEraCoin",
+    "ticker": "GEC",
+    "decimals": 9,
+    "website": "https://goldenera.global",
+    "logo": "https://goldenera.global/TokenTicker/logo.png",
+    "userBurnable": false
+  },
+  "randomX": {
+    "epochLength": 2048,
+    "genesisKey": "GLDNR_RNDX_GENESIS_KEY",
+    "batchSize": 32768
+  }
+}

@@ -72,3 +72,6 @@ application-h2-2.properties
 /postgres_data
 .github_creds
 .temp_gh_token
+
+# Genesis dev configurations (each developer creates their own)
+src/main/resources/genesis/*-dev.json

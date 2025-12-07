@@ -1,0 +1,45 @@
+{
+  "directory": {
+    "host": "https://directory.goldenera.global",
+    "identityAddress": "0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"
+  },
+  "limits": {
+    "maxHeaderSizeInBytes": 500,
+    "maxTxSizeInBytes": 100000,
+    "maxBlockSizeInBytes": 5000000,
+    "maxTxCountPerBlock": 100000
+  },
+  "bip": {
+    "expirationPeriodMs": 86400000,
+    "approvalThresholdBps": 5100
+  },
+  "networkParams": {
+    "blockReward": "5000000000",
+    "blockRewardPoolAddress": "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76",
+    "targetMiningTimeMs": 15000,
+    "asertHalfLifeBlocks": 25,
+    "minDifficulty": "500",
+    "minTxBaseFee": "100000",
+    "minTxByteFee": "1000"
+  },
+  "authorities": [
+    "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
+  ],
+  "genesisBlock": {
+    "timestamp": 1765133107049,
+    "difficulty": "500"
+  },
+  "nativeToken": {
+    "name": "TestEraCoin",
+    "ticker": "tGEC",
+    "decimals": 9,
+    "website": "https://goldenera.global",
+    "logo": "https://goldenera.global/TokenTicker/logo.png",
+    "userBurnable": false
+  },
+  "randomX": {
+    "epochLength": 10240,
+    "genesisKey": "GLDNR_RNDX_GENESIS_KEY",
+    "batchSize": 32768
+  }
+}

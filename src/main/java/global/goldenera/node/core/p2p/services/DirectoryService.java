@@ -38,7 +38,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -73,28 +73,30 @@ import lombok.extern.log4j.Log4j2;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class DirectoryService {
 
+	Environment env;
 	ConcurrentHashMap<Address, P2PClient> clients = new ConcurrentHashMap<>();
 
 	Address selfAddress;
 	ThreadPoolTaskScheduler coreScheduler;
 	ChainQuery chainQuery;
-	long pingIntervalMs;
 
 	DirectoryApiV1Client directoryApiV1Client;
 	DirectoryApiV1Serializer directoryApiV1Serializer;
 	IdentityService identityService;
 	P2PProperties p2pProperties;
 	GeneralProperties generalProperties;
+	DirectoryProperties directoryProperties;
 
 	public DirectoryService(
+			Environment env,
 			DirectoryApiV1Client directoryApiV1Client,
 			DirectoryApiV1Serializer directoryApiV1Serializer,
 			IdentityService identityService, GeneralProperties generalProperties,
 			P2PProperties p2pProperties,
 			ChainQuery chainQuery,
 			DirectoryProperties directoryProperties,
-			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler,
-			@Value("${ge.core.directory.ping-interval-in-ms:30000}") long pingIntervalMs) {
+			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
+		this.env = env;
 		this.selfAddress = identityService.getNodeIdentityAddress();
 		this.directoryApiV1Client = directoryApiV1Client;
 		this.directoryApiV1Serializer = directoryApiV1Serializer;
@@ -102,13 +104,18 @@ public class DirectoryService {
 		this.generalProperties = generalProperties;
 		this.chainQuery = chainQuery;
 		this.p2pProperties = p2pProperties;
+		this.directoryProperties = directoryProperties;
 		this.coreScheduler = coreScheduler;
-		this.pingIntervalMs = pingIntervalMs;
 	}
 
 	@PostConstruct
 	public void init() {
+		if (directoryProperties.isDisable()) {
+			loadManualPeers();
+			return;
+		}
 		// Schedule with initial delay and fixed delay
+		final long pingIntervalMs = directoryProperties.getPingIntervalInMs();
 		coreScheduler.schedule(
 				this::pingDirectory,
 				triggerContext -> {
@@ -125,10 +132,50 @@ public class DirectoryService {
 	}
 
 	/**
+	 * Loads manual peers from configuration.
+	 * Used when directory is disabled (e.g., for local development).
+	 */
+	private void loadManualPeers() {
+		List<DirectoryProperties.ManualPeer> manualPeers = directoryProperties.getPeers();
+		if (manualPeers == null || manualPeers.isEmpty()) {
+			log.info("DirectoryService: Directory disabled, no manual peers configured");
+			return;
+		}
+
+		Network defaultNetwork = generalProperties.getNetwork();
+		for (DirectoryProperties.ManualPeer peer : manualPeers) {
+			try {
+				if (peer.getIdentity() == null || peer.getHost() == null || peer.getPort() == null) {
+					log.warn("DirectoryService: Incomplete peer config, need identity, host, port, and network");
+					continue;
+				}
+
+				Address peerIdentity = Address.fromHexString(peer.getIdentity());
+				Network peerNetwork = peer.getNetwork() != null
+						? Network.valueOf(peer.getNetwork().toUpperCase())
+						: defaultNetwork;
+				String host = peer.getHost().trim();
+				int port = peer.getPort();
+
+				P2PClient client = new P2PClient(peerIdentity, peerNetwork, host, port, Instant.now());
+				clients.put(peerIdentity, client);
+				log.info("DirectoryService: Added manual peer {}:{} [{}] with identity {}",
+						host, port, peerNetwork, peerIdentity.toChecksumAddress());
+			} catch (Exception e) {
+				log.warn("DirectoryService: Failed to add manual peer: {}", e.getMessage());
+			}
+		}
+		log.info("DirectoryService: Directory disabled, loaded {} manual peers", clients.size());
+	}
+
+	/**
 	 * Pings directory server to register this node and get peer list.
 	 * Scheduled via coreTaskScheduler in init().
 	 */
 	public void pingDirectory() {
+		if (directoryProperties.isDisable()) {
+			return;
+		}
 		StoredBlock block = chainQuery.getLatestStoredBlockOrThrow();
 		BigInteger totalDifficulty = block.getCumulativeDifficulty();
 		Hash headHash = block.getHash();
