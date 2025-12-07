@@ -25,23 +25,17 @@ package global.goldenera.node.core.api.v1.mempool.mappers;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.List;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Component;
 
-import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
-import global.goldenera.node.core.api.v1.mempool.dtos.MempoolTxDtoV1;
-import global.goldenera.node.core.api.v1.mempool.dtos.MempoolTxDtoV1.MempoolTxMetadataDtoV1;
 import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.MempoolStore;
-import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
-import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 
 /**
@@ -57,39 +51,6 @@ public class MempoolTxMapper {
     ChainHeadStateCache chainHeadStateCache;
     MempoolStore mempoolStore;
     MempoolProperties mempoolProperties;
-
-    /**
-     * Maps a single Tx to MempoolTxDtoV1.
-     */
-    public MempoolTxDtoV1 map(@NonNull Tx tx) {
-        return new MempoolTxDtoV1(tx, new MempoolTxMetadataDtoV1(tx.getHash(), tx.getSize(), tx.getSender()));
-    }
-
-    /**
-     * Maps a MempoolEntry to MempoolTxDtoV1.
-     */
-    public MempoolTxDtoV1 map(@NonNull MempoolEntry entry) {
-        Tx tx = entry.getTx();
-        return new MempoolTxDtoV1(tx, new MempoolTxMetadataDtoV1(tx.getHash(), tx.getSize(), tx.getSender()));
-    }
-
-    /**
-     * Maps a list of Tx to MempoolTxDtoV1.
-     */
-    public List<MempoolTxDtoV1> map(@NonNull List<Tx> txs) {
-        return txs.stream()
-                .map(this::map)
-                .toList();
-    }
-
-    /**
-     * Maps a list of MempoolEntry to MempoolTxDtoV1.
-     */
-    public List<MempoolTxDtoV1> mapEntries(@NonNull List<MempoolEntry> entries) {
-        return entries.stream()
-                .map(this::map)
-                .toList();
-    }
 
     /**
      * Calculates and returns recommended fees based on network params and mempool

@@ -51,7 +51,6 @@ import global.goldenera.cryptoj.common.BlockHeaderImpl;
 import global.goldenera.cryptoj.common.BlockImpl;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.TxImpl;
-import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayloadImpl;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePayload;
@@ -88,11 +87,6 @@ import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
 import global.goldenera.cryptoj.common.state.impl.BipStateMetadataImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
-import global.goldenera.node.shared.config.versioning.mixins.blockchain.BlockHeaderMixInV1;
-import global.goldenera.node.shared.config.versioning.mixins.blockchain.BlockMixInV1;
-import global.goldenera.node.shared.config.versioning.mixins.blockchain.StateMixInsV1;
-import global.goldenera.node.shared.config.versioning.mixins.blockchain.TxMixInV1;
-import global.goldenera.node.shared.config.versioning.mixins.blockchain.TxPayloadMixInsV1;
 
 @Configuration
 public class JacksonConfig {
@@ -145,50 +139,6 @@ public class JacksonConfig {
 
 		mapper.registerModule(module);
 		return mapper;
-	}
-
-	@Bean("jsonV1")
-	public ObjectMapper objectMapperV1(ObjectMapper baseMapper) {
-		ObjectMapper v1 = baseMapper.copy();
-
-		v1.addMixIn(Tx.class, TxMixInV1.class);
-		v1.addMixIn(BlockHeader.class, BlockHeaderMixInV1.class);
-		v1.addMixIn(Block.class, BlockMixInV1.class);
-
-		// Base Polymorphic MixIn
-		v1.addMixIn(TxPayload.class, TxPayloadMixInsV1.TxPayloadMixIn.class);
-
-		// Concrete Payload MixIns
-		v1.addMixIn(TxBipAddressAliasAddPayload.class, TxPayloadMixInsV1.TxBipAddressAliasAddPayloadMixIn.class);
-		v1.addMixIn(TxBipAddressAliasRemovePayload.class,
-				TxPayloadMixInsV1.TxBipAddressAliasRemovePayloadMixIn.class);
-
-		v1.addMixIn(TxBipAuthorityAddPayload.class, TxPayloadMixInsV1.TxBipAuthorityAddPayloadMixIn.class);
-		v1.addMixIn(TxBipAuthorityRemovePayload.class, TxPayloadMixInsV1.TxBipAuthorityRemovePayloadMixIn.class);
-
-		v1.addMixIn(TxBipNetworkParamsSetPayload.class, TxPayloadMixInsV1.TxBipNetworkParamsSetPayloadMixIn.class);
-
-		v1.addMixIn(TxBipTokenBurnPayload.class, TxPayloadMixInsV1.TxBipTokenBurnPayloadMixIn.class);
-		v1.addMixIn(TxBipTokenCreatePayload.class, TxPayloadMixInsV1.TxBipTokenCreatePayloadMixIn.class);
-		v1.addMixIn(TxBipTokenMintPayload.class, TxPayloadMixInsV1.TxBipTokenMintPayloadMixIn.class);
-		v1.addMixIn(TxBipTokenUpdatePayload.class, TxPayloadMixInsV1.TxBipTokenUpdatePayloadMixIn.class);
-
-		v1.addMixIn(TxBipVotePayload.class, TxPayloadMixInsV1.TxBipVotePayloadMixIn.class);
-
-		// Accounts
-		v1.addMixIn(AccountBalanceState.class, StateMixInsV1.AccountBalanceStateMixIn.class);
-		v1.addMixIn(AccountNonceState.class, StateMixInsV1.AccountNonceStateMixIn.class);
-		v1.addMixIn(AddressAliasState.class, StateMixInsV1.AddressAliasStateMixIn.class);
-		v1.addMixIn(AuthorityState.class, StateMixInsV1.AuthorityStateMixIn.class);
-
-		// BIPs
-		v1.addMixIn(BipState.class, StateMixInsV1.BipStateMixIn.class);
-		v1.addMixIn(BipStateMetadata.class, StateMixInsV1.BipStateMetadataMixIn.class);
-
-		// Global & Token
-		v1.addMixIn(NetworkParamsState.class, StateMixInsV1.NetworkParamsStateMixIn.class);
-		v1.addMixIn(TokenState.class, StateMixInsV1.TokenStateMixIn.class);
-		return v1;
 	}
 
 	@SuppressWarnings({ "unchecked", "rawtypes" })

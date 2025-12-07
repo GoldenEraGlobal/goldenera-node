@@ -21,45 +21,33 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.api.v1.mempool.dtos;
+package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.cryptoj.common.Tx;
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
+import java.time.Instant;
+
+import org.apache.tuweni.units.ethereum.Wei;
+
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
+import lombok.Builder;
+import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.ToString;
 import lombok.experimental.FieldDefaults;
 
 /**
- * DTO for mempool transaction with pre-computed metadata.
- * Unlike blockchain transactions, mempool transactions don't have a block
- * index.
+ * Account Balance State DTO for API v1.
  */
-@Getter
-@Setter
+@Data
+@Builder
 @AllArgsConstructor
 @NoArgsConstructor
-@ToString
 @FieldDefaults(level = PRIVATE)
-public class MempoolTxDtoV1 {
+public class AccountBalanceStateDtoV1 {
 
-    Tx tx;
-    MempoolTxMetadataDtoV1 metadata;
-
-    @Getter
-    @Setter
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @ToString
-    @FieldDefaults(level = PRIVATE)
-    public static class MempoolTxMetadataDtoV1 {
-        Hash hash;
-        int size;
-        Address sender;
-    }
+    AccountBalanceStateVersion version;
+    Wei balance;
+    long updatedAtBlockHeight;
+    Instant updatedAtTimestamp;
 }

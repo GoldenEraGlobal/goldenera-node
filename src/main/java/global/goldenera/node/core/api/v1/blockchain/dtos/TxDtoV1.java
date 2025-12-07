@@ -25,37 +25,45 @@ package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.time.Instant;
+
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.ethereum.Wei;
+
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.datatypes.Signature;
+import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.enums.TxVersion;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
+import lombok.Builder;
+import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.ToString;
 import lombok.experimental.FieldDefaults;
 
-@Getter
-@Setter
+/**
+ * Transaction DTO for API v1.
+ * Field order and names are fixed for API stability.
+ */
+@Data
+@Builder
 @AllArgsConstructor
 @NoArgsConstructor
-@ToString
 @FieldDefaults(level = PRIVATE)
-public class BlockchainBlockHeaderDtoV1 {
+public class TxDtoV1 {
 
-    BlockHeaderDtoV1 header;
-
-    BlockchainBlockHeaderMetadataDtoV1 metadata;
-
-    @Getter
-    @Setter
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @ToString
-    @FieldDefaults(level = PRIVATE)
-    public static class BlockchainBlockHeaderMetadataDtoV1 {
-
-        Hash hash;
-        int size;
-        int numOfTxs;
-
-    }
+    TxVersion version;
+    Instant timestamp;
+    TxType type;
+    Network network;
+    Long nonce;
+    Address recipient;
+    Address tokenAddress;
+    Wei amount;
+    Wei fee;
+    Bytes message;
+    TxPayloadDtoV1 payload;
+    Hash referenceHash;
+    Signature signature;
 }

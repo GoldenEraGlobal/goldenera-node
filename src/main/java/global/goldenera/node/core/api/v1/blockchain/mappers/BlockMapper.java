@@ -23,58 +23,30 @@
  */
 package global.goldenera.node.core.api.v1.blockchain.mappers;
 
-import java.util.ArrayList;
-import java.util.List;
-
 import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.common.Block;
-import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
-import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockDtoV1;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 
+/**
+ * Maps Block domain objects to BlockDtoV1.
+ */
 @Component
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-public class BlockchainBlockHeaderMapper {
+public class BlockMapper {
 
     BlockHeaderMapper blockHeaderMapper;
+    TxMapper txMapper;
 
-    public BlockchainBlockHeaderDtoV1 map(@NonNull StoredBlock in) {
-        return new BlockchainBlockHeaderDtoV1(
-                blockHeaderMapper.map(in.getBlock().getHeader()),
-                new BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1(
-                        in.getHash(),
-                        in.getBlockSize(),
-                        in.getTxCount()));
+    public BlockDtoV1 map(@NonNull Block in) {
+        return BlockDtoV1.builder()
+                .header(blockHeaderMapper.map(in.getHeader()))
+                .txs(txMapper.map(in.getTxs()))
+                .build();
     }
-
-    public List<BlockchainBlockHeaderDtoV1> map(@NonNull List<StoredBlock> in) {
-        List<BlockchainBlockHeaderDtoV1> result = new ArrayList<>(in.size());
-        for (StoredBlock storedBlock : in) {
-            result.add(map(storedBlock));
-        }
-        return result;
-    }
-
-    public BlockchainBlockHeaderDtoV1 mapBlock(@NonNull Block in) {
-        return new BlockchainBlockHeaderDtoV1(
-                blockHeaderMapper.map(in.getHeader()),
-                new BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1(
-                        in.getHash(),
-                        in.getSize(),
-                        in.getTxs().size()));
-    }
-
-    public List<BlockchainBlockHeaderDtoV1> mapBlock(@NonNull List<Block> in) {
-        List<BlockchainBlockHeaderDtoV1> result = new ArrayList<>(in.size());
-        for (Block block : in) {
-            result.add(mapBlock(block));
-        }
-        return result;
-    }
-
 }

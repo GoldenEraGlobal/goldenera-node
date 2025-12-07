@@ -40,6 +40,8 @@ import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.Constants;
 import global.goldenera.node.Constants.ForkName;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockHeaderDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.mappers.BlockHeaderMapper;
 import global.goldenera.node.core.api.v1.info.dtos.NodeInfoDtoV1;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
@@ -58,6 +60,7 @@ public class NodeInfoApiV1 {
 	ChainQuery chainQueryService;
 	IdentityService identityService;
 	PeerRegistry peerRegistry;
+	BlockHeaderMapper blockHeaderMapper;
 
 	@GetMapping
 	public ResponseEntity<NodeInfoDtoV1> getNodeInfo() {
@@ -91,11 +94,14 @@ public class NodeInfoApiV1 {
 
 		ForkName activeFork = Constants.getActiveForkName(Constants.getActiveNetwork(), localHeight);
 
+		// Map block header to DTO
+		BlockHeaderDtoV1 blockHeaderDto = blockHeader != null ? blockHeaderMapper.map(blockHeader) : null;
+
 		return ResponseEntity.ok(NodeInfoDtoV1.builder()
 				.version(Constants.NODE_VERSION)
 				.identity(identity)
 				.timestamp(Instant.now())
-				.blockHeader(blockHeader)
+				.blockHeader(blockHeaderDto)
 				.cumulativeDifficulty(cumulativeDifficulty)
 				.synced(synced)
 				.networkHeight(networkHeight)

@@ -57,6 +57,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
+import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.enums.WebhookEventType;
 import global.goldenera.node.core.enums.WebhookTxStatus;
@@ -106,6 +108,9 @@ public class WebhookDispatchService {
 	final MeterRegistry registry;
 	final AESGCMComponent aesGCMComponent;
 
+	final BlockchainTxMapper blockchainTxMapper;
+	final BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
+
 	final Map<UUID, WebhookConfig> webhookConfigs = new ConcurrentHashMap<>();
 	final Map<Long, Set<UUID>> apiKeyToWebhookIds = new ConcurrentHashMap<>();
 	final Map<Address, Set<WebhookSubscription>> addressSubscriptions = new ConcurrentHashMap<>();
@@ -115,13 +120,16 @@ public class WebhookDispatchService {
 	public WebhookDispatchService(@Qualifier("webhookOkHttpClient") OkHttpClient webhookOkHttpClient,
 			@Qualifier("jsonV1") ObjectMapper objectMapperV1,
 			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
-			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent) {
+			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent,
+			BlockchainTxMapper blockchainTxMapper, BlockchainBlockHeaderMapper blockchainBlockHeaderMapper) {
 		this.okHttpClient = webhookOkHttpClient;
 		this.objectMapperV1 = objectMapperV1;
 		this.explorerScheduler = explorerScheduler;
 		this.webhookCoreService = webhookCoreService;
 		this.registry = registry;
 		this.aesGCMComponent = aesGCMComponent;
+		this.blockchainTxMapper = blockchainTxMapper;
+		this.blockchainBlockHeaderMapper = blockchainBlockHeaderMapper;
 	}
 
 	@EventListener(CoreReadyEvent.class)
@@ -297,32 +305,25 @@ public class WebhookDispatchService {
 	public void processNewBlockEvent(Block block) {
 		WebhookEventDtoV1.NewBlockEvent event = new WebhookEventDtoV1.NewBlockEvent(
 				WebhookEventType.NEW_BLOCK,
-				block.getHeader(),
-				new WebhookEventDtoV1.NewBlockMetadata(block.getTxs().size(), block.getSize(), block.getHash()));
+				blockchainBlockHeaderMapper.mapBlock(block));
 
 		for (WebhookSubscription sub : newBlockSubscriptions) {
 			queuePayload(sub.getWebhookId(), event);
 		}
 	}
 
-	public void processAddressActivityEvent(Block block, Tx tx, WebhookTxStatus status) {
-		WebhookEventDtoV1.BlockMetadataInfo blockMetadataInfo = block != null
-				? new WebhookEventDtoV1.BlockMetadataInfo(block.getHash(), block.getHeight())
-				: null;
+	public void processAddressActivityEvent(Block block, Tx tx, WebhookTxStatus status, Integer index) {
+		Set<Address> involvedAddresses = getAddressesFromTx(tx);
+		Set<UUID> targetWebhookIds = new HashSet<>();
 
-		WebhookEventDtoV1.AddressActivityMetadata metadataDto = new WebhookEventDtoV1.AddressActivityMetadata(
-				blockMetadataInfo,
-				tx.getSize(),
-				tx.getHash(),
-				status);
+		if (involvedAddresses.isEmpty()) {
+			return;
+		}
 
 		WebhookEventDtoV1.AddressActivityEvent event = new WebhookEventDtoV1.AddressActivityEvent(
 				WebhookEventType.ADDRESS_ACTIVITY,
-				tx,
-				metadataDto);
-
-		Set<Address> involvedAddresses = getAddressesFromTx(tx);
-		Set<UUID> targetWebhookIds = new HashSet<>();
+				blockchainTxMapper.mapTx(block, tx, index),
+				status);
 
 		for (Address addr : involvedAddresses) {
 			Set<WebhookSubscription> matches = addressSubscriptions.get(addr);

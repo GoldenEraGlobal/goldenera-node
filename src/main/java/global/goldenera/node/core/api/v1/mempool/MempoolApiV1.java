@@ -40,15 +40,17 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.tx.TxDecoder;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.api.v1.mempool.dtos.MempoolSubmitTxDtoV1;
-import global.goldenera.node.core.api.v1.mempool.dtos.MempoolTxDtoV1;
 import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
 import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolStore;
+import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.CoreApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
@@ -61,9 +63,10 @@ public class MempoolApiV1 {
 	MempoolManager mempoolManager;
 	MempoolStore mempoolStore;
 	MempoolTxMapper mempoolTxMapper;
+	BlockchainTxMapper blockchainTxMapper;
 
 	@PostMapping("submit")
-	@GeneralApiSecurity(ApiKeyPermission.SUBMIT_MEMPOOL_TX)
+	@CoreApiSecurity(ApiKeyPermission.SUBMIT_MEMPOOL_TX)
 	public ResponseEntity<MempoolManager.MempoolResult> submitTx(@RequestBody MempoolSubmitTxDtoV1 input) {
 		Bytes rawTxDataInBytes = Bytes.fromHexString(input.getRawTxDataInHex());
 		Tx tx = TxDecoder.INSTANCE.decode(rawTxDataInBytes);
@@ -72,35 +75,35 @@ public class MempoolApiV1 {
 	}
 
 	@GetMapping("by-hash/{hash}")
-	@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
-	public ResponseEntity<MempoolTxDtoV1> getMempoolTransactionByHash(@PathVariable Hash hash) {
-		Tx tx = mempoolStore.getTxByHash(hash)
-				.orElseThrow(() -> new GENotFoundException("Transaction not found")).getTx();
-		return ResponseEntity.ok(mempoolTxMapper.map(tx));
+	@CoreApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
+	public ResponseEntity<BlockchainTxDtoV1> getMempoolTransactionByHash(@PathVariable Hash hash) {
+		MempoolEntry tx = mempoolStore.getTxByHash(hash)
+				.orElseThrow(() -> new GENotFoundException("Transaction not found"));
+		return ResponseEntity.ok(blockchainTxMapper.map(tx));
 	}
 
 	@GetMapping("inventory")
-	@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
+	@CoreApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
 	public ResponseEntity<List<Hash>> getMempoolTransactionInventory() {
 		return ResponseEntity.ok(mempoolStore.getAllTxHashes());
 	}
 
 	@GetMapping("size")
-	@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
+	@CoreApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
 	public ResponseEntity<Long> getMempoolTransactionSize() {
 		return ResponseEntity.ok(mempoolStore.getCount());
 	}
 
 	@GetMapping("recommended-fees")
-	@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
+	@CoreApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
 	public ResponseEntity<RecommendedFeesDtoV1> getRecommendedFees() {
 		return ResponseEntity.ok(mempoolTxMapper.mapRecommendedFees());
 	}
 
 	@GetMapping("pending-txs/{address}")
-	@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
-	public ResponseEntity<List<MempoolTxDtoV1>> getPendingTransactionsByAddress(@PathVariable Address address) {
-		return ResponseEntity.ok(mempoolTxMapper.mapEntries(mempoolStore.getTxsBySender(address)));
+	@CoreApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
+	public ResponseEntity<List<BlockchainTxDtoV1>> getPendingTransactionsByAddress(@PathVariable Address address) {
+		return ResponseEntity.ok(blockchainTxMapper.mapEntries(mempoolStore.getTxsBySender(address)));
 	}
 
 }

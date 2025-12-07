@@ -25,37 +25,41 @@ package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.math.BigInteger;
+import java.time.Instant;
+
+import org.apache.tuweni.units.ethereum.Wei;
+
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
+import lombok.Builder;
+import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.ToString;
 import lombok.experimental.FieldDefaults;
 
-@Getter
-@Setter
+/**
+ * Network Params State DTO for API v1.
+ */
+@Data
+@Builder
 @AllArgsConstructor
 @NoArgsConstructor
-@ToString
 @FieldDefaults(level = PRIVATE)
-public class BlockchainBlockHeaderDtoV1 {
+public class NetworkParamsStateDtoV1 {
 
-    BlockHeaderDtoV1 header;
-
-    BlockchainBlockHeaderMetadataDtoV1 metadata;
-
-    @Getter
-    @Setter
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @ToString
-    @FieldDefaults(level = PRIVATE)
-    public static class BlockchainBlockHeaderMetadataDtoV1 {
-
-        Hash hash;
-        int size;
-        int numOfTxs;
-
-    }
+    NetworkParamsStateVersion version;
+    Wei blockReward;
+    Address blockRewardPoolAddress;
+    long targetMiningTimeMs;
+    long asertHalfLifeBlocks;
+    long asertAnchorHeight;
+    BigInteger minDifficulty;
+    Wei minTxBaseFee;
+    Wei minTxByteFee;
+    long currentAuthorityCount;
+    Hash updatedByTxHash;
+    long updatedAtBlockHeight;
+    Instant updatedAtTimestamp;
 }

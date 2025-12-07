@@ -21,41 +21,37 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.api.v1.blockchain.dtos;
+package global.goldenera.node.core.api.v1.blockchain.mappers;
 
-import static lombok.AccessLevel.PRIVATE;
+import org.springframework.stereotype.Component;
 
-import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockHeaderDtoV1;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.ToString;
+import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 
-@Getter
-@Setter
+/**
+ * Maps BlockHeader domain objects to BlockHeaderDtoV1.
+ */
+@Component
 @AllArgsConstructor
-@NoArgsConstructor
-@ToString
-@FieldDefaults(level = PRIVATE)
-public class BlockchainBlockHeaderDtoV1 {
+@FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
+public class BlockHeaderMapper {
 
-    BlockHeaderDtoV1 header;
-
-    BlockchainBlockHeaderMetadataDtoV1 metadata;
-
-    @Getter
-    @Setter
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @ToString
-    @FieldDefaults(level = PRIVATE)
-    public static class BlockchainBlockHeaderMetadataDtoV1 {
-
-        Hash hash;
-        int size;
-        int numOfTxs;
-
+    public BlockHeaderDtoV1 map(@NonNull BlockHeader in) {
+        return BlockHeaderDtoV1.builder()
+                .version(in.getVersion())
+                .height(in.getHeight())
+                .timestamp(in.getTimestamp())
+                .previousHash(in.getPreviousHash())
+                .txRootHash(in.getTxRootHash())
+                .stateRootHash(in.getStateRootHash())
+                .difficulty(in.getDifficulty())
+                .coinbase(in.getCoinbase())
+                .nonce(in.getNonce())
+                .signature(in.getSignature())
+                .build();
     }
 }

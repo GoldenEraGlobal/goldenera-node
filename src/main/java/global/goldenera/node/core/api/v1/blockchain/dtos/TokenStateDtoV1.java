@@ -21,20 +21,44 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.config.versioning;
+package global.goldenera.node.core.api.v1.blockchain.dtos;
 
-public class ApiVersionContext {
-    private static final ThreadLocal<String> CURRENT_VERSION = new ThreadLocal<>();
+import static lombok.AccessLevel.PRIVATE;
 
-    public static void setVersion(String version) {
-        CURRENT_VERSION.set(version);
-    }
+import java.math.BigInteger;
+import java.time.Instant;
 
-    public static String getVersion() {
-        return CURRENT_VERSION.get();
-    }
+import org.apache.tuweni.units.ethereum.Wei;
 
-    public static void clear() {
-        CURRENT_VERSION.remove();
-    }
+import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.TokenStateVersion;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.FieldDefaults;
+
+/**
+ * Token State DTO for API v1.
+ */
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@FieldDefaults(level = PRIVATE)
+public class TokenStateDtoV1 {
+
+    TokenStateVersion version;
+    String name;
+    String smallestUnitName;
+    int numberOfDecimals;
+    String websiteUrl;
+    String logoUrl;
+    BigInteger maxSupply;
+    Wei totalSupply;
+    boolean userBurnable;
+    Hash originTxHash;
+    Hash updatedByTxHash;
+    long updatedAtBlockHeight;
+    Instant updatedAtTimestamp;
 }

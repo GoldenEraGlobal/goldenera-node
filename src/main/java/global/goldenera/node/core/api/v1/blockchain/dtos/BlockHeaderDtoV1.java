@@ -25,37 +25,38 @@ package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.math.BigInteger;
+import java.time.Instant;
+
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.datatypes.Signature;
+import global.goldenera.cryptoj.enums.BlockVersion;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
+import lombok.Builder;
+import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.ToString;
 import lombok.experimental.FieldDefaults;
 
-@Getter
-@Setter
+/**
+ * Block Header DTO for API v1.
+ * Field order and names are fixed for API stability.
+ */
+@Data
+@Builder
 @AllArgsConstructor
 @NoArgsConstructor
-@ToString
 @FieldDefaults(level = PRIVATE)
-public class BlockchainBlockHeaderDtoV1 {
+public class BlockHeaderDtoV1 {
 
-    BlockHeaderDtoV1 header;
-
-    BlockchainBlockHeaderMetadataDtoV1 metadata;
-
-    @Getter
-    @Setter
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @ToString
-    @FieldDefaults(level = PRIVATE)
-    public static class BlockchainBlockHeaderMetadataDtoV1 {
-
-        Hash hash;
-        int size;
-        int numOfTxs;
-
-    }
+    BlockVersion version;
+    long height;
+    Instant timestamp;
+    Hash previousHash;
+    Hash txRootHash;
+    Hash stateRootHash;
+    BigInteger difficulty;
+    Address coinbase;
+    long nonce;
+    Signature signature;
 }

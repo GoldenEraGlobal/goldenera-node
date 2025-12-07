@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.http.ResponseEntity;
@@ -38,18 +39,21 @@ import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
-import global.goldenera.cryptoj.common.state.AddressAliasState;
-import global.goldenera.cryptoj.common.state.AuthorityState;
-import global.goldenera.cryptoj.common.state.BipState;
-import global.goldenera.cryptoj.common.state.NetworkParamsState;
-import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.api.v1.blockchain.dtos.AccountBalanceStateDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.AccountNonceStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AccountSummaryDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.AddressAliasStateDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.AuthorityStateDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BipStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.NetworkParamsStateDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.TokenStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
+import global.goldenera.node.core.api.v1.blockchain.mappers.StateMapper;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.mempool.MempoolStore;
@@ -79,6 +83,7 @@ public class BlockchainApiV1 {
 
     BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
     BlockchainTxMapper blockchainTxMapper;
+    StateMapper stateMapper;
 
     // ========================
     // Block Header endpoints (use partial loading for efficiency)
@@ -191,82 +196,86 @@ public class BlockchainApiV1 {
 
     @CoreApiSecurity(ApiKeyPermission.READ_ACCOUNT)
     @GetMapping("worldstate/account/{address}/{tokenAddress}/balance")
-    public ResponseEntity<AccountBalanceState> getWorldStateAccountBalance(@PathVariable Address address,
+    public ResponseEntity<AccountBalanceStateDtoV1> getWorldStateAccountBalance(@PathVariable Address address,
             @PathVariable Address tokenAddress) {
         AccountBalanceState accountBalanceState = chainHeadStateCache.getHeadState().getBalance(address, tokenAddress);
         if (!accountBalanceState.exists()) {
             throw new GENotFoundException("Account balance not found");
         }
-        return ResponseEntity.ok(accountBalanceState);
+        return ResponseEntity.ok(stateMapper.map(accountBalanceState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_ACCOUNT)
     @GetMapping("worldstate/account/{address}/nonce")
-    public ResponseEntity<AccountNonceState> getWorldStateAccountNonce(@PathVariable Address address) {
+    public ResponseEntity<AccountNonceStateDtoV1> getWorldStateAccountNonce(@PathVariable Address address) {
         AccountNonceState accountNonceState = chainHeadStateCache.getHeadState().getNonce(address);
         if (!accountNonceState.exists()) {
             throw new GENotFoundException("Account nonce not found");
         }
-        return ResponseEntity.ok(accountNonceState);
+        return ResponseEntity.ok(stateMapper.map(accountNonceState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_ADDRESS_ALIAS)
     @GetMapping("worldstate/address-alias/{alias}")
-    public ResponseEntity<AddressAliasState> getWorldStateAddressAlias(@PathVariable String alias) {
-        AddressAliasState addressAliasState = chainHeadStateCache.getHeadState().getAddressAlias(alias);
+    public ResponseEntity<AddressAliasStateDtoV1> getWorldStateAddressAlias(@PathVariable String alias) {
+        var addressAliasState = chainHeadStateCache.getHeadState().getAddressAlias(alias);
         if (!addressAliasState.exists()) {
             throw new GENotFoundException("Address alias not found");
         }
-        return ResponseEntity.ok(addressAliasState);
+        return ResponseEntity.ok(stateMapper.map(addressAliasState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_AUTHORITY)
     @GetMapping("worldstate/authority/{address}")
-    public ResponseEntity<AuthorityState> getWorldStateAuthority(@PathVariable Address address) {
-        AuthorityState authorityState = chainHeadStateCache.getHeadState().getAuthority(address);
+    public ResponseEntity<AuthorityStateDtoV1> getWorldStateAuthority(@PathVariable Address address) {
+        var authorityState = chainHeadStateCache.getHeadState().getAuthority(address);
         if (!authorityState.exists()) {
             throw new GENotFoundException("Authority not found");
         }
-        return ResponseEntity.ok(authorityState);
+        return ResponseEntity.ok(stateMapper.map(authorityState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_BIP_STATE)
     @GetMapping("worldstate/bip-state/{hash}")
-    public ResponseEntity<BipState> getWorldStateBipState(@PathVariable Hash hash) {
-        BipState bipState = chainHeadStateCache.getHeadState().getBip(hash);
+    public ResponseEntity<BipStateDtoV1> getWorldStateBipState(@PathVariable Hash hash) {
+        var bipState = chainHeadStateCache.getHeadState().getBip(hash);
         if (!bipState.exists()) {
             throw new GENotFoundException("BIP state not found");
         }
-        return ResponseEntity.ok(bipState);
+        return ResponseEntity.ok(stateMapper.map(bipState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_NETWORK_PARAMS)
     @GetMapping("worldstate/network-params")
-    public ResponseEntity<NetworkParamsState> getWorldStateNetworkParams() {
-        NetworkParamsState networkParamsState = chainHeadStateCache.getHeadState().getParams();
-        return ResponseEntity.ok(networkParamsState);
+    public ResponseEntity<NetworkParamsStateDtoV1> getWorldStateNetworkParams() {
+        var networkParamsState = chainHeadStateCache.getHeadState().getParams();
+        return ResponseEntity.ok(stateMapper.map(networkParamsState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_TOKEN)
     @GetMapping("worldstate/token/{address}")
-    public ResponseEntity<TokenState> getWorldStateToken(@PathVariable Address address) {
-        TokenState tokenState = chainHeadStateCache.getHeadState().getToken(address);
+    public ResponseEntity<TokenStateDtoV1> getWorldStateToken(@PathVariable Address address) {
+        var tokenState = chainHeadStateCache.getHeadState().getToken(address);
         if (!tokenState.exists()) {
             throw new GENotFoundException("Token not found");
         }
-        return ResponseEntity.ok(tokenState);
+        return ResponseEntity.ok(stateMapper.map(tokenState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_TOKEN)
     @GetMapping("worldstate/tokens")
-    public ResponseEntity<Map<Address, TokenState>> getAllTokens() {
-        return ResponseEntity.ok(entityIndexRepository.getAllTokensWithAddresses());
+    public ResponseEntity<Map<Address, TokenStateDtoV1>> getAllTokens() {
+        return ResponseEntity.ok(
+                entityIndexRepository.getAllTokensWithAddresses().entrySet().stream()
+                        .collect(Collectors.toMap(Map.Entry::getKey, e -> stateMapper.map(e.getValue()))));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_AUTHORITY)
     @GetMapping("worldstate/authorities")
-    public ResponseEntity<Map<Address, AuthorityState>> getAllAuthorities() {
-        return ResponseEntity.ok(entityIndexRepository.getAllAuthoritiesWithAddresses());
+    public ResponseEntity<Map<Address, AuthorityStateDtoV1>> getAllAuthorities() {
+        return ResponseEntity.ok(
+                entityIndexRepository.getAllAuthoritiesWithAddresses().entrySet().stream()
+                        .collect(Collectors.toMap(Map.Entry::getKey, e -> stateMapper.map(e.getValue()))));
     }
 
     // ========================

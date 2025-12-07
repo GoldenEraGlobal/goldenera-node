@@ -25,37 +25,44 @@ package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.time.Instant;
+import java.util.Set;
+
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipType;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
+import lombok.Builder;
+import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
-import lombok.ToString;
 import lombok.experimental.FieldDefaults;
 
-@Getter
-@Setter
+/**
+ * BIP (Proposal) State DTO for API v1.
+ */
+@Data
+@Builder
 @AllArgsConstructor
 @NoArgsConstructor
-@ToString
 @FieldDefaults(level = PRIVATE)
-public class BlockchainBlockHeaderDtoV1 {
+public class BipStateDtoV1 {
 
-    BlockHeaderDtoV1 header;
-
-    BlockchainBlockHeaderMetadataDtoV1 metadata;
-
-    @Getter
-    @Setter
-    @AllArgsConstructor
-    @NoArgsConstructor
-    @ToString
-    @FieldDefaults(level = PRIVATE)
-    public static class BlockchainBlockHeaderMetadataDtoV1 {
-
-        Hash hash;
-        int size;
-        int numOfTxs;
-
-    }
+    BipStateVersion version;
+    BipStatus status;
+    BipType type;
+    boolean actionExecuted;
+    long numberOfRequiredVotes;
+    Set<Address> approvers;
+    Set<Address> disapprovers;
+    BipStateMetadataDtoV1 metadata;
+    Instant expirationTimestamp;
+    Instant executedAtTimestamp;
+    Hash originTxHash;
+    Hash updatedByTxHash;
+    long updatedAtBlockHeight;
+    Instant updatedAtTimestamp;
+    long approvalCount;
+    long disapprovalCount;
 }

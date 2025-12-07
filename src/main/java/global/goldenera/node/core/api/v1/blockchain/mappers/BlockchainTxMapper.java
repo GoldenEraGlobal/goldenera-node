@@ -28,10 +28,12 @@ import java.util.List;
 
 import org.springframework.stereotype.Component;
 
+import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
+import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -46,6 +48,8 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class BlockchainTxMapper {
+
+    TxMapper txMapper;
 
     /**
      * Maps a single transaction from StoredBlock using pre-computed metadata.
@@ -67,8 +71,9 @@ public class BlockchainTxMapper {
         if (sender == null)
             sender = tx.getSender();
 
-        return new BlockchainTxDtoV1(tx,
-                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(txHash, size, index, sender));
+        return new BlockchainTxDtoV1(txMapper.map(tx),
+                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(txHash, size, sender, index, storedBlock.getHash(),
+                        storedBlock.getHeight(), storedBlock.getBlock().getHeader().getTimestamp()));
     }
 
     /**
@@ -93,8 +98,44 @@ public class BlockchainTxMapper {
         if (sender == null)
             sender = tx.getSender();
 
-        return new BlockchainTxDtoV1(tx,
-                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(hash, size, index, sender));
+        return new BlockchainTxDtoV1(txMapper.map(tx),
+                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(hash, size, sender, index, storedBlock.getHash(),
+                        storedBlock.getHeight(), storedBlock.getBlock().getHeader().getTimestamp()));
+    }
+
+    /**
+     * Maps a single transaction from MempoolEntry
+     */
+    public BlockchainTxDtoV1 map(@NonNull MempoolEntry entry) {
+        return new BlockchainTxDtoV1(txMapper.map(entry.getTx()),
+                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(
+                        entry.getTx().getHash(),
+                        entry.getTx().getSize(),
+                        entry.getTx().getSender(),
+                        null,
+                        null,
+                        null,
+                        null));
+    }
+
+    public List<BlockchainTxDtoV1> mapEntries(@NonNull List<MempoolEntry> entries) {
+        List<BlockchainTxDtoV1> result = new ArrayList<>(entries.size());
+        for (MempoolEntry entry : entries) {
+            result.add(map(entry));
+        }
+        return result;
+    }
+
+    public BlockchainTxDtoV1 mapTx(Block block, Tx tx, Integer index) {
+        return new BlockchainTxDtoV1(txMapper.map(tx),
+                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(
+                        tx.getHash(),
+                        tx.getSize(),
+                        tx.getSender(),
+                        index,
+                        block != null ? block.getHash() : null,
+                        block != null ? block.getHeight() : null,
+                        block != null ? block.getHeader().getTimestamp() : null));
     }
 
     /**

@@ -25,7 +25,8 @@ package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.cryptoj.common.Tx;
+import java.time.Instant;
+
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import lombok.AllArgsConstructor;
@@ -49,7 +50,7 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = PRIVATE)
 public class BlockchainTxDtoV1 {
 
-    Tx tx;
+    TxDtoV1 tx;
 
     BlockchainTxMetadataDtoV1 metadata;
 
@@ -63,8 +64,11 @@ public class BlockchainTxDtoV1 {
 
         Hash hash;
         int size;
-        int index;
         Address sender;
+        Integer index;
+        Hash blockHash;
+        Long blockHeight;
+        Instant blockTimestamp;
 
     }
 }

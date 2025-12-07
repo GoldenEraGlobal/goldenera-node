@@ -60,9 +60,10 @@ public class WebhookListenerService {
 	public void handleBlockConnected(BlockConnectedEvent event) {
 		log.debug("Processing BlockConnectedEvent: {}", event.getBlock().getHash());
 		webhookDispatchService.processNewBlockEvent(event.getBlock());
+		int index = 0;
 		for (Tx tx : event.getBlock().getTxs()) {
 			webhookDispatchService.processAddressActivityEvent(event.getBlock(), tx,
-					WebhookTxStatus.CONFIRMED);
+					WebhookTxStatus.CONFIRMED, index++);
 		}
 	}
 
@@ -76,11 +77,11 @@ public class WebhookListenerService {
 		switch (event.getReason()) {
 			case NEW:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.PENDING);
+						WebhookTxStatus.PENDING, null);
 				break;
 			case REORG:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.REVERTED);
+						WebhookTxStatus.REVERTED, null);
 				break;
 		}
 	}
@@ -97,13 +98,13 @@ public class WebhookListenerService {
 				break;
 			case RBF:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.REPLACED);
+						WebhookTxStatus.REPLACED, null);
 				break;
 			case STALE_NONCE:
 			case EXPIRED:
 			case INVALID:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.DROPPED);
+						WebhookTxStatus.DROPPED, null);
 				break;
 		}
 	}

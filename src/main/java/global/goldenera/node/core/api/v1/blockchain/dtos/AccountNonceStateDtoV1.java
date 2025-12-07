@@ -21,46 +21,31 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.config.versioning.mixins.blockchain;
+package global.goldenera.node.core.api.v1.blockchain.dtos;
 
-import java.util.List;
+import static lombok.AccessLevel.PRIVATE;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonPropertyOrder;
+import java.time.Instant;
 
-import global.goldenera.cryptoj.common.Block;
-import global.goldenera.cryptoj.common.BlockHeader;
-import global.goldenera.cryptoj.common.Tx;
-import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.AccountNonceStateVersion;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.experimental.FieldDefaults;
 
-@JsonPropertyOrder({
-        "header",
-        "txs"
-})
-public abstract class BlockMixInV1 implements Block {
+/**
+ * Account Nonce State DTO for API v1.
+ */
+@Data
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
+@FieldDefaults(level = PRIVATE)
+public class AccountNonceStateDtoV1 {
 
-    // --- DATA ---
-
-    @Override
-    @JsonProperty("header")
-    public abstract BlockHeader getHeader();
-
-    @Override
-    @JsonProperty("txs")
-    public abstract List<Tx> getTxs();
-
-    // --- IGNORED (Convenience delegates / Calculated) ---
-
-    @Override
-    @JsonIgnore
-    public abstract Hash getHash();
-
-    @Override
-    @JsonIgnore
-    public abstract long getHeight();
-
-    @Override
-    @JsonIgnore
-    public abstract int getSize();
+    AccountNonceStateVersion version;
+    long nonce;
+    long updatedAtBlockHeight;
+    Instant updatedAtTimestamp;
 }

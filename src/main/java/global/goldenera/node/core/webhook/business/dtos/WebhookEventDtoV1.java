@@ -26,9 +26,8 @@ package global.goldenera.node.core.webhook.business.dtos;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
-import global.goldenera.cryptoj.common.BlockHeader;
-import global.goldenera.cryptoj.common.Tx;
-import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
 import global.goldenera.node.core.enums.WebhookEventType;
 import global.goldenera.node.core.enums.WebhookTxStatus;
 
@@ -45,33 +44,14 @@ public sealed interface WebhookEventDtoV1 {
 
         record NewBlockEvent(
                         WebhookEventType type,
-                        BlockHeader data,
-                        NewBlockMetadata metadata) implements WebhookEventDtoV1 {
-        }
-
-        record NewBlockMetadata(
-                        int numOfTxs,
-                        int size,
-                        Hash hash) {
+                        BlockchainBlockHeaderDtoV1 data) implements WebhookEventDtoV1 {
         }
 
         // --- 2. ADDRESS ACTIVITY ---
 
         record AddressActivityEvent(
                         WebhookEventType type,
-                        Tx data,
-                        AddressActivityMetadata metadata) implements WebhookEventDtoV1 {
-        }
-
-        record AddressActivityMetadata(
-                        BlockMetadataInfo block,
-                        int size,
-                        Hash hash,
-                        WebhookTxStatus status) {
-        }
-
-        record BlockMetadataInfo(
-                        Hash hash,
-                        Long height) {
+                        BlockchainTxDtoV1 data,
+                        WebhookTxStatus status) implements WebhookEventDtoV1 {
         }
 }
