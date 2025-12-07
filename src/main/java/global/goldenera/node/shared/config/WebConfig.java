@@ -34,7 +34,6 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.format.FormatterRegistry;
 import org.springframework.http.converter.HttpMessageConverter;
-import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
@@ -107,13 +106,16 @@ public class WebConfig implements WebMvcConfigurer {
      * Extends (not replaces!) Spring Boot's default message converters.
      * 
      * <p>
-     * We add our versioned JSON converter at the FRONT of the list so it takes
-     * priority for JSON responses. All other Spring Boot converters (for byte[],
-     * Resource, String, etc.) remain intact.
+     * Our versioned converter is added at the FRONT of the list (highest priority).
+     * It only accepts requests where ApiVersionContext has a version set.
+     * For all other requests (OpenAPI, actuator, etc.), it returns false in
+     * canWrite()
+     * and the request falls through to Spring Boot's default
+     * MappingJackson2HttpMessageConverter.
      * 
      * <p>
-     * This is the KEY difference from configureMessageConverters() which would
-     * REPLACE all converters and break Spring Boot's default handling.
+     * IMPORTANT: We do NOT remove the default converter - it handles non-versioned
+     * endpoints.
      */
     @Override
     public void extendMessageConverters(List<HttpMessageConverter<?>> converters) {
@@ -127,10 +129,10 @@ public class WebConfig implements WebMvcConfigurer {
         VersionedJsonMessageConverter versionedConverter = new VersionedJsonMessageConverter(baseObjectMapper,
                 versionedMappers);
 
-        // Remove the default Jackson converter (we're replacing it with ours)
-        converters.removeIf(c -> c instanceof MappingJackson2HttpMessageConverter);
-
         // Add our versioned converter at the front (high priority)
+        // It will only handle versioned API requests (canWrite checks
+        // ApiVersionContext)
+        // Non-versioned requests fall through to Spring Boot's default converter
         converters.add(0, versionedConverter);
     }
 }

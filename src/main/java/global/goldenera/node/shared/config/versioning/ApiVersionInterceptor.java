@@ -23,21 +23,43 @@
  */
 package global.goldenera.node.shared.config.versioning;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import org.springframework.web.servlet.HandlerInterceptor;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+/**
+ * Intercepts requests to detect API version from the URL path.
+ * 
+ * <p>
+ * Only sets version context for our API endpoints: /api/{module}/v1/,
+ * /api/{module}/v2/, etc.
+ * where module can be: admin, explorer, shared, core.
+ * Other endpoints like /v3/api-docs (OpenAPI) are NOT affected.
+ */
 public class ApiVersionInterceptor implements HandlerInterceptor {
+
+    /**
+     * Pattern to match our API paths: /api/{module}/v{N}/
+     * Modules: admin, explorer, shared, core
+     * Captures the version number (1, 2, etc.)
+     */
+    private static final Pattern API_VERSION_PATTERN = Pattern.compile("/api/(?:admin|explorer|shared|core)/v(\\d+)/");
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         String uri = request.getRequestURI().toLowerCase();
-        if (uri.contains("/v1/")) {
-            ApiVersionContext.setVersion("v1");
-        } else {
-            ApiVersionContext.setVersion("v1");
+
+        Matcher matcher = API_VERSION_PATTERN.matcher(uri);
+        if (matcher.find()) {
+            String versionNumber = matcher.group(1); // "1", "2", etc.
+            ApiVersionContext.setVersion("v" + versionNumber); // "v1", "v2", etc.
         }
+        // If no match, version context remains null -> use default converter
+
         return true;
     }
 

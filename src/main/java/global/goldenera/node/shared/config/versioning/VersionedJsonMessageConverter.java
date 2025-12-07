@@ -88,14 +88,38 @@ public class VersionedJsonMessageConverter extends MappingJackson2HttpMessageCon
     }
 
     /**
+     * Only handle requests where API version is set.
+     * This ensures OpenAPI, actuator, and other non-versioned endpoints
+     * are handled by Spring Boot's default converter.
+     */
+    @Override
+    public boolean canWrite(Class<?> clazz, @Nullable MediaType mediaType) {
+        // Only activate for versioned API requests
+        if (ApiVersionContext.getVersion() == null) {
+            return false;
+        }
+        return super.canWrite(clazz, mediaType);
+    }
+
+    /**
+     * Only handle requests where API version is set (generic type variant).
+     */
+    @Override
+    public boolean canWrite(@Nullable Type type, Class<?> clazz, @Nullable MediaType mediaType) {
+        // Only activate for versioned API requests
+        if (ApiVersionContext.getVersion() == null) {
+            return false;
+        }
+        return super.canWrite(type, clazz, mediaType);
+    }
+
+    /**
      * Selects the appropriate ObjectMapper based on the current API version.
-     * Falls back to defaultMapper if no version is set or version is not found.
      */
     private ObjectMapper selectMapper() {
         String version = ApiVersionContext.getVersion();
-        if (version == null) {
-            return defaultMapper;
-        }
+        // At this point version should never be null (checked in canWrite),
+        // but fallback to default just in case
         return versionedMappers.getOrDefault(version, defaultMapper);
     }
 
