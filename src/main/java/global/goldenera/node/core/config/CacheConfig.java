@@ -38,11 +38,11 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.state.AuthorityState;
+import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
-import global.goldenera.node.shared.consensus.state.AuthorityState;
-import global.goldenera.node.shared.consensus.state.TokenState;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 

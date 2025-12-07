@@ -32,14 +32,14 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.state.StateDiff;
+import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.explorer.enums.EntityType;
 import global.goldenera.node.explorer.enums.OperationType;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerRevertLogCoreService;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerTokenCoreService;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.TokenRevertDto;
-import global.goldenera.node.shared.consensus.state.StateDiff;
-import global.goldenera.node.shared.consensus.state.TokenState;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;

@@ -28,7 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.TxVersion;
-import global.goldenera.node.shared.enums.state.BipStateMetadataVersion;
+import global.goldenera.cryptoj.enums.state.BipStateMetadataVersion;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

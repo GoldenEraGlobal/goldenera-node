@@ -37,10 +37,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import global.goldenera.cryptoj.common.state.AccountBalanceState;
+import global.goldenera.cryptoj.common.state.AccountNonceState;
+import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.shared.consensus.state.AccountBalanceState;
-import global.goldenera.node.shared.consensus.state.AccountNonceState;
-import global.goldenera.node.shared.consensus.state.StateDiff;
 import global.goldenera.node.shared.datatypes.BalanceKey;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;

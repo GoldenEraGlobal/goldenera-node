@@ -31,6 +31,7 @@ import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.api.v1.mempool.dtos.MempoolTxDtoV1;
 import global.goldenera.node.core.api.v1.mempool.dtos.MempoolTxDtoV1.MempoolTxMetadataDtoV1;
 import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
@@ -38,7 +39,6 @@ import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;

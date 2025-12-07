@@ -33,6 +33,13 @@ import org.apache.tuweni.bytes.Bytes32;
 import org.springframework.modulith.NamedInterface;
 import org.springframework.stereotype.Service;
 
+import global.goldenera.cryptoj.common.state.AccountBalanceState;
+import global.goldenera.cryptoj.common.state.AccountNonceState;
+import global.goldenera.cryptoj.common.state.AddressAliasState;
+import global.goldenera.cryptoj.common.state.AuthorityState;
+import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.merkletrie.NodeLoader;
@@ -40,13 +47,6 @@ import global.goldenera.merkletrie.patricia.StoredMerklePatriciaTrie;
 import global.goldenera.merkletrie.patricia.StoredNodeFactory;
 import global.goldenera.node.core.state.trie.rocksdb.RocksDBMerkleStorage;
 import global.goldenera.node.core.state.trie.rocksdb.RocksDBMerkleStorageFactory;
-import global.goldenera.node.shared.consensus.state.AccountBalanceState;
-import global.goldenera.node.shared.consensus.state.AccountNonceState;
-import global.goldenera.node.shared.consensus.state.AddressAliasState;
-import global.goldenera.node.shared.consensus.state.AuthorityState;
-import global.goldenera.node.shared.consensus.state.BipState;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
-import global.goldenera.node.shared.consensus.state.TokenState;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 

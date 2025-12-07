@@ -39,13 +39,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.benmanes.caffeine.cache.Cache;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.state.AuthorityState;
+import global.goldenera.cryptoj.common.state.StateDiff;
+import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
+import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.state.WorldState;
-import global.goldenera.node.shared.consensus.state.AuthorityState;
-import global.goldenera.node.shared.consensus.state.StateDiff;
-import global.goldenera.node.shared.consensus.state.TokenState;
-import global.goldenera.node.shared.consensus.state.impl.AuthorityStateImpl;
-import global.goldenera.node.shared.consensus.state.impl.TokenStateImpl;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;

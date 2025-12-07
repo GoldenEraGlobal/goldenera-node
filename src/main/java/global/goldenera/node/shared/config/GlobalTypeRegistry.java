@@ -41,71 +41,71 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.cryptoj.enums.TxPayloadType;
 import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.cryptoj.enums.TxVersion;
-import global.goldenera.node.shared.enums.state.AccountBalanceStateVersion;
-import global.goldenera.node.shared.enums.state.AccountNonceStateVersion;
-import global.goldenera.node.shared.enums.state.AddressAliasStateVersion;
-import global.goldenera.node.shared.enums.state.AuthorityStateVersion;
-import global.goldenera.node.shared.enums.state.BipStateMetadataVersion;
-import global.goldenera.node.shared.enums.state.BipStateVersion;
-import global.goldenera.node.shared.enums.state.NetworkParamsStateVersion;
-import global.goldenera.node.shared.enums.state.TokenStateVersion;
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
+import global.goldenera.cryptoj.enums.state.AccountNonceStateVersion;
+import global.goldenera.cryptoj.enums.state.AddressAliasStateVersion;
+import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStateMetadataVersion;
+import global.goldenera.cryptoj.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
+import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
 public class GlobalTypeRegistry {
 
-    public static final Set<Class<? extends Enum<?>>> CODE_ENUMS = Set.of(
-            BipVoteType.class,
-            BlockVersion.class,
-            TxVersion.class,
-            Network.class,
-            TxPayloadType.class,
-            TxType.class,
-            AccountBalanceStateVersion.class,
-            AccountNonceStateVersion.class,
-            AddressAliasStateVersion.class,
-            AuthorityStateVersion.class,
-            BipStateMetadataVersion.class,
-            BipStateVersion.class,
-            NetworkParamsStateVersion.class,
-            TokenStateVersion.class);
+        public static final Set<Class<? extends Enum<?>>> CODE_ENUMS = Set.of(
+                        BipVoteType.class,
+                        BlockVersion.class,
+                        TxVersion.class,
+                        Network.class,
+                        TxPayloadType.class,
+                        TxType.class,
+                        AccountBalanceStateVersion.class,
+                        AccountNonceStateVersion.class,
+                        AddressAliasStateVersion.class,
+                        AuthorityStateVersion.class,
+                        BipStateMetadataVersion.class,
+                        BipStateVersion.class,
+                        NetworkParamsStateVersion.class,
+                        TokenStateVersion.class);
 
-    @Getter
-    @RequiredArgsConstructor
-    public static class StringTypeAdapter<T> {
-        private final Class<T> type;
-        private final Function<String, T> fromString;
-        private final Function<T, String> toString;
-    }
+        @Getter
+        @RequiredArgsConstructor
+        public static class StringTypeAdapter<T> {
+                private final Class<T> type;
+                private final Function<String, T> fromString;
+                private final Function<T, String> toString;
+        }
 
-    public static final List<StringTypeAdapter<?>> STRING_ADAPTERS = List.of(
-            // 1. Wei (Decimal String)
-            new StringTypeAdapter<>(Wei.class,
-                    s -> (s == null || s.isBlank()) ? null : Wei.valueOf(new BigInteger(s)),
-                    Wei::toDecimalString),
+        public static final List<StringTypeAdapter<?>> STRING_ADAPTERS = List.of(
+                        // 1. Wei (Decimal String)
+                        new StringTypeAdapter<>(Wei.class,
+                                        s -> (s == null || s.isBlank()) ? null : Wei.valueOf(new BigInteger(s)),
+                                        Wei::toDecimalString),
 
-            // 2. Hash (Hex String)
-            new StringTypeAdapter<>(Hash.class,
-                    Hash::fromHexString,
-                    Hash::toHexString),
+                        // 2. Hash (Hex String)
+                        new StringTypeAdapter<>(Hash.class,
+                                        Hash::fromHexString,
+                                        Hash::toHexString),
 
-            // 3. Address (Hex String)
-            new StringTypeAdapter<>(Address.class,
-                    Address::fromHexString,
-                    Address::toChecksumAddress),
+                        // 3. Address (Hex String)
+                        new StringTypeAdapter<>(Address.class,
+                                        Address::fromHexString,
+                                        Address::toChecksumAddress),
 
-            // 4. Signature (Hex String Wrapped)
-            new StringTypeAdapter<>(Signature.class,
-                    s -> Signature.wrap(Bytes.fromHexString(s)),
-                    Signature::toHexString),
+                        // 4. Signature (Hex String Wrapped)
+                        new StringTypeAdapter<>(Signature.class,
+                                        s -> Signature.wrap(Bytes.fromHexString(s)),
+                                        Signature::toHexString),
 
-            // 5. Bytes (Hex String)
-            new StringTypeAdapter<>(Bytes.class,
-                    Bytes::fromHexString,
-                    Bytes::toHexString),
+                        // 5. Bytes (Hex String)
+                        new StringTypeAdapter<>(Bytes.class,
+                                        Bytes::fromHexString,
+                                        Bytes::toHexString),
 
-            // 6. Bytes32 (Hex String)
-            new StringTypeAdapter<>(Bytes32.class,
-                    Bytes32::fromHexString,
-                    Bytes32::toHexString));
+                        // 6. Bytes32 (Hex String)
+                        new StringTypeAdapter<>(Bytes32.class,
+                                        Bytes32::fromHexString,
+                                        Bytes32::toHexString));
 }

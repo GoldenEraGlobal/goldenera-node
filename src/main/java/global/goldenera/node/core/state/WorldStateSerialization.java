@@ -29,27 +29,27 @@ import org.apache.tuweni.bytes.Bytes;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import global.goldenera.node.core.state.serialization.accountbalance.AccountBalanceStateDecoder;
-import global.goldenera.node.core.state.serialization.accountbalance.AccountBalanceStateEncoder;
-import global.goldenera.node.core.state.serialization.accountnonce.AccountNonceStateDecoder;
-import global.goldenera.node.core.state.serialization.accountnonce.AccountNonceStateEncoder;
-import global.goldenera.node.core.state.serialization.addressalias.AddressAliasStateDecoder;
-import global.goldenera.node.core.state.serialization.addressalias.AddressAliasStateEncoder;
-import global.goldenera.node.core.state.serialization.authority.AuthorityStateDecoder;
-import global.goldenera.node.core.state.serialization.authority.AuthorityStateEncoder;
-import global.goldenera.node.core.state.serialization.bip.BipStateDecoder;
-import global.goldenera.node.core.state.serialization.bip.BipStateEncoder;
-import global.goldenera.node.core.state.serialization.networkparams.NetworkParamsStateDecoder;
-import global.goldenera.node.core.state.serialization.networkparams.NetworkParamsStateEncoder;
-import global.goldenera.node.core.state.serialization.token.TokenStateDecoder;
-import global.goldenera.node.core.state.serialization.token.TokenStateEncoder;
-import global.goldenera.node.shared.consensus.state.AccountBalanceState;
-import global.goldenera.node.shared.consensus.state.AccountNonceState;
-import global.goldenera.node.shared.consensus.state.AddressAliasState;
-import global.goldenera.node.shared.consensus.state.AuthorityState;
-import global.goldenera.node.shared.consensus.state.BipState;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
-import global.goldenera.node.shared.consensus.state.TokenState;
+import global.goldenera.cryptoj.common.state.AccountBalanceState;
+import global.goldenera.cryptoj.common.state.AccountNonceState;
+import global.goldenera.cryptoj.common.state.AddressAliasState;
+import global.goldenera.cryptoj.common.state.AuthorityState;
+import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.serialization.state.accountbalance.AccountBalanceStateDecoder;
+import global.goldenera.cryptoj.serialization.state.accountbalance.AccountBalanceStateEncoder;
+import global.goldenera.cryptoj.serialization.state.accountnonce.AccountNonceStateDecoder;
+import global.goldenera.cryptoj.serialization.state.accountnonce.AccountNonceStateEncoder;
+import global.goldenera.cryptoj.serialization.state.addressalias.AddressAliasStateDecoder;
+import global.goldenera.cryptoj.serialization.state.addressalias.AddressAliasStateEncoder;
+import global.goldenera.cryptoj.serialization.state.authority.AuthorityStateDecoder;
+import global.goldenera.cryptoj.serialization.state.authority.AuthorityStateEncoder;
+import global.goldenera.cryptoj.serialization.state.bip.BipStateDecoder;
+import global.goldenera.cryptoj.serialization.state.bip.BipStateEncoder;
+import global.goldenera.cryptoj.serialization.state.networkparams.NetworkParamsStateDecoder;
+import global.goldenera.cryptoj.serialization.state.networkparams.NetworkParamsStateEncoder;
+import global.goldenera.cryptoj.serialization.state.token.TokenStateDecoder;
+import global.goldenera.cryptoj.serialization.state.token.TokenStateEncoder;
 
 @Configuration
 public class WorldStateSerialization {

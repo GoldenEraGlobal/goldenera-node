@@ -30,10 +30,10 @@ import java.util.Map;
 import org.apache.tuweni.units.ethereum.Wei;
 
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.state.WorldState;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.experimental.FieldDefaults;

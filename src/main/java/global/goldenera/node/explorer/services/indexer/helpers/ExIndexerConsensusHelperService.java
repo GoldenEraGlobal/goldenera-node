@@ -34,6 +34,11 @@ import org.apache.tuweni.bytes.Bytes;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.state.AddressAliasState;
+import global.goldenera.cryptoj.common.state.AuthorityState;
+import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.explorer.converters.AddressSetConverter;
@@ -45,11 +50,6 @@ import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevert
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.AuthorityRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BipRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.NetworkParamsRevertDto;
-import global.goldenera.node.shared.consensus.state.AddressAliasState;
-import global.goldenera.node.shared.consensus.state.AuthorityState;
-import global.goldenera.node.shared.consensus.state.BipState;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
-import global.goldenera.node.shared.consensus.state.StateDiff;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;

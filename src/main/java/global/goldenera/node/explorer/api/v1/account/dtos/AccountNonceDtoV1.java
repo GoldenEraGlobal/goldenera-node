@@ -28,7 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.time.Instant;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.shared.enums.state.AccountNonceStateVersion;
+import global.goldenera.cryptoj.enums.state.AccountNonceStateVersion;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

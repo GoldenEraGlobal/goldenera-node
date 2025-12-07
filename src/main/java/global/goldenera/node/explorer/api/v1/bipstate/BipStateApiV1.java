@@ -36,12 +36,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipType;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.bipstate.mappers.BipStateMapper;
 import global.goldenera.node.explorer.services.core.ExBipStateCoreService;
-import global.goldenera.node.shared.enums.BipStatus;
-import global.goldenera.node.shared.enums.BipType;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 

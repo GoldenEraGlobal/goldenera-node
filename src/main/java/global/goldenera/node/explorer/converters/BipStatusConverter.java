@@ -23,7 +23,7 @@
  */
 package global.goldenera.node.explorer.converters;
 
-import global.goldenera.node.shared.enums.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipStatus;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 

@@ -36,9 +36,9 @@ import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import global.goldenera.cryptoj.common.state.StateDiff;
+import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.shared.consensus.state.StateDiff;
-import global.goldenera.node.shared.consensus.state.TokenState;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;

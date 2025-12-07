@@ -31,21 +31,21 @@ import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.TxPayload;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
+import global.goldenera.cryptoj.common.state.impl.BipStateMetadataImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxPayloadType;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.enums.state.BipStateMetadataVersion;
+import global.goldenera.cryptoj.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipType;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.processing.TxExecutionContext;
 import global.goldenera.node.core.state.WorldState;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
-import global.goldenera.node.shared.consensus.state.impl.BipStateImpl;
-import global.goldenera.node.shared.consensus.state.impl.BipStateMetadataImpl;
-import global.goldenera.node.shared.enums.BipStatus;
-import global.goldenera.node.shared.enums.BipType;
-import global.goldenera.node.shared.enums.state.BipStateMetadataVersion;
-import global.goldenera.node.shared.enums.state.BipStateVersion;
 
 @Component
 public class BipCreateHandler implements TxHandler {

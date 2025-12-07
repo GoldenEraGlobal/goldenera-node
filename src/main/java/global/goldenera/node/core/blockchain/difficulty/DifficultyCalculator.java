@@ -31,9 +31,9 @@ import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;

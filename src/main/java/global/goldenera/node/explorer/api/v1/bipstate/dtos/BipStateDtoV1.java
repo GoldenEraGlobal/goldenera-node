@@ -30,9 +30,9 @@ import java.util.LinkedHashSet;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.node.shared.enums.BipStatus;
-import global.goldenera.node.shared.enums.BipType;
-import global.goldenera.node.shared.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

@@ -31,12 +31,12 @@ import java.util.Objects;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
+import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
 import global.goldenera.node.explorer.converters.state.AccountBalanceStateVersionConverter;
-import global.goldenera.node.shared.consensus.state.AccountBalanceState;
 import global.goldenera.node.shared.converters.AddressConverter;
 import global.goldenera.node.shared.converters.WeiConverter;
-import global.goldenera.node.shared.enums.state.AccountBalanceStateVersion;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;

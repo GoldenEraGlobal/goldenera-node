@@ -28,11 +28,11 @@ import static lombok.AccessLevel.PRIVATE;
 import java.io.Serializable;
 import java.time.Instant;
 
+import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.state.AccountNonceStateVersion;
 import global.goldenera.node.explorer.converters.state.AccountNonceStateVersionConverter;
-import global.goldenera.node.shared.consensus.state.AccountNonceState;
 import global.goldenera.node.shared.converters.AddressConverter;
-import global.goldenera.node.shared.enums.state.AccountNonceStateVersion;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;

@@ -58,6 +58,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePaylo
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
@@ -67,7 +68,6 @@ import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
-import global.goldenera.node.shared.consensus.state.AccountNonceState;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;

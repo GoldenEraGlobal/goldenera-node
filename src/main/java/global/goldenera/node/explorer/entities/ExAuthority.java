@@ -28,13 +28,13 @@ import static lombok.AccessLevel.PRIVATE;
 import java.io.Serializable;
 import java.time.Instant;
 
+import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.node.explorer.converters.state.AuthorityStateVersionConverter;
-import global.goldenera.node.shared.consensus.state.AuthorityState;
 import global.goldenera.node.shared.converters.AddressConverter;
 import global.goldenera.node.shared.converters.HashConverter;
-import global.goldenera.node.shared.enums.state.AuthorityStateVersion;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;

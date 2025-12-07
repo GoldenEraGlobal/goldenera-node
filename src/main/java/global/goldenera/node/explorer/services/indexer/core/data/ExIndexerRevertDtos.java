@@ -31,16 +31,16 @@ import org.apache.tuweni.units.ethereum.Wei;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
-import global.goldenera.node.shared.enums.BipStatus;
-import global.goldenera.node.shared.enums.state.AccountBalanceStateVersion;
-import global.goldenera.node.shared.enums.state.AccountNonceStateVersion;
-import global.goldenera.node.shared.enums.state.AddressAliasStateVersion;
-import global.goldenera.node.shared.enums.state.AuthorityStateVersion;
-import global.goldenera.node.shared.enums.state.BipStateVersion;
-import global.goldenera.node.shared.enums.state.TokenStateVersion;
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
+import global.goldenera.cryptoj.enums.state.AccountNonceStateVersion;
+import global.goldenera.cryptoj.enums.state.AddressAliasStateVersion;
+import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 
 public class ExIndexerRevertDtos {
 

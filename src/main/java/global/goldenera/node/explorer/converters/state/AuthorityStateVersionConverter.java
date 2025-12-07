@@ -23,7 +23,7 @@
  */
 package global.goldenera.node.explorer.converters.state;
 
-import global.goldenera.node.shared.enums.state.AuthorityStateVersion;
+import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 

@@ -30,7 +30,7 @@ import java.time.Instant;
 import org.apache.tuweni.units.ethereum.Wei;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.shared.enums.state.AccountBalanceStateVersion;
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

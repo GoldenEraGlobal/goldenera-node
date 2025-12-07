@@ -36,10 +36,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipType;
 import global.goldenera.node.explorer.entities.ExBipState;
 import global.goldenera.node.explorer.repositories.ExBipStateRepository;
-import global.goldenera.node.shared.enums.BipStatus;
-import global.goldenera.node.shared.enums.BipType;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.utils.PaginationUtil;
 import jakarta.persistence.criteria.Predicate;

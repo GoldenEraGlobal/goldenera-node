@@ -29,14 +29,14 @@ import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
+import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.processing.TxExecutionContext;
 import global.goldenera.node.core.state.WorldState;
-import global.goldenera.node.shared.consensus.state.TokenState;
-import global.goldenera.node.shared.consensus.state.impl.AccountBalanceStateImpl;
-import global.goldenera.node.shared.consensus.state.impl.TokenStateImpl;
 
 @Component
 public class TransferHandler implements TxHandler {

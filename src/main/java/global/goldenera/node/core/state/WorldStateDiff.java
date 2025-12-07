@@ -25,7 +25,7 @@ package global.goldenera.node.core.state;
 
 import org.springframework.modulith.NamedInterface;
 
-import global.goldenera.node.shared.consensus.state.StateDiff;
+import global.goldenera.cryptoj.common.state.StateDiff;
 import lombok.Value;
 
 @Value

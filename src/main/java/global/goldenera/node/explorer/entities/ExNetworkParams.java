@@ -30,14 +30,14 @@ import java.time.Instant;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.node.explorer.converters.state.NetworkParamsStateVersionConverter;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import global.goldenera.node.shared.converters.AddressConverter;
 import global.goldenera.node.shared.converters.HashConverter;
 import global.goldenera.node.shared.converters.WeiConverter;
-import global.goldenera.node.shared.enums.state.NetworkParamsStateVersion;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;

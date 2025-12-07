@@ -29,11 +29,11 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Component;
 
+import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateMetadataDtoV1;
 import global.goldenera.node.explorer.entities.ExBipState;
-import global.goldenera.node.shared.enums.BipStatus;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;

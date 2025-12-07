@@ -32,7 +32,7 @@ import org.apache.tuweni.units.ethereum.Wei;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.node.shared.enums.state.NetworkParamsStateVersion;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

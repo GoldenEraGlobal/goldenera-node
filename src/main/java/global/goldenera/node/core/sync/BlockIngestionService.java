@@ -33,6 +33,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
@@ -45,7 +46,6 @@ import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
-import global.goldenera.node.shared.consensus.state.NetworkParamsState;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
