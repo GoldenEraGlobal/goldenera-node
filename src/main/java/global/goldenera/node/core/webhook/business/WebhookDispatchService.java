@@ -102,7 +102,7 @@ public class WebhookDispatchService {
 	private static final int MAX_BATCH_SIZE = 2000;
 
 	final OkHttpClient okHttpClient;
-	final ObjectMapper objectMapperV1;
+	final ObjectMapper objectMapper;
 	final TaskScheduler explorerScheduler;
 	final WebhookCoreService webhookCoreService;
 	final MeterRegistry registry;
@@ -118,12 +118,12 @@ public class WebhookDispatchService {
 	final Map<UUID, java.util.Queue<Object>> pendingBatches = new ConcurrentHashMap<>();
 
 	public WebhookDispatchService(@Qualifier("webhookOkHttpClient") OkHttpClient webhookOkHttpClient,
-			@Qualifier("jsonV1") ObjectMapper objectMapperV1,
+			ObjectMapper objectMapper,
 			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
 			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent,
 			BlockchainTxMapper blockchainTxMapper, BlockchainBlockHeaderMapper blockchainBlockHeaderMapper) {
 		this.okHttpClient = webhookOkHttpClient;
-		this.objectMapperV1 = objectMapperV1;
+		this.objectMapper = objectMapper;
 		this.explorerScheduler = explorerScheduler;
 		this.webhookCoreService = webhookCoreService;
 		this.registry = registry;
@@ -399,7 +399,7 @@ public class WebhookDispatchService {
 
 	private void sendBatch(WebhookConfig config, UUID webhookId, List<Object> payloads) {
 		try {
-			byte[] jsonBytes = objectMapperV1.writeValueAsBytes(payloads);
+			byte[] jsonBytes = objectMapper.writeValueAsBytes(payloads);
 			String timestamp = String.valueOf(Instant.now().getEpochSecond());
 			String signature = calculateSignature(config.secretKey, timestamp, jsonBytes);
 
