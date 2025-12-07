@@ -33,7 +33,6 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -303,11 +302,14 @@ public class WebhookDispatchService {
 	// --- PROCESSING LOGIC ---
 
 	public void processNewBlockEvent(Block block) {
-		WebhookEventDtoV1.NewBlockEvent event = new WebhookEventDtoV1.NewBlockEvent(
-				WebhookEventType.NEW_BLOCK,
-				blockchainBlockHeaderMapper.mapBlock(block));
-
 		for (WebhookSubscription sub : newBlockSubscriptions) {
+			// WebhookConfig config = webhookConfigs.get(sub.getWebhookId());
+			// if (config.getDtoVersion() == 1) {
+			// TODO
+			// }
+			WebhookEventDtoV1.NewBlockEvent event = new WebhookEventDtoV1.NewBlockEvent(
+					WebhookEventType.NEW_BLOCK,
+					blockchainBlockHeaderMapper.mapBlock(block));
 			queuePayload(sub.getWebhookId(), event);
 		}
 	}
@@ -319,11 +321,6 @@ public class WebhookDispatchService {
 		if (involvedAddresses.isEmpty()) {
 			return;
 		}
-
-		WebhookEventDtoV1.AddressActivityEvent event = new WebhookEventDtoV1.AddressActivityEvent(
-				WebhookEventType.ADDRESS_ACTIVITY,
-				blockchainTxMapper.mapTx(block, tx, index),
-				status);
 
 		for (Address addr : involvedAddresses) {
 			Set<WebhookSubscription> matches = addressSubscriptions.get(addr);
@@ -337,6 +334,15 @@ public class WebhookDispatchService {
 		}
 
 		for (UUID webhookId : targetWebhookIds) {
+			// WebhookConfig config = webhookConfigs.get(webhookId);
+			// if (config.getDtoVersion() == 1) {
+			// TODO
+			// }
+			WebhookEventDtoV1.AddressActivityEvent event = new WebhookEventDtoV1.AddressActivityEvent(
+					WebhookEventType.ADDRESS_ACTIVITY,
+					blockchainTxMapper.mapTx(block, tx, index),
+					status);
+
 			queuePayload(webhookId, event);
 		}
 	}
@@ -452,16 +458,6 @@ public class WebhookDispatchService {
 	private boolean matchesTokenFilter(Tx tx, Address tokenAddressFilter) {
 		return tokenAddressFilter == null
 				|| (tx.getTokenAddress() != null && tx.getTokenAddress().equals(tokenAddressFilter));
-	}
-
-	private Map<String, Object> createPayload(WebhookEventType type, Object data, Map<String, Object> metadata) {
-		Map<String, Object> payload = new HashMap<>();
-		int version = 1;
-		payload.put("version", version);
-		payload.put("type", type.name());
-		payload.put("data", data);
-		payload.put("metadata", metadata);
-		return payload;
 	}
 
 	private String calculateSignature(Bytes secretKey, String timestamp, byte[] bodyBytes) {
