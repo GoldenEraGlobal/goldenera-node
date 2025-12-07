@@ -23,38 +23,107 @@
  */
 package global.goldenera.node.shared.config.versioning;
 
-import static lombok.AccessLevel.PRIVATE;
-
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.util.Collections;
+import java.util.List;
 
+import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpOutputMessage;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.GenericHttpMessageConverter;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.http.converter.HttpMessageNotWritableException;
 import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.lang.Nullable;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import lombok.experimental.FieldDefaults;
+/**
+ * A Proxy Converter implementing GenericHttpMessageConverter directly.
+ * This bypasses the 'final' restriction of AbstractGenericHttpMessageConverter
+ * and delegates full processing to the underlying Spring converters.
+ */
+public class VersionAwareHttpMessageConverter implements GenericHttpMessageConverter<Object> {
 
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public class VersionAwareHttpMessageConverter extends MappingJackson2HttpMessageConverter {
+    private final MappingJackson2HttpMessageConverter delegateV1;
+    private final List<MediaType> supportedMediaTypes;
 
-    ObjectMapper objectMapperV1;
+    public VersionAwareHttpMessageConverter(ObjectMapper mapperV1) {
+        // Create real Spring converters
+        this.delegateV1 = new MappingJackson2HttpMessageConverter(mapperV1);
 
-    public VersionAwareHttpMessageConverter(ObjectMapper objectMapperV1) {
-        super(objectMapperV1);
-        this.objectMapperV1 = objectMapperV1;
+        // Define supported types (JSON)
+        this.supportedMediaTypes = Collections.singletonList(MediaType.APPLICATION_JSON);
+
+        // Sync media types to delegates just in case
+        this.delegateV1.setSupportedMediaTypes(this.supportedMediaTypes);
+    }
+
+    // --- HELPER TO CHOOSE DELEGATE ---
+    private MappingJackson2HttpMessageConverter getDelegate() {
+        // String version = ApiVersionContext.getVersion();
+        return delegateV1;
+    }
+
+    // --- WRITE (Serialization) ---
+
+    @Override
+    public void write(Object t, @Nullable Type type, @Nullable MediaType contentType, HttpOutputMessage outputMessage)
+            throws IOException, HttpMessageNotWritableException {
+        getDelegate().write(t, type, contentType, outputMessage);
+    }
+
+    // This is the method from HttpMessageConverter interface (non-generic)
+    @Override
+    public void write(Object t, @Nullable MediaType contentType, HttpOutputMessage outputMessage)
+            throws IOException, HttpMessageNotWritableException {
+        getDelegate().write(t, contentType, outputMessage);
+    }
+
+    // --- READ (Deserialization) ---
+
+    @Override
+    public Object read(Type type, @Nullable Class<?> contextClass, HttpInputMessage inputMessage)
+            throws IOException, HttpMessageNotReadableException {
+        return getDelegate().read(type, contextClass, inputMessage);
     }
 
     @Override
-    protected void writeInternal(Object object, Type type, HttpOutputMessage outputMessage) throws IOException {
-        String version = ApiVersionContext.getVersion();
+    public Object read(Class<?> clazz, HttpInputMessage inputMessage)
+            throws IOException, HttpMessageNotReadableException {
+        return getDelegate().read(clazz, inputMessage);
+    }
 
-        if ("v1".equals(version)) {
-            this.setObjectMapper(objectMapperV1);
-        } else {
-            this.setObjectMapper(objectMapperV1);
-        }
+    // --- CAPABILITIES CHECKS ---
 
-        super.writeInternal(object, type, outputMessage);
+    @Override
+    public boolean canWrite(@Nullable Type type, Class<?> clazz, @Nullable MediaType mediaType) {
+        return getDelegate().canWrite(type, clazz, mediaType);
+    }
+
+    @Override
+    public boolean canWrite(Class<?> clazz, @Nullable MediaType mediaType) {
+        return getDelegate().canWrite(clazz, mediaType);
+    }
+
+    @Override
+    public boolean canRead(Type type, @Nullable Class<?> contextClass, @Nullable MediaType mediaType) {
+        return getDelegate().canRead(type, contextClass, mediaType);
+    }
+
+    @Override
+    public boolean canRead(Class<?> clazz, @Nullable MediaType mediaType) {
+        return getDelegate().canRead(clazz, mediaType);
+    }
+
+    @Override
+    public List<MediaType> getSupportedMediaTypes() {
+        return supportedMediaTypes;
+    }
+
+    @Override
+    public List<MediaType> getSupportedMediaTypes(Class<?> clazz) {
+        return getDelegate().getSupportedMediaTypes(clazz);
     }
 }
