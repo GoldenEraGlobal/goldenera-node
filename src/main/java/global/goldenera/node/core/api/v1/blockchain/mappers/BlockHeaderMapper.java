@@ -35,7 +35,7 @@ import lombok.experimental.FieldDefaults;
 /**
  * Maps BlockHeader domain objects to BlockHeaderDtoV1.
  */
-@Component
+@Component("coreBlockHeaderMapper")
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class BlockHeaderMapper {
