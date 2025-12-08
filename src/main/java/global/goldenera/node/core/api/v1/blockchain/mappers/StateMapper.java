@@ -61,7 +61,7 @@ import lombok.experimental.FieldDefaults;
 /**
  * Maps State domain objects to their DTO equivalents.
  */
-@Component
+@Component("coreStateMapper")
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class StateMapper {

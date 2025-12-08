@@ -50,7 +50,7 @@ import lombok.experimental.FieldDefaults;
 /**
  * Maps Tx domain objects to TxDtoV1.
  */
-@Component
+@Component("coreTxMapper")
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class TxMapper {

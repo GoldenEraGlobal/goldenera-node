@@ -35,7 +35,7 @@ import lombok.experimental.FieldDefaults;
 /**
  * Maps Block domain objects to BlockDtoV1.
  */
-@Component
+@Component("coreBlockMapper")
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class BlockMapper {

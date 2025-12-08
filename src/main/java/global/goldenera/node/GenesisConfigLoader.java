@@ -94,11 +94,6 @@ public class GenesisConfigLoader {
     }
 
     private static GenesisSettings parseGenesisSettings(JsonNode root) {
-        // Directory configuration
-        JsonNode directory = requireNode(root, "directory");
-        String directoryHost = requireString(directory, "host");
-        Address directoryIdentityAddress = Address.fromHexString(requireString(directory, "identityAddress"));
-
         // Size limits
         JsonNode limits = requireNode(root, "limits");
         long maxHeaderSizeInBytes = requireLong(limits, "maxHeaderSizeInBytes");
@@ -146,8 +141,6 @@ public class GenesisConfigLoader {
         int randomXBatchSize = requireInt(randomX, "batchSize");
 
         return new GenesisSettings(
-                directoryHost,
-                directoryIdentityAddress,
                 maxHeaderSizeInBytes,
                 maxTxSizeInBytes,
                 maxBlockSizeInBytes,

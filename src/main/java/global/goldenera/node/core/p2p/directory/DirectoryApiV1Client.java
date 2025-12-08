@@ -63,7 +63,7 @@ public class DirectoryApiV1Client {
 			String jsonBody = objectMapper.writeValueAsString(ping);
 			RequestBody body = RequestBody.create(jsonBody, JSON);
 			Request request = new Request.Builder()
-					.url(Constants.getSettings().directoryHost() + DIRECTORY_PING_PATH)
+					.url(Constants.getDirectoryConfig().host() + DIRECTORY_PING_PATH)
 					.post(body)
 					.build();
 			try (Response response = directoryOkHttpClient.newCall(request).execute()) {
@@ -88,10 +88,10 @@ public class DirectoryApiV1Client {
 			throw new GEFailedException(
 					"Failed to serialize or deserialize Directory PONG response: " + e.getMessage());
 		} catch (IOException e) {
-			log.error("Directory PONG request failed for {}: {}", Constants.getSettings().directoryHost(),
+			log.error("Directory PONG request failed for {}: {}", Constants.getDirectoryConfig().host(),
 					e.getMessage());
 			throw new GEFailedException(
-					"Directory PONG request failed for " + Constants.getSettings().directoryHost() + ": "
+					"Directory PONG request failed for " + Constants.getDirectoryConfig().host() + ": "
 							+ e.getMessage());
 		} catch (Exception e) {
 			log.error("An unexpected error occurred: {}", e.getMessage());

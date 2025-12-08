@@ -1,9 +1,5 @@
 {
   "_comment": "Copy this file to genesis-mainnet-dev.json and customize for local development",
-  "directory": {
-    "host": "https://directory.goldenera.global",
-    "identityAddress": "0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"
-  },
   "limits": {
     "maxHeaderSizeInBytes": 500,
     "maxTxSizeInBytes": 100000,

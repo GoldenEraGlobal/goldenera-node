@@ -50,10 +50,6 @@ public record NetworkSettings(
         // GENESIS SETTINGS (loaded from JSON)
         // =============================================
 
-        // Directory configuration
-        String directoryHost,
-        Address directoryIdentityAddress,
-
         // Size limits (base values, use getters with height for fork-aware values)
         long maxHeaderSizeInBytes,
         long maxTxSizeInBytes,
@@ -183,8 +179,6 @@ public record NetworkSettings(
         ConsensusSettings consensus = Constants.getConsensusSettings(network);
 
         return new NetworkSettings(
-                genesis.directoryHost(),
-                genesis.directoryIdentityAddress(),
                 genesis.maxHeaderSizeInBytes(),
                 genesis.maxTxSizeInBytes(),
                 genesis.maxBlockSizeInBytes(),

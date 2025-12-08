@@ -27,6 +27,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.shared.utils.VersionUtil;
 import lombok.experimental.UtilityClass;
@@ -58,6 +59,50 @@ public class Constants {
                 // Add future forks here, e.g.:
                 // UPGRADE_1,
                 // UPGRADE_2;
+        }
+
+        // =============================================
+        // DIRECTORY CONFIGURATION (can change, split by network)
+        // =============================================
+
+        /**
+         * Directory service configuration.
+         * These settings can change over time (unlike consensus settings).
+         */
+        public record DirectoryConfig(
+                        String host,
+                        Address identityAddress) {
+        }
+
+        /**
+         * Directory configuration for MAINNET.
+         */
+        private static final DirectoryConfig MAINNET_DIRECTORY = new DirectoryConfig(
+                        "https://directory.goldenera.global",
+                        Address.fromHexString("0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"));
+
+        /**
+         * Directory configuration for TESTNET.
+         */
+        private static final DirectoryConfig TESTNET_DIRECTORY = new DirectoryConfig(
+                        "https://directory.goldenera.global",
+                        Address.fromHexString("0xecb9d8f3e8b3f6f961065f4d942df8a2bedec2f4"));
+
+        /**
+         * Get directory configuration for a specific network.
+         */
+        public static DirectoryConfig getDirectoryConfig(Network network) {
+                return switch (network) {
+                        case MAINNET -> MAINNET_DIRECTORY;
+                        case TESTNET -> TESTNET_DIRECTORY;
+                };
+        }
+
+        /**
+         * Get directory configuration for the active network.
+         */
+        public static DirectoryConfig getDirectoryConfig() {
+                return getDirectoryConfig(getActiveNetwork());
         }
 
         // =============================================
