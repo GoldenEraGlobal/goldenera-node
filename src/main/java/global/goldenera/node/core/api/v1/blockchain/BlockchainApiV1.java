@@ -54,12 +54,14 @@ import global.goldenera.node.core.api.v1.blockchain.dtos.TokenStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.api.v1.blockchain.mappers.StateMapper;
+import global.goldenera.node.core.blockchain.genesis.GenesisStateService;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.domain.TxCacheEntry;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.security.CoreApiSecurity;
@@ -80,6 +82,7 @@ public class BlockchainApiV1 {
     ChainHeadStateCache chainHeadStateCache;
     EntityIndexRepository entityIndexRepository;
     MempoolStore mempoolStore;
+    GenesisStateService genesisStateService;
 
     BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
     BlockchainTxMapper blockchainTxMapper;
@@ -163,10 +166,8 @@ public class BlockchainApiV1 {
             @RequestParam(required = true) Integer fromIndex,
             @RequestParam(required = true) Integer toIndex) {
         PaginationUtil.validateRangeRequest(fromIndex, toIndex, MAX_TX_RANGE);
-        StoredBlock storedBlock = chainQuery.getStoredBlockByHash(hash)
-                .orElseThrow(() -> new GENotFoundException("Block not found"));
-
-        return ResponseEntity.ok(blockchainTxMapper.mapRange(storedBlock, fromIndex, toIndex));
+        List<TxCacheEntry> entries = chainQuery.getTransactionRange(hash, fromIndex, toIndex);
+        return ResponseEntity.ok(entries.stream().map(blockchainTxMapper::map).collect(Collectors.toList()));
     }
 
     // ========================
@@ -176,10 +177,10 @@ public class BlockchainApiV1 {
     @CoreApiSecurity(ApiKeyPermission.READ_TX)
     @GetMapping("tx/by-hash/{hash}")
     public ResponseEntity<BlockchainTxDtoV1> getTransactionByHash(@PathVariable Hash hash) {
-        StoredBlock storedBlock = chainQuery.getTransactionBlock(hash)
+        TxCacheEntry entry = chainQuery.getTransactionEntry(hash)
                 .orElseThrow(() -> new GENotFoundException("Transaction not found"));
 
-        return ResponseEntity.ok(blockchainTxMapper.map(storedBlock, hash));
+        return ResponseEntity.ok(blockchainTxMapper.map(entry));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_TX)
@@ -318,5 +319,36 @@ public class BlockchainApiV1 {
         }
 
         return ResponseEntity.ok(builder.build());
+    }
+
+    // ========================
+    // Genesis State endpoints (cached, immutable)
+    // ========================
+
+    @CoreApiSecurity(ApiKeyPermission.READ_NETWORK_PARAMS)
+    @GetMapping("genesis/network-params")
+    public ResponseEntity<NetworkParamsStateDtoV1> getGenesisNetworkParams() {
+        return ResponseEntity.ok(stateMapper.map(genesisStateService.getGenesisNetworkParams()));
+    }
+
+    @CoreApiSecurity(ApiKeyPermission.READ_TOKEN)
+    @GetMapping("genesis/native-token")
+    public ResponseEntity<TokenStateDtoV1> getGenesisNativeToken() {
+        return ResponseEntity.ok(stateMapper.map(genesisStateService.getGenesisNativeToken()));
+    }
+
+    @CoreApiSecurity(ApiKeyPermission.READ_AUTHORITY)
+    @GetMapping("genesis/authorities")
+    public ResponseEntity<Map<Address, AuthorityStateDtoV1>> getGenesisAuthorities() {
+        Map<Address, AuthorityStateDtoV1> result = genesisStateService.getGenesisAuthoritiesWithAddresses()
+                .entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, e -> stateMapper.map(e.getValue())));
+        return ResponseEntity.ok(result);
+    }
+
+    @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
+    @GetMapping("genesis/block-hash")
+    public ResponseEntity<Hash> getGenesisBlockHash() {
+        return ResponseEntity.ok(genesisStateService.getGenesisBlockHash());
     }
 }

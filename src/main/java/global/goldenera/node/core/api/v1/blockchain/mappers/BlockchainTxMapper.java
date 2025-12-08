@@ -35,6 +35,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.domain.TxCacheEntry;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -59,13 +60,25 @@ public class BlockchainTxMapper {
         if (tx == null) {
             throw new IllegalArgumentException("Transaction not found in block: " + txHash);
         }
+        return map(storedBlock, tx);
+    }
+
+    /**
+     * Maps a transaction using provided Tx object and StoredBlock metadata.
+     * Useful when Tx is cached and StoredBlock is header-only (which still has
+     * TxIndex).
+     */
+    public BlockchainTxDtoV1 map(@NonNull StoredBlock storedBlock, @NonNull Tx tx) {
+        Hash txHash = tx.getHash();
 
         Integer idx = storedBlock.getTransactionIndex().get(txHash);
         int index = idx != null ? idx : -1;
+        // If StoredBlock is header-only, it has TxIndex but not the Tx body list.
+        // We can get size/sender from TxIndex if available, otherwise from Tx itself.
         int size = storedBlock.getTransactionSizeByIndex(index);
         Address sender = storedBlock.getTransactionSenderByIndex(index);
 
-        // Fallback if index data not available
+        // Fallback if index data not available or invalid
         if (size < 0)
             size = tx.getSize();
         if (sender == null)
@@ -136,6 +149,21 @@ public class BlockchainTxMapper {
                         block != null ? block.getHash() : null,
                         block != null ? block.getHeight() : null,
                         block != null ? block.getHeader().getTimestamp() : null));
+    }
+
+    /**
+     * Maps a cached transaction entry to DTO.
+     */
+    public BlockchainTxDtoV1 map(@NonNull TxCacheEntry entry) {
+        return new BlockchainTxDtoV1(txMapper.map(entry.tx()),
+                new BlockchainTxDtoV1.BlockchainTxMetadataDtoV1(
+                        entry.tx().getHash(),
+                        entry.size(),
+                        entry.sender(),
+                        entry.txIndex(),
+                        entry.blockHash(),
+                        entry.blockHeight(),
+                        java.time.Instant.ofEpochMilli(entry.blockTimestamp())));
     }
 
     /**

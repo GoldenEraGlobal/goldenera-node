@@ -45,6 +45,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.enums.StoredBlockVersion;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.domain.TxCacheEntry;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockDecoder;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockEncoder;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
@@ -72,7 +73,7 @@ public class BlockRepository {
 	Cache<Hash, StoredBlock> blockCache;
 	Cache<Hash, StoredBlock> headerCache; // Cache for partial (header-only) blocks
 	Cache<Long, Hash> heightCache;
-	Cache<Hash, Tx> txCache;
+	Cache<Hash, TxCacheEntry> txCache;
 	AtomicReference<StoredBlock> latestBlockCache = new AtomicReference<>();
 
 	private final ThreadLocal<List<Runnable>> postCommitActions = new ThreadLocal<>();
@@ -374,18 +375,17 @@ public class BlockRepository {
 	}
 
 	/**
-	 * Gets a cached transaction by hash, or empty if not cached.
+	 * Gets a cached transaction entry by hash, or empty if not cached.
 	 */
-	public Optional<Tx> getCachedTransaction(Hash txHash) {
-		Tx cached = txCache.getIfPresent(txHash);
-		return Optional.ofNullable(cached);
+	public Optional<TxCacheEntry> getCachedTxEntry(Hash txHash) {
+		return Optional.ofNullable(txCache.getIfPresent(txHash));
 	}
 
 	/**
-	 * Puts a transaction into the cache.
+	 * Puts a transaction entry into the cache.
 	 */
-	public void cacheTransaction(Hash txHash, Tx tx) {
-		txCache.put(txHash, tx);
+	public void cacheTxEntry(TxCacheEntry entry) {
+		txCache.put(entry.tx().getHash(), entry);
 	}
 
 	// ========================
@@ -520,6 +520,11 @@ public class BlockRepository {
 		batch.delete(cf.hashByHeight(), Bytes.ofUnsignedLong(blockToDisconnect.getHeight()).toArray());
 		scheduleInvalidation(() -> heightCache.invalidate(blockToDisconnect.getHeight()));
 		scheduleInvalidation(() -> latestBlockCache.set(newTip));
+
+		Hash[] txHashes = blockToDisconnect.getTransactionHashes();
+		if (txHashes != null && txHashes.length > 0) {
+			scheduleInvalidation(() -> txCache.invalidateAll(List.of(txHashes)));
+		}
 	}
 
 	public void forceDisconnectBlockIndex(WriteBatch batch, long height, Hash newTipHash) throws RocksDBException {

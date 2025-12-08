@@ -37,13 +37,13 @@ import org.springframework.context.annotation.Configuration;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
-import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.properties.BlockchainDbProperties;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.domain.TxCacheEntry;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -122,15 +122,18 @@ public class CacheConfig {
 	}
 
 	/**
-	 * Cache for recently accessed transactions.
+	 * Cache for recently accessed transactions with their block metadata.
+	 * Optimized to return lightweight TxCacheEntry instead of loading full
+	 * StoredBlock.
 	 */
 	@Bean("txCache")
-	public Cache<Hash, Tx> txCache() {
+	public Cache<Hash, TxCacheEntry> txCache() {
 		long maxBytes = props.getCacheTxMb() * 1024L * 1024L;
 		log.info("Initializing txCache: {}MB, expire: {}min", props.getCacheTxMb(), props.getCacheExpireMinutes());
 		return Caffeine.newBuilder()
 				.maximumWeight(maxBytes)
-				.weigher((Hash key, Tx value) -> value.getSize())
+				.weigher((Hash key, TxCacheEntry value) -> value
+						.size())
 				.expireAfterWrite(props.getCacheExpireMinutes(), TimeUnit.MINUTES)
 				.build();
 	}

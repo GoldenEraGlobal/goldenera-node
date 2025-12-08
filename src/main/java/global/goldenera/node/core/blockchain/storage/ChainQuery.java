@@ -39,6 +39,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.domain.TxCacheEntry;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -183,20 +184,12 @@ public class ChainQuery {
      */
     public Optional<Tx> getTransactionByHash(Hash txHash) {
         // Check cache first
-        Optional<Tx> cached = blockRepository.getCachedTransaction(txHash);
+        Optional<TxCacheEntry> cached = blockRepository.getCachedTxEntry(txHash);
         if (cached.isPresent()) {
-            return cached;
+            return Optional.of(cached.get().tx());
         }
 
-        return blockRepository.getTransactionBlockHash(txHash)
-                .flatMap(blockHash -> getCanonicalStoredBlockByHash(blockHash))
-                .map(storedBlock -> {
-                    Tx tx = storedBlock.getTransactionByHash(txHash);
-                    if (tx != null) {
-                        blockRepository.cacheTransaction(txHash, tx);
-                    }
-                    return tx;
-                });
+        return getTransactionEntry(txHash).map(TxCacheEntry::tx);
     }
 
     /**
@@ -228,6 +221,15 @@ public class ChainQuery {
      * Gets the block height where a transaction is included in canonical chain.
      */
     public Optional<Long> getTransactionBlockHeight(Hash txHash) {
+        // 1. Check cache first
+        Optional<TxCacheEntry> cached = blockRepository.getCachedTxEntry(txHash);
+        if (cached.isPresent()) {
+            Optional<Hash> canonicalHash = blockRepository.getBlockHashByHeight(cached.get().blockHeight());
+            if (canonicalHash.isPresent() && canonicalHash.get().equals(cached.get().blockHash())) {
+                return Optional.of(cached.get().blockHeight());
+            }
+        }
+
         return blockRepository.getTransactionBlockHash(txHash)
                 .flatMap(blockHash -> {
                     // Use header-only loading for efficiency
@@ -240,6 +242,136 @@ public class ChainQuery {
                             })
                             .map(StoredBlock::getHeight);
                 });
+    }
+
+    /**
+     * Gets a range of transactions for a specific block.
+     * Optimized to usage cache and avoid full block load if possible.
+     */
+    public List<TxCacheEntry> getTransactionRange(Hash blockHash, int fromIndex, int toIndex) {
+        // 1. Get Header (Partial)
+        Optional<StoredBlock> headerOpt = getStoredBlockHeaderByHash(blockHash);
+        if (headerOpt.isEmpty()) {
+            throw new GENotFoundException("Block not found");
+        }
+        StoredBlock header = headerOpt.get();
+
+        int txCount = header.getTxCount();
+        if (fromIndex >= txCount) {
+            return Collections.emptyList();
+        }
+        int endIndex = Math.min(toIndex, txCount);
+        int rangeSize = endIndex - fromIndex;
+        if (rangeSize <= 0)
+            return Collections.emptyList();
+
+        List<TxCacheEntry> result = new ArrayList<>(Collections.nCopies(rangeSize, null));
+        List<Integer> missingIndices = new ArrayList<>();
+
+        // 2. Try to resolve from cache
+        for (int i = 0; i < rangeSize; i++) {
+            int txIndex = fromIndex + i;
+            Hash txHash = header.getTransactionHashByIndex(txIndex);
+
+            Optional<TxCacheEntry> cached = blockRepository.getCachedTxEntry(txHash);
+            if (cached.isPresent()) {
+                result.set(i, cached.get());
+            } else {
+                missingIndices.add(txIndex);
+            }
+        }
+
+        // 3. Load missing from full block
+        if (!missingIndices.isEmpty()) {
+            StoredBlock fullBlock = blockRepository.getStoredBlockByHash(blockHash)
+                    .orElseThrow(() -> new GENotFoundException("Block body not found"));
+
+            long timestamp = header.getBlock().getHeader().getTimestamp().toEpochMilli();
+
+            for (int txIndex : missingIndices) {
+                Tx tx = fullBlock.getBlock().getTxs().get(txIndex);
+
+                TxCacheEntry entry = TxCacheEntry.builder()
+                        .tx(tx)
+                        .blockHash(blockHash)
+                        .blockHeight(header.getHeight())
+                        .blockTimestamp(timestamp)
+                        .txIndex(txIndex)
+                        .sender(header.getTransactionSenderByIndex(txIndex))
+                        .size(header.getTransactionSizeByIndex(txIndex))
+                        .build();
+
+                // Cache it for future
+                blockRepository.cacheTxEntry(entry);
+
+                // Place in result (relative index)
+                result.set(txIndex - fromIndex, entry);
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Gets transaction and its metadata from canonical chain.
+     * Optimized to avoid loading full block body using cache.
+     */
+    public Optional<TxCacheEntry> getTransactionEntry(Hash txHash) {
+        // 1. Check cache first
+        Optional<TxCacheEntry> cached = blockRepository.getCachedTxEntry(txHash);
+        if (cached.isPresent()) {
+            // Verify it is still canonical (reorg protection)
+            Optional<Hash> canonicalHash = blockRepository.getBlockHashByHeight(cached.get().blockHeight());
+            if (canonicalHash.isPresent() && canonicalHash.get().equals(cached.get().blockHash())) {
+                return cached;
+            }
+            // If not canonical, ignore cache (it will be overwritten logic below or
+            // effectively invalid)
+        }
+
+        // 2. Get Block Hash from index
+        Optional<Hash> blockHashOpt = blockRepository.getTransactionBlockHash(txHash);
+        if (blockHashOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        Hash blockHash = blockHashOpt.get();
+
+        // 3. Get Canonical Header (Partial) - verifies chain membership
+        Optional<StoredBlock> headerOpt = getCanonicalStoredBlockHeaderByHash(blockHash);
+        if (headerOpt.isEmpty()) {
+            return Optional.empty();
+        }
+        StoredBlock header = headerOpt.get();
+
+        // 4. Load full block to get Tx details (if not in cache or cache invalid)
+        // We use getStoredBlockByHash which handles the full block cache check
+        Optional<StoredBlock> fullBlockOpt = blockRepository.getStoredBlockByHash(blockHash);
+        if (fullBlockOpt.isPresent()) {
+            StoredBlock fullBlock = fullBlockOpt.get();
+            Tx tx = fullBlock.getTransactionByHash(txHash);
+
+            if (tx != null) {
+                // Get index from TxIndex
+                Integer index = fullBlock.getTransactionIndex().get(txHash);
+                if (index == null)
+                    index = -1;
+
+                TxCacheEntry entry = TxCacheEntry.builder()
+                        .tx(tx)
+                        .blockHash(header.getHash())
+                        .blockHeight(header.getHeight())
+                        .blockTimestamp(header.getBlock().getHeader().getTimestamp().toEpochMilli())
+                        .txIndex(index)
+                        .sender(tx.getSender()) // Assuming sender is recovered in Tx object
+                        .size(tx.getSize())
+                        .build();
+
+                blockRepository.cacheTxEntry(entry);
+                return Optional.of(entry);
+            }
+        }
+
+        return Optional.empty();
     }
 
     // ========================
