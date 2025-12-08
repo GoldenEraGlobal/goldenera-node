@@ -31,6 +31,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
+import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -40,6 +41,7 @@ import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
 import global.goldenera.node.core.processing.StateProcessor;
@@ -49,6 +51,7 @@ import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
@@ -68,6 +71,7 @@ public class ChainSwitchService {
     ApplicationEventPublisher applicationEventPublisher;
     ReentrantLock masterChainLock;
     EntityIndexRepository entityIndexRepository;
+    BlockEventExtractor blockEventExtractor;
 
     public ChainSwitchService(
             ChainQuery chainQueryService,
@@ -77,7 +81,8 @@ public class ChainSwitchService {
             BlockValidator blockValidationService,
             ApplicationEventPublisher applicationEventPublisher,
             @Qualifier("masterChainLock") ReentrantLock masterChainLock,
-            EntityIndexRepository entityIndexRepository) {
+            EntityIndexRepository entityIndexRepository,
+            BlockEventExtractor blockEventExtractor) {
         this.chainQueryService = chainQueryService;
         this.blockRepository = blockRepository;
         this.worldStateFactory = worldStateFactory;
@@ -86,6 +91,7 @@ public class ChainSwitchService {
         this.applicationEventPublisher = applicationEventPublisher;
         this.masterChainLock = masterChainLock;
         this.entityIndexRepository = entityIndexRepository;
+        this.blockEventExtractor = blockEventExtractor;
     }
 
     public void executeAtomicReorgSwap(
@@ -160,13 +166,32 @@ public class ChainSwitchService {
                                     "Reorg failed: Invalid StateRoot for " + blockToConnect.getHash());
                         }
 
+                        // Extract block events from execution result
+                        Wei totalFees = result.getTotalFeesCollected();
+                        Wei actualRewardPaid = result.getMinerActualRewardPaid();
+                        Wei blockRewardFromPool = actualRewardPaid.subtract(totalFees);
+
+                        List<BlockEvent> blockEvents = blockEventExtractor.extractEvents(
+                                blockRewardFromPool,
+                                totalFees,
+                                blockToConnect.getHeader().getCoinbase(),
+                                params.getBlockRewardPoolAddress(),
+                                worldState.getBipDiffs(),
+                                worldState.getTokenDiffs(),
+                                result.getActualBurnAmounts());
+
+                        // Update StoredBlock with extracted events
+                        StoredBlock storedBlockWithEvents = storedBlockToConnect.toBuilder()
+                                .events(blockEvents)
+                                .build();
+
                         worldState.persistToBatch(batch);
                         entityIndexRepository.saveEntities(batch, blockToConnect, worldState);
 
                         if (saveTipData && i == newChainHeaders.size() - 1) {
-                            blockRepository.addBlockToBatch(batch, storedBlockToConnect);
+                            blockRepository.addBlockToBatch(batch, storedBlockWithEvents);
                         } else {
-                            blockRepository.connectBlockIndexToBatch(batch, storedBlockToConnect);
+                            blockRepository.connectBlockIndexToBatch(batch, storedBlockWithEvents);
                         }
 
                         BlockConnectedEvent event = new BlockConnectedEvent(

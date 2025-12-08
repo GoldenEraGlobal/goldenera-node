@@ -49,6 +49,7 @@ import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
@@ -66,6 +67,7 @@ public class BlockStateTransitions {
 	ApplicationEventPublisher applicationEventPublisher;
 	ReentrantLock masterChainLock;
 	EntityIndexRepository entityIndexRepository;
+	BlockEventExtractor blockEventExtractor;
 
 	public BlockStateTransitions(
 			BlockRepository blockRepository,
@@ -73,13 +75,15 @@ public class BlockStateTransitions {
 			ChainSwitchService chainSwitchService,
 			ApplicationEventPublisher applicationEventPublisher,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
-			EntityIndexRepository entityIndexRepository) {
+			EntityIndexRepository entityIndexRepository,
+			BlockEventExtractor blockEventExtractor) {
 		this.blockRepository = blockRepository;
 		this.chainQueryService = chainQueryService;
 		this.chainSwitchService = chainSwitchService;
 		this.applicationEventPublisher = applicationEventPublisher;
 		this.masterChainLock = masterChainLock;
 		this.entityIndexRepository = entityIndexRepository;
+		this.blockEventExtractor = blockEventExtractor;
 	}
 
 	public void connectBlock(
@@ -107,6 +111,25 @@ public class BlockStateTransitions {
 						.add(block.getHeader().getDifficulty());
 			}
 
+			// Extract block events from execution result
+			List<BlockEvent> blockEvents = List.of();
+			if (height > 0 && executionResult != null) {
+				Wei totalFees = executionResult.getTotalFeesCollected();
+				Wei actualRewardPaid = executionResult.getMinerActualRewardPaid();
+				// Block reward = total reward paid - fees (fees are added on top of block
+				// reward)
+				Wei blockRewardFromPool = actualRewardPaid.subtract(totalFees);
+
+				blockEvents = blockEventExtractor.extractEvents(
+						blockRewardFromPool,
+						totalFees,
+						block.getHeader().getCoinbase(),
+						worldState.getParams().getBlockRewardPoolAddress(),
+						worldState.getBipDiffs(),
+						worldState.getTokenDiffs(),
+						executionResult.getActualBurnAmounts());
+			}
+
 			StoredBlock storedBlockToSave = StoredBlock.builder()
 					.block(block)
 					.cumulativeDifficulty(cumulativeDifficulty)
@@ -114,6 +137,7 @@ public class BlockStateTransitions {
 					.receivedAt(receivedAt)
 					.connectedSource(source)
 					.computeIndexes()
+					.events(blockEvents)
 					.build();
 
 			boolean isNewHead = false;

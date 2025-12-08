@@ -9,10 +9,16 @@
 To run a node successfully, your system **must** meet the following minimum requirements. Failing to meet these may result in node instability, syncing issues, or mining failures.
 
 * **CPU:** Minimum **4 vCPUs** (High single-core performance is recommended for mining).
-* **RAM:** Minimum **8 GB** (DDR4/DDR5 recommended).
+* **RAM:** Minimum **8 GB**, recommended **16 GB** for optimal performance.
 * **Storage:** Fast SSD/NVMe (HDD is strictly not recommended for blockchain databases).
 
-> **Note on Memory:** The Docker configuration explicitly reserves **5GB of RAM** for the Node container (approximately 2.5GB for the RandomX mining dataset + 2.5GB for the Spring Boot application). You must have additional RAM available for the host operating system and the PostgreSQL database.
+> **Note on Memory:** The node uses multiple memory pools:
+> - **RandomX Dataset:** ~2.5 GB (fixed, required for mining)
+> - **Java Heap:** Configurable via `JAVA_HEAP_MB`
+> - **RocksDB Cache:** Configurable via `ROCKSDB_BLOCK_CACHE_MB` (off-heap)
+> - **PostgreSQL + OS:** ~1.5 GB
+>
+> See `.env.example` for sizing recommendations by VPS size.
 
 ---
 
@@ -90,13 +96,8 @@ services:
       memlock:
         soft: -1
         hard: -1
-    deploy:
-      resources:
-        reservations:
-          # IMPORTANT: Minimum 5GB reservation required.
-          # ~2.5GB for RandomX + ~2.5GB for Node application.
-          # Ensure your host has extra RAM for the Database.
-          memory: 5G
+    # Memory is managed via .env: JAVA_HEAP_MB + ROCKSDB_BLOCK_CACHE_MB
+    # Minimum recommended: 8GB RAM (see .env.example for sizing guide)
 
   # ==============================================================================
   # DATABASE
@@ -144,6 +145,96 @@ EXPLORER_ENABLE=true
 NODE_IDENTITY_FILE="./node_data/.node_identity"
 BLOCKCHAIN_DB_PATH="./node_data/blockchain"
 PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
+# =============================================================================
+# MEMORY CONFIGURATION
+# =============================================================================
+# 
+# Memory layout for GoldenEra Node:
+#   - Java Heap (JAVA_HEAP_MB):     JVM memory for application (configurable)
+#   - RocksDB Block Cache:          Native memory for disk cache (configurable)
+#   - RandomX Dataset:              ~2.5 GB (FIXED, required for mining)
+#   - OS + postgre buffers:                 ~1.5 GB
+#
+# EXAMPLES by VPS size:
+#   8GB VPS:  JAVA_HEAP_MB=2048,  ROCKSDB_BLOCK_CACHE_MB=1024
+#   16GB VPS: JAVA_HEAP_MB=8192,  ROCKSDB_BLOCK_CACHE_MB=2048
+#   32GB VPS: JAVA_HEAP_MB=16384, ROCKSDB_BLOCK_CACHE_MB=8192
+#
+# Leave empty for auto-calculation (recommended for beginners)
+# =============================================================================
+JAVA_HEAP_MB=
+
+# =============================================================================
+# RocksDB Tuning
+# =============================================================================
+# Block cache: main read cache, shared across all column families (OFF-HEAP memory!)
+# See memory examples above for recommended values
+ROCKSDB_BLOCK_CACHE_MB=512
+
+# Write buffer (memtable) size per column family
+# Larger = better write throughput, higher memory usage
+ROCKSDB_WRITE_BUFFER_MB=64
+
+# Max write buffers per CF (allows writes during flush)
+ROCKSDB_MAX_WRITE_BUFFERS=4
+
+# Background jobs for compaction/flush (set to CPU cores / 2)
+ROCKSDB_MAX_BACKGROUND_JOBS=6
+
+# SST block size (16KB good for point lookups, increase for scan-heavy workloads)
+ROCKSDB_BLOCK_SIZE_KB=16
+
+# Bloom filter bits per key (10 = ~1% false positive rate)
+ROCKSDB_BLOOM_FILTER_BITS=10
+
+# Direct I/O (recommended for Linux, reduces double-buffering)
+ROCKSDB_DIRECT_READS=true
+ROCKSDB_DIRECT_WRITES=true
+
+# Rate limit for background I/O in MB/s (0 = unlimited)
+# Set to ~50-100 on slower disks to prevent compaction from starving reads
+ROCKSDB_RATE_LIMIT_MB_PER_SEC=0
+
+# =============================================================================
+# BlobDB for Large Values (StoredBlock up to 7MB)
+# =============================================================================
+# Enable BlobDB for CF_BLOCKS (separates large values from LSM tree)
+ROCKSDB_BLOB_ENABLED=true
+
+# Minimum value size to store in blob files (bytes)
+# Values >= this go to blob files, smaller stay in SST
+# 64KB is good threshold - most headers are smaller, full blocks are larger
+ROCKSDB_BLOB_MIN_BYTES=65536
+
+# Blob file size in MB (256MB recommended for GCloud PD SSD)
+ROCKSDB_BLOB_FILE_SIZE_MB=256
+
+# Enable blob garbage collection during compaction
+ROCKSDB_BLOB_GC_ENABLED=true
+
+# Blob GC age cutoff (0.0-1.0): GC when this fraction of blobs are garbage
+ROCKSDB_BLOB_GC_AGE_CUTOFF=0.25
+
+# =============================================================================
+# Application Cache (Caffeine - in-heap caching)
+# =============================================================================
+# Block cache: full StoredBlock objects
+CACHE_BLOCK_MB=256
+
+# Trie node cache: WorldState MPT nodes (critical for state lookups)
+CACHE_TRIE_NODE_MB=256
+
+# Transaction cache
+CACHE_TX_MB=128
+
+# Header cache: partial blocks (headers only) - entry count
+CACHE_HEADER_MAX_ENTRIES=50000
+
+# Height-to-hash cache - entry count
+CACHE_HEIGHT_MAX_ENTRIES=100000
+
+# Cache expiration time in minutes
+CACHE_EXPIRE_MINUTES=60
 
 # Network
 NETWORK="MAINNET"
@@ -224,6 +315,8 @@ Before running the node, you must adjust specific `.env` variables to match your
 
 | Variable | Description & Requirement |
 | :--- | :--- |
+| **`JAVA_HEAP_MB`** | Java heap size in MB. Leave empty for auto-calculation. See memory examples in `.env`. |
+| **`ROCKSDB_BLOCK_CACHE_MB`** | RocksDB read cache (off-heap). Default `512`. See memory examples above. |
 | **`LISTEN_PORT`** | The port for the Explorer/Admin API (exposed via Docker). Default is `8080`. |
 | **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |
 | **`P2P_HOST`** | **Must be your Public IP Address.**<br>Do not use a domain name here. This is used for peer discovery. |

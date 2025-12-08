@@ -25,6 +25,7 @@ package global.goldenera.node.core.storage.blockchain.serialization.impl.decodin
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -33,7 +34,9 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.block.BlockDecoder;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.serialization.BlockEventDecoder;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockDecodingStrategy;
 import global.goldenera.rlp.RLPInput;
 
@@ -81,6 +84,9 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 		// Create TxIndex from stored data (derives hash maps internally)
 		StoredBlock.TxIndex txIndex = StoredBlock.TxIndex.fromStored(hashes, sizes, senders);
 
+		// Read block events (invisible state changes)
+		List<BlockEvent> events = BlockEventDecoder.INSTANCE.decodeList(input);
+
 		return StoredBlock.builder()
 				.block(block)
 				.cumulativeDifficulty(cumulativeDifficulty)
@@ -91,6 +97,7 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 				.hash(hash)
 				.blockSize(blockSize)
 				.txIndex(txIndex)
+				.events(events)
 				.build();
 	}
 
@@ -98,5 +105,4 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 	public StoredBlock decode(RLPInput input) {
 		return decode(input, false);
 	}
-
 }

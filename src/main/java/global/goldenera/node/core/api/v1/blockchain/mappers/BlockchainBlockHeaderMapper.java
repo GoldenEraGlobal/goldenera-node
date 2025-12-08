@@ -29,7 +29,9 @@ import java.util.List;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockEventDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -42,28 +44,60 @@ import lombok.experimental.FieldDefaults;
 public class BlockchainBlockHeaderMapper {
 
     BlockHeaderMapper blockHeaderMapper;
+    BlockEventMapper blockEventMapper;
 
+    /**
+     * Maps StoredBlock to DTO without events.
+     */
     public BlockchainBlockHeaderDtoV1 map(@NonNull StoredBlock in) {
-        return new BlockchainBlockHeaderDtoV1(
-                blockHeaderMapper.map(in.getBlock().getHeader()),
-                new BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1(
-                        in.getHash(),
-                        in.getBlockSize(),
-                        in.getTxCount()));
+        return map(in, false);
     }
 
+    /**
+     * Maps StoredBlock to DTO with optional events.
+     */
+    public BlockchainBlockHeaderDtoV1 map(@NonNull StoredBlock in, boolean withEvents) {
+        BlockchainBlockHeaderMetadataDtoV1 metadata = new BlockchainBlockHeaderMetadataDtoV1(
+                in.getHash(),
+                in.getBlockSize(),
+                in.getTxCount());
+
+        List<BlockEventDtoV1> eventDtos = null;
+        if (withEvents && in.getEvents() != null && !in.getEvents().isEmpty()) {
+            eventDtos = blockEventMapper.map(in.getEvents());
+        }
+
+        return new BlockchainBlockHeaderDtoV1(
+                blockHeaderMapper.map(in.getBlock().getHeader()),
+                metadata,
+                eventDtos);
+    }
+
+    /**
+     * Maps list of StoredBlocks to DTOs without events.
+     */
     public List<BlockchainBlockHeaderDtoV1> map(@NonNull List<StoredBlock> in) {
+        return map(in, false);
+    }
+
+    /**
+     * Maps list of StoredBlocks to DTOs with optional events.
+     */
+    public List<BlockchainBlockHeaderDtoV1> map(@NonNull List<StoredBlock> in, boolean withEvents) {
         List<BlockchainBlockHeaderDtoV1> result = new ArrayList<>(in.size());
         for (StoredBlock storedBlock : in) {
-            result.add(map(storedBlock));
+            result.add(map(storedBlock, withEvents));
         }
         return result;
     }
 
+    /**
+     * Maps Block to DTO (no events available from Block).
+     */
     public BlockchainBlockHeaderDtoV1 mapBlock(@NonNull Block in) {
         return new BlockchainBlockHeaderDtoV1(
                 blockHeaderMapper.map(in.getHeader()),
-                new BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1(
+                new BlockchainBlockHeaderMetadataDtoV1(
                         in.getHash(),
                         in.getSize(),
                         in.getTxs().size()));
@@ -76,5 +110,4 @@ public class BlockchainBlockHeaderMapper {
         }
         return result;
     }
-
 }

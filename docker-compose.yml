@@ -30,10 +30,8 @@ services:
       memlock:
         soft: -1
         hard: -1
-    deploy:
-      resources:
-        reservations:
-          memory: 5G
+    # Memory is managed via .env: JAVA_HEAP_MB + ROCKSDB_BLOCK_CACHE_MB
+    # Minimum recommended: 8GB RAM (see .env.example for sizing guide)
 
   # ==============================================================================
   # DATABASE

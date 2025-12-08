@@ -100,35 +100,41 @@ public class BlockchainApiV1 {
     @GetMapping("block-header/by-range")
     public ResponseEntity<List<BlockchainBlockHeaderDtoV1>> getBlockHeaderByRange(
             @RequestParam(required = true) long fromHeight,
-            @RequestParam(required = true) Long toHeight) {
+            @RequestParam(required = true) Long toHeight,
+            @RequestParam(required = false, defaultValue = "false") boolean withEvents) {
         PaginationUtil.validateRangeRequest(fromHeight, toHeight, MAX_BLOCK_HEADER_RANGE);
         List<StoredBlock> storedBlockHeaders = chainQuery.findStoredBlockHeadersByHeightRange(fromHeight, toHeight);
-        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeaders));
+        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeaders, withEvents));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/latest")
-    public ResponseEntity<BlockchainBlockHeaderDtoV1> getLatestBlockHeader() {
+    public ResponseEntity<BlockchainBlockHeaderDtoV1> getLatestBlockHeader(
+            @RequestParam(required = false, defaultValue = "false") boolean withEvents) {
         StoredBlock storedBlockHeader = chainQuery.getLatestBlockHash()
                 .flatMap(chainQuery::getStoredBlockHeaderByHash)
                 .orElseThrow(() -> new GENotFoundException("Block not found"));
-        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader));
+        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader, withEvents));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/by-hash/{hash}")
-    public ResponseEntity<BlockchainBlockHeaderDtoV1> getBlockHeaderByHash(@PathVariable Hash hash) {
+    public ResponseEntity<BlockchainBlockHeaderDtoV1> getBlockHeaderByHash(
+            @PathVariable Hash hash,
+            @RequestParam(required = false, defaultValue = "false") boolean withEvents) {
         StoredBlock storedBlockHeader = chainQuery.getStoredBlockHeaderByHash(hash)
                 .orElseThrow(() -> new GENotFoundException("Block not found"));
-        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader));
+        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader, withEvents));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
     @GetMapping("block-header/by-height/{height}")
-    public ResponseEntity<BlockchainBlockHeaderDtoV1> getBlockHeaderByHeight(@PathVariable Long height) {
+    public ResponseEntity<BlockchainBlockHeaderDtoV1> getBlockHeaderByHeight(
+            @PathVariable Long height,
+            @RequestParam(required = false, defaultValue = "false") boolean withEvents) {
         StoredBlock storedBlockHeader = chainQuery.getStoredBlockHeaderByHeight(height)
                 .orElseThrow(() -> new GENotFoundException("Block not found"));
-        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader));
+        return ResponseEntity.ok(blockchainBlockHeaderMapper.map(storedBlockHeader, withEvents));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)

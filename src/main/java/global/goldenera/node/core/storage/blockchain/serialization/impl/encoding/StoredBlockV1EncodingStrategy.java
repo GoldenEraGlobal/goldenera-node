@@ -29,6 +29,7 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.block.BlockEncoder;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.serialization.BlockEventEncoder;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockEncodingStrategy;
 import global.goldenera.rlp.RLPOutput;
 
@@ -72,5 +73,8 @@ public class StoredBlockV1EncodingStrategy implements StoredBlockEncodingStrateg
 			}
 		}
 		out.endList();
+
+		// Block events (invisible state changes)
+		BlockEventEncoder.INSTANCE.encodeList(out, storedBlock.getEvents());
 	}
 }

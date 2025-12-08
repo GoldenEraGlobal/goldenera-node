@@ -72,6 +72,19 @@ public class StoredBlock {
 	TxIndex txIndex;
 
 	/**
+	 * "Invisible" state change events that occurred in this block.
+	 * These are events like TOKEN_MINTED, AUTHORITY_ADDED, BLOCK_REWARD etc.
+	 * that are NOT explicit transactions but result from BIP execution or consensus
+	 * rules.
+	 * 
+	 * <p>
+	 * Useful for wallets/explorers to track balance changes that don't have a tx
+	 * sender.
+	 * </p>
+	 */
+	List<BlockEvent> events;
+
+	/**
 	 * Pre-computed transaction index data.
 	 * Stored in DB to avoid expensive recalculation (keccak, RLP encoding, ECDSA
 	 * recovery).
@@ -246,7 +259,8 @@ public class StoredBlock {
 				.hash(this.hash)
 				.blockSize(this.blockSize)
 				.encodedSize(this.encodedSize)
-				.txIndex(this.txIndex);
+				.txIndex(this.txIndex)
+				.events(this.events);
 	}
 
 	@FieldDefaults(level = AccessLevel.PRIVATE)
@@ -261,6 +275,7 @@ public class StoredBlock {
 		int blockSize;
 		int encodedSize;
 		TxIndex txIndex;
+		List<BlockEvent> events;
 
 		public Builder block(Block block) {
 			this.block = block;
@@ -312,6 +327,11 @@ public class StoredBlock {
 			return this;
 		}
 
+		public Builder events(List<BlockEvent> val) {
+			this.events = val;
+			return this;
+		}
+
 		/**
 		 * Computes hash, blockSize, and txIndex from block data.
 		 * Call this before build() when creating new StoredBlock from Block.
@@ -342,7 +362,8 @@ public class StoredBlock {
 					hash,
 					blockSize,
 					encodedSize,
-					txIndex);
+					txIndex,
+					events != null ? events : List.of());
 		}
 	}
 }

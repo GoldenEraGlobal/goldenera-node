@@ -25,7 +25,13 @@ package global.goldenera.node.core.api.v1.blockchain.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.List;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import global.goldenera.cryptoj.datatypes.Hash;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -39,11 +45,27 @@ import lombok.experimental.FieldDefaults;
 @NoArgsConstructor
 @ToString
 @FieldDefaults(level = PRIVATE)
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class BlockchainBlockHeaderDtoV1 {
 
+    @Schema(description = "Block header data")
     BlockHeaderDtoV1 header;
 
+    @Schema(description = "Block metadata")
     BlockchainBlockHeaderMetadataDtoV1 metadata;
+
+    @ArraySchema(schema = @Schema(implementation = BlockEventDtoV1.class))
+    @Schema(description = "Block events (only included when withEvents=true)")
+    List<BlockEventDtoV1> events;
+
+    /**
+     * Constructor without events (default)
+     */
+    public BlockchainBlockHeaderDtoV1(BlockHeaderDtoV1 header, BlockchainBlockHeaderMetadataDtoV1 metadata) {
+        this.header = header;
+        this.metadata = metadata;
+        this.events = null;
+    }
 
     @Getter
     @Setter
@@ -53,9 +75,13 @@ public class BlockchainBlockHeaderDtoV1 {
     @FieldDefaults(level = PRIVATE)
     public static class BlockchainBlockHeaderMetadataDtoV1 {
 
+        @Schema(description = "Block hash")
         Hash hash;
-        int size;
-        int numOfTxs;
 
+        @Schema(description = "Block size in bytes")
+        int size;
+
+        @Schema(description = "Number of transactions in the block")
+        int numOfTxs;
     }
 }
