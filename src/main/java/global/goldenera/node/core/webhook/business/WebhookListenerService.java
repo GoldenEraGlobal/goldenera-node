@@ -59,7 +59,7 @@ public class WebhookListenerService {
 	@EventListener
 	public void handleBlockConnected(BlockConnectedEvent event) {
 		log.debug("Processing BlockConnectedEvent: {}", event.getBlock().getHash());
-		webhookDispatchService.processNewBlockEvent(event.getBlock());
+		webhookDispatchService.processNewBlockEvent(event.getBlock(), event.getEvents());
 		int index = 0;
 		for (Tx tx : event.getBlock().getTxs()) {
 			webhookDispatchService.processAddressActivityEvent(event.getBlock(), tx,

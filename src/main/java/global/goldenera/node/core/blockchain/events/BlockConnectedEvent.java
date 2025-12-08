@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
@@ -43,6 +44,7 @@ import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.shared.datatypes.BalanceKey;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.AllArgsConstructor;
@@ -82,6 +84,8 @@ public class BlockConnectedEvent extends ApplicationEvent {
 
 	final Map<Hash, Wei> actualBurnAmounts;
 
+	final List<BlockEvent> events;
+
 	public BlockConnectedEvent(
 			Object source,
 			ConnectedSource connectedSource,
@@ -99,6 +103,7 @@ public class BlockConnectedEvent extends ApplicationEvent {
 			Wei actualRewardPaid,
 			BigInteger cumulativeDifficulty,
 			Map<Hash, Wei> actualBurnAmounts,
+			List<BlockEvent> events,
 			Address receivedFrom,
 			Instant receivedAt) {
 		super(source);
@@ -117,6 +122,7 @@ public class BlockConnectedEvent extends ApplicationEvent {
 		this.minerActualRewardPaid = actualRewardPaid;
 		this.cumulativeDifficulty = cumulativeDifficulty;
 		this.actualBurnAmounts = actualBurnAmounts;
+		this.events = events;
 		this.receivedFrom = receivedFrom;
 		this.receivedAt = receivedAt;
 	}

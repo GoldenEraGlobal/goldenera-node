@@ -61,6 +61,7 @@ import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.enums.WebhookEventType;
 import global.goldenera.node.core.enums.WebhookTxStatus;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.webhook.business.dtos.WebhookEventDtoV1;
 import global.goldenera.node.core.webhook.core.WebhookCoreService;
 import global.goldenera.node.core.webhook.core.WebhookCoreService.WebhookEventFilter;
@@ -301,7 +302,7 @@ public class WebhookDispatchService {
 
 	// --- PROCESSING LOGIC ---
 
-	public void processNewBlockEvent(Block block) {
+	public void processNewBlockEvent(Block block, List<BlockEvent> events) {
 		for (WebhookSubscription sub : newBlockSubscriptions) {
 			// WebhookConfig config = webhookConfigs.get(sub.getWebhookId());
 			// if (config.getDtoVersion() == 1) {
@@ -309,7 +310,7 @@ public class WebhookDispatchService {
 			// }
 			WebhookEventDtoV1.NewBlockEvent event = new WebhookEventDtoV1.NewBlockEvent(
 					WebhookEventType.NEW_BLOCK,
-					blockchainBlockHeaderMapper.mapBlock(block));
+					blockchainBlockHeaderMapper.mapBlockWithEvents(block, events));
 			queuePayload(sub.getWebhookId(), event);
 		}
 	}

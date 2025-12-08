@@ -247,6 +247,7 @@ public class BlockStateTransitions {
 						actualRewardPaid,
 						cumulativeDifficulty,
 						actualBurnAmounts,
+						blockEvents,
 						receivedFrom,
 						receivedAt);
 

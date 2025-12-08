@@ -32,6 +32,7 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockEventDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1.BlockchainBlockHeaderMetadataDtoV1;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -109,5 +110,18 @@ public class BlockchainBlockHeaderMapper {
             result.add(mapBlock(block));
         }
         return result;
+    }
+
+    /**
+     * Maps Block to DTO (no events available from Block).
+     */
+    public BlockchainBlockHeaderDtoV1 mapBlockWithEvents(@NonNull Block in, @NonNull List<BlockEvent> events) {
+        return new BlockchainBlockHeaderDtoV1(
+                blockHeaderMapper.map(in.getHeader()),
+                new BlockchainBlockHeaderMetadataDtoV1(
+                        in.getHash(),
+                        in.getSize(),
+                        in.getTxs().size()),
+                blockEventMapper.map(events));
     }
 }

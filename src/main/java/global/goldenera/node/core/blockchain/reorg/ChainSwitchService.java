@@ -211,6 +211,7 @@ public class ChainSwitchService {
                                 result.getMinerActualRewardPaid(),
                                 storedBlockToConnect.getCumulativeDifficulty(),
                                 result.getActualBurnAmounts(),
+                                blockEvents,
                                 null,
                                 Instant.now());
 

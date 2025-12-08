@@ -55,6 +55,7 @@ import global.goldenera.node.core.processing.StateProcessor.ExecutionResult;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateDiff;
 import global.goldenera.node.core.state.WorldStateFactory;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.datatypes.BalanceKey;
 import lombok.AccessLevel;
@@ -115,6 +116,7 @@ public class ExIndexerEventReconstructionService {
                 Wei totalFees = executionResult.getTotalFeesCollected();
                 Wei actualRewardPaid = executionResult.getMinerActualRewardPaid();
                 Map<Hash, Wei> actualBurnAmounts = executionResult.getActualBurnAmounts();
+                List<BlockEvent> blockEvents = storedBlock.getEvents();
 
                 return new BlockConnectedEvent(
                                 this,
@@ -137,6 +139,7 @@ public class ExIndexerEventReconstructionService {
                                 actualRewardPaid,
                                 cumulativeDifficulty,
                                 actualBurnAmounts,
+                                blockEvents,
                                 receivedFrom,
                                 receivedAt);
         }
@@ -216,6 +219,7 @@ public class ExIndexerEventReconstructionService {
                                 Wei.ZERO, // No miner reward in genesis
                                 storedBlock.getCumulativeDifficulty(),
                                 Collections.emptyMap(), // No burns in genesis
+                                List.of(),
                                 receivedFrom,
                                 receivedAt);
         }
