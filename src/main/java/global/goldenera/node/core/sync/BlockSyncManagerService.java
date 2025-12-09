@@ -443,11 +443,22 @@ public class BlockSyncManagerService {
 			try {
 				List<List<Tx>> bodies = oldest.future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-				if (bodies == null || bodies.size() != oldest.batchHeaders.size()) {
-					throw new GEValidationException("Mismatch body count from peer");
+				if (bodies == null || bodies.isEmpty()) {
+					throw new GEValidationException("Empty body response from peer");
 				}
 
-				for (int j = 0; j < oldest.batchHeaders.size(); j++) {
+				// Handle partial responses (old nodes may have lower limits)
+				// Process only the bodies we received
+				int bodiesReceived = bodies.size();
+				if (bodiesReceived < oldest.batchHeaders.size()) {
+					// Re-queue headers we didn't get bodies for
+					int unprocessedStart = oldest.startIndex + bodiesReceived;
+					nextBatchIndex = Math.min(nextBatchIndex, unprocessedStart);
+					log.debug("Peer returned {} bodies instead of {} requested, re-queuing remaining headers",
+							bodiesReceived, oldest.batchHeaders.size());
+				}
+
+				for (int j = 0; j < bodiesReceived; j++) {
 					BlockHeader header = oldest.batchHeaders.get(j);
 					Long height = header.getHeight();
 					List<Tx> txs = bodies.get(j);
