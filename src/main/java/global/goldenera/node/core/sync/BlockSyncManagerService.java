@@ -87,8 +87,8 @@ import lombok.extern.slf4j.Slf4j;
 public class BlockSyncManagerService {
 
 	// Sync configuration
-	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch (increased from 500)
-	static final long TIMEOUT_SECONDS = 15; // Timeout per request (reduced for faster failover)
+	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch
+	static final long TIMEOUT_SECONDS = 20; // Timeout per request (reduced for faster failover)
 	static final long SYNC_POLL_DELAY_MS = 100;
 
 	/**
@@ -96,13 +96,20 @@ public class BlockSyncManagerService {
 	 * Uses base maxBlockSizeInBytes (not height-dependent overrides) since we need
 	 * a conservative estimate that works for any block height during sync.
 	 * Leaves ~15% headroom for RLP encoding overhead and envelope framing.
+	 * 
+	 * IMPORTANT: Capped at 5 for backward compatibility with old nodes that have
+	 * hardcoded limit of 5 blocks per response. Can be increased once all nodes
+	 * are updated.
 	 */
+	static final int LEGACY_MAX_BODIES_PER_REQUEST = 5;
+
 	static int calculateBodyBatchSize() {
 		long maxFrameSize = P2PChannelInitializer.MAX_FRAME_SIZE;
 		long maxBlockSize = Constants.getSettings().maxBlockSizeInBytes();
 		// Reserve 15% for overhead, minimum 1 block per batch
 		int batchSize = (int) ((maxFrameSize * 0.85) / maxBlockSize);
-		return Math.max(1, batchSize);
+		// Cap at legacy limit for backward compatibility
+		return Math.min(LEGACY_MAX_BODIES_PER_REQUEST, Math.max(1, batchSize));
 	}
 
 	/**
@@ -447,18 +454,14 @@ public class BlockSyncManagerService {
 					throw new GEValidationException("Empty body response from peer");
 				}
 
-				// Handle partial responses (old nodes may have lower limits)
-				// Process only the bodies we received
-				int bodiesReceived = bodies.size();
-				if (bodiesReceived < oldest.batchHeaders.size()) {
-					// Re-queue headers we didn't get bodies for
-					int unprocessedStart = oldest.startIndex + bodiesReceived;
-					nextBatchIndex = Math.min(nextBatchIndex, unprocessedStart);
-					log.debug("Peer returned {} bodies instead of {} requested, re-queuing remaining headers",
-							bodiesReceived, oldest.batchHeaders.size());
+				// With capped batch size, we should always get expected count.
+				// If peer returns fewer, it's an error - fail and retry with different peer
+				if (bodies.size() != oldest.batchHeaders.size()) {
+					throw new GEValidationException("Mismatch body count from peer: got " + bodies.size()
+							+ ", expected " + oldest.batchHeaders.size());
 				}
 
-				for (int j = 0; j < bodiesReceived; j++) {
+				for (int j = 0; j < bodies.size(); j++) {
 					BlockHeader header = oldest.batchHeaders.get(j);
 					Long height = header.getHeight();
 					List<Tx> txs = bodies.get(j);
