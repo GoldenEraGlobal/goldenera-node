@@ -27,13 +27,13 @@ import java.math.BigInteger;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.BipVoteType;
 import global.goldenera.cryptoj.enums.TxPayloadType;
-import io.swagger.v3.oas.annotations.media.DiscriminatorMapping;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -58,29 +58,7 @@ import lombok.NoArgsConstructor;
         @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenUpdate.class, name = "8"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.Vote.class, name = "9")
 })
-@Schema(description = "Transaction payload", discriminatorProperty = "payloadType", discriminatorMapping = {
-        @DiscriminatorMapping(value = "0", schema = TxPayloadDtoV1.AddressAliasAdd.class),
-        @DiscriminatorMapping(value = "1", schema = TxPayloadDtoV1.AddressAliasRemove.class),
-        @DiscriminatorMapping(value = "2", schema = TxPayloadDtoV1.AuthorityAdd.class),
-        @DiscriminatorMapping(value = "3", schema = TxPayloadDtoV1.AuthorityRemove.class),
-        @DiscriminatorMapping(value = "4", schema = TxPayloadDtoV1.NetworkParamsSet.class),
-        @DiscriminatorMapping(value = "5", schema = TxPayloadDtoV1.TokenBurn.class),
-        @DiscriminatorMapping(value = "6", schema = TxPayloadDtoV1.TokenCreate.class),
-        @DiscriminatorMapping(value = "7", schema = TxPayloadDtoV1.TokenMint.class),
-        @DiscriminatorMapping(value = "8", schema = TxPayloadDtoV1.TokenUpdate.class),
-        @DiscriminatorMapping(value = "9", schema = TxPayloadDtoV1.Vote.class)
-}, oneOf = {
-        TxPayloadDtoV1.AddressAliasAdd.class,
-        TxPayloadDtoV1.AddressAliasRemove.class,
-        TxPayloadDtoV1.AuthorityAdd.class,
-        TxPayloadDtoV1.AuthorityRemove.class,
-        TxPayloadDtoV1.NetworkParamsSet.class,
-        TxPayloadDtoV1.TokenBurn.class,
-        TxPayloadDtoV1.TokenCreate.class,
-        TxPayloadDtoV1.TokenMint.class,
-        TxPayloadDtoV1.TokenUpdate.class,
-        TxPayloadDtoV1.Vote.class
-})
+@Schema(description = "Transaction payload", discriminatorProperty = "payloadType")
 public abstract sealed class TxPayloadDtoV1 permits
         TxPayloadDtoV1.AddressAliasAdd,
         TxPayloadDtoV1.AddressAliasRemove,
@@ -102,12 +80,14 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "AddressAliasAdd", description = "Add address alias payload", requiredProperties = "payloadType")
+    @Schema(name = "AddressAliasAdd", description = "Add address alias payload")
     public static final class AddressAliasAdd extends TxPayloadDtoV1 {
         Address address;
         String alias;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "0" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_ADDRESS_ALIAS_ADD.getCode();
         }
@@ -117,11 +97,13 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "AddressAliasRemove", description = "Remove address alias payload", requiredProperties = "payloadType")
+    @Schema(name = "AddressAliasRemove", description = "Remove address alias payload")
     public static final class AddressAliasRemove extends TxPayloadDtoV1 {
         String alias;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "1" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_ADDRESS_ALIAS_REMOVE.getCode();
         }
@@ -131,11 +113,13 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "AuthorityAdd", description = "Add authority payload", requiredProperties = "payloadType")
+    @Schema(name = "AuthorityAdd", description = "Add authority payload")
     public static final class AuthorityAdd extends TxPayloadDtoV1 {
         Address address;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "2" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_AUTHORITY_ADD.getCode();
         }
@@ -145,11 +129,13 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "AuthorityRemove", description = "Remove authority payload", requiredProperties = "payloadType")
+    @Schema(name = "AuthorityRemove", description = "Remove authority payload")
     public static final class AuthorityRemove extends TxPayloadDtoV1 {
         Address address;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "3" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_AUTHORITY_REMOVE.getCode();
         }
@@ -159,7 +145,7 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "NetworkParamsSet", description = "Set network parameters payload", requiredProperties = "payloadType")
+    @Schema(name = "NetworkParamsSet", description = "Set network parameters payload")
     public static final class NetworkParamsSet extends TxPayloadDtoV1 {
         Wei blockReward;
         Address blockRewardPoolAddress;
@@ -170,6 +156,8 @@ public abstract sealed class TxPayloadDtoV1 permits
         Wei minTxByteFee;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "4" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_NETWORK_PARAMS_SET.getCode();
         }
@@ -179,13 +167,15 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "TokenBurn", description = "Burn tokens payload", requiredProperties = "payloadType")
+    @Schema(name = "TokenBurn", description = "Burn tokens payload")
     public static final class TokenBurn extends TxPayloadDtoV1 {
         Address tokenAddress;
         Address sender;
         Wei amount;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "5" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_TOKEN_BURN.getCode();
         }
@@ -195,7 +185,7 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "TokenCreate", description = "Create token payload", requiredProperties = "payloadType")
+    @Schema(name = "TokenCreate", description = "Create token payload")
     public static final class TokenCreate extends TxPayloadDtoV1 {
         String name;
         String smallestUnitName;
@@ -206,6 +196,8 @@ public abstract sealed class TxPayloadDtoV1 permits
         boolean userBurnable;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "6" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_TOKEN_CREATE.getCode();
         }
@@ -215,13 +207,15 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "TokenMint", description = "Mint tokens payload", requiredProperties = "payloadType")
+    @Schema(name = "TokenMint", description = "Mint tokens payload")
     public static final class TokenMint extends TxPayloadDtoV1 {
         Address tokenAddress;
         Address recipient;
         Wei amount;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "7" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_TOKEN_MINT.getCode();
         }
@@ -231,7 +225,7 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "TokenUpdate", description = "Update token payload", requiredProperties = "payloadType")
+    @Schema(name = "TokenUpdate", description = "Update token payload")
     public static final class TokenUpdate extends TxPayloadDtoV1 {
         Address tokenAddress;
         String name;
@@ -240,6 +234,8 @@ public abstract sealed class TxPayloadDtoV1 permits
         String logoUrl;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "8" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_TOKEN_UPDATE.getCode();
         }
@@ -249,11 +245,13 @@ public abstract sealed class TxPayloadDtoV1 permits
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    @Schema(name = "Vote", description = "BIP vote payload", requiredProperties = "payloadType")
+    @Schema(name = "Vote", description = "BIP vote payload")
     public static final class Vote extends TxPayloadDtoV1 {
         BipVoteType type;
 
         @Override
+        @JsonProperty("payloadType")
+        @Schema(type = "integer", allowableValues = { "9" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public int getPayloadType() {
             return TxPayloadType.BIP_VOTE.getCode();
         }

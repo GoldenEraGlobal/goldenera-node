@@ -28,6 +28,7 @@ import java.util.LinkedHashSet;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
@@ -35,7 +36,6 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
-import io.swagger.v3.oas.annotations.media.DiscriminatorMapping;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -48,7 +48,7 @@ import lombok.experimental.FieldDefaults;
  * Base DTO for block events exposed through the API.
  * Uses Jackson polymorphic serialization with discriminator field "type".
  */
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "type")
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "type", visible = true)
 @JsonSubTypes({
         @JsonSubTypes.Type(value = BlockEventDtoV1.BlockRewardDto.class, name = "BLOCK_REWARD"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.FeesCollectedDto.class, name = "FEES_COLLECTED"),
@@ -64,35 +64,7 @@ import lombok.experimental.FieldDefaults;
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasRemovedDto.class, name = "ADDRESS_ALIAS_REMOVED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.BipStateChangeDto.class, name = "BIP_STATE_CHANGE")
 })
-@Schema(description = "Block event", discriminatorProperty = "type", discriminatorMapping = {
-        @DiscriminatorMapping(value = "BLOCK_REWARD", schema = BlockEventDtoV1.BlockRewardDto.class),
-        @DiscriminatorMapping(value = "FEES_COLLECTED", schema = BlockEventDtoV1.FeesCollectedDto.class),
-        @DiscriminatorMapping(value = "TOKEN_CREATED", schema = BlockEventDtoV1.TokenCreatedDto.class),
-        @DiscriminatorMapping(value = "TOKEN_UPDATED", schema = BlockEventDtoV1.TokenUpdatedDto.class),
-        @DiscriminatorMapping(value = "TOKEN_MINTED", schema = BlockEventDtoV1.TokenMintedDto.class),
-        @DiscriminatorMapping(value = "TOKEN_BURNED", schema = BlockEventDtoV1.TokenBurnedDto.class),
-        @DiscriminatorMapping(value = "TOKEN_SUPPLY_UPDATED", schema = BlockEventDtoV1.TokenSupplyUpdatedDto.class),
-        @DiscriminatorMapping(value = "AUTHORITY_ADDED", schema = BlockEventDtoV1.AuthorityAddedDto.class),
-        @DiscriminatorMapping(value = "AUTHORITY_REMOVED", schema = BlockEventDtoV1.AuthorityRemovedDto.class),
-        @DiscriminatorMapping(value = "NETWORK_PARAMS_CHANGED", schema = BlockEventDtoV1.NetworkParamsChangedDto.class),
-        @DiscriminatorMapping(value = "ADDRESS_ALIAS_ADDED", schema = BlockEventDtoV1.AddressAliasAddedDto.class),
-        @DiscriminatorMapping(value = "ADDRESS_ALIAS_REMOVED", schema = BlockEventDtoV1.AddressAliasRemovedDto.class),
-        @DiscriminatorMapping(value = "BIP_STATE_CHANGE", schema = BlockEventDtoV1.BipStateChangeDto.class)
-}, oneOf = {
-        BlockEventDtoV1.BlockRewardDto.class,
-        BlockEventDtoV1.FeesCollectedDto.class,
-        BlockEventDtoV1.TokenCreatedDto.class,
-        BlockEventDtoV1.TokenUpdatedDto.class,
-        BlockEventDtoV1.TokenMintedDto.class,
-        BlockEventDtoV1.TokenBurnedDto.class,
-        BlockEventDtoV1.TokenSupplyUpdatedDto.class,
-        BlockEventDtoV1.AuthorityAddedDto.class,
-        BlockEventDtoV1.AuthorityRemovedDto.class,
-        BlockEventDtoV1.NetworkParamsChangedDto.class,
-        BlockEventDtoV1.AddressAliasAddedDto.class,
-        BlockEventDtoV1.AddressAliasRemovedDto.class,
-        BlockEventDtoV1.BipStateChangeDto.class
-})
+@Schema(description = "Block event", discriminatorProperty = "type")
 public abstract sealed class BlockEventDtoV1 permits
         BlockEventDtoV1.BlockRewardDto,
         BlockEventDtoV1.FeesCollectedDto,
@@ -120,7 +92,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "BlockRewardDto", description = "Miner received block reward from reward pool", requiredProperties = "type")
+    @Schema(name = "BlockRewardDto", description = "Miner received block reward from reward pool")
     public static final class BlockRewardDto extends BlockEventDtoV1 {
         @Schema(description = "Miner address who received the reward")
         Address minerAddress;
@@ -130,6 +102,8 @@ public abstract sealed class BlockEventDtoV1 permits
         Wei amount;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "BLOCK_REWARD" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "BLOCK_REWARD";
         }
@@ -140,7 +114,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "FeesCollectedDto", description = "Miner collected transaction fees", requiredProperties = "type")
+    @Schema(name = "FeesCollectedDto", description = "Miner collected transaction fees")
     public static final class FeesCollectedDto extends BlockEventDtoV1 {
         @Schema(description = "Miner address who collected the fees")
         Address minerAddress;
@@ -148,6 +122,8 @@ public abstract sealed class BlockEventDtoV1 permits
         Wei amount;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "FEES_COLLECTED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "FEES_COLLECTED";
         }
@@ -162,7 +138,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "TokenCreatedDto", description = "New token was created via approved BIP", requiredProperties = "type")
+    @Schema(name = "TokenCreatedDto", description = "New token was created via approved BIP")
     public static final class TokenCreatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that created this token")
         Hash bipHash;
@@ -174,6 +150,8 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.TokenCreate payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "TOKEN_CREATED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "TOKEN_CREATED";
         }
@@ -184,7 +162,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "TokenUpdatedDto", description = "Token metadata was updated via approved BIP", requiredProperties = "type")
+    @Schema(name = "TokenUpdatedDto", description = "Token metadata was updated via approved BIP")
     public static final class TokenUpdatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that updated this token")
         Hash bipHash;
@@ -194,6 +172,8 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.TokenUpdate payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "TOKEN_UPDATED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "TOKEN_UPDATED";
         }
@@ -204,7 +184,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "TokenMintedDto", description = "Tokens were minted to an address via approved BIP", requiredProperties = "type")
+    @Schema(name = "TokenMintedDto", description = "Tokens were minted to an address via approved BIP")
     public static final class TokenMintedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that minted tokens")
         Hash bipHash;
@@ -214,6 +194,8 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.TokenMint payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "TOKEN_MINTED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "TOKEN_MINTED";
         }
@@ -224,7 +206,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "TokenBurnedDto", description = "Tokens were burned via approved BIP", requiredProperties = "type")
+    @Schema(name = "TokenBurnedDto", description = "Tokens were burned via approved BIP")
     public static final class TokenBurnedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that burned tokens")
         Hash bipHash;
@@ -236,6 +218,8 @@ public abstract sealed class BlockEventDtoV1 permits
         Wei actualBurnedAmount;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "TOKEN_BURNED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "TOKEN_BURNED";
         }
@@ -246,7 +230,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "TokenSupplyUpdatedDto", description = "Token total supply was updated", requiredProperties = "type")
+    @Schema(name = "TokenSupplyUpdatedDto", description = "Token total supply was updated")
     public static final class TokenSupplyUpdatedDto extends BlockEventDtoV1 {
         @Schema(description = "Token address")
         Address tokenAddress;
@@ -254,6 +238,9 @@ public abstract sealed class BlockEventDtoV1 permits
         Wei newTotalSupply;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = {
+                "TOKEN_SUPPLY_UPDATED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "TOKEN_SUPPLY_UPDATED";
         }
@@ -268,7 +255,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "AuthorityAddedDto", description = "Authority was added to governance via approved BIP", requiredProperties = "type")
+    @Schema(name = "AuthorityAddedDto", description = "Authority was added to governance via approved BIP")
     public static final class AuthorityAddedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that added the authority")
         Hash bipHash;
@@ -278,6 +265,8 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.AuthorityAdd payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "AUTHORITY_ADDED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "AUTHORITY_ADDED";
         }
@@ -288,7 +277,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "AuthorityRemovedDto", description = "Authority was removed from governance via approved BIP", requiredProperties = "type")
+    @Schema(name = "AuthorityRemovedDto", description = "Authority was removed from governance via approved BIP")
     public static final class AuthorityRemovedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that removed the authority")
         Hash bipHash;
@@ -298,6 +287,8 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.AuthorityRemove payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "AUTHORITY_REMOVED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "AUTHORITY_REMOVED";
         }
@@ -308,7 +299,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "NetworkParamsChangedDto", description = "Network parameters were changed via approved BIP", requiredProperties = "type")
+    @Schema(name = "NetworkParamsChangedDto", description = "Network parameters were changed via approved BIP")
     public static final class NetworkParamsChangedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that changed params")
         Hash bipHash;
@@ -318,6 +309,9 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.NetworkParamsSet payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = {
+                "NETWORK_PARAMS_CHANGED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "NETWORK_PARAMS_CHANGED";
         }
@@ -332,7 +326,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "AddressAliasAddedDto", description = "Address alias was added via approved BIP", requiredProperties = "type")
+    @Schema(name = "AddressAliasAddedDto", description = "Address alias was added via approved BIP")
     public static final class AddressAliasAddedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that added the alias")
         Hash bipHash;
@@ -342,6 +336,9 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.AddressAliasAdd payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = {
+                "ADDRESS_ALIAS_ADDED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "ADDRESS_ALIAS_ADDED";
         }
@@ -352,7 +349,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "AddressAliasRemovedDto", description = "Address alias was removed via approved BIP", requiredProperties = "type")
+    @Schema(name = "AddressAliasRemovedDto", description = "Address alias was removed via approved BIP")
     public static final class AddressAliasRemovedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that removed the alias")
         Hash bipHash;
@@ -362,6 +359,9 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.AddressAliasRemove payload;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = {
+                "ADDRESS_ALIAS_REMOVED" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "ADDRESS_ALIAS_REMOVED";
         }
@@ -372,7 +372,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(name = "BipStateChangeDto", description = "BIP state/status changed", requiredProperties = "type")
+    @Schema(name = "BipStateChangeDto", description = "BIP state/status changed")
     public static final class BipStateChangeDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash")
         Hash bipHash;
@@ -392,6 +392,8 @@ public abstract sealed class BlockEventDtoV1 permits
         Instant updatedAtTimestamp;
 
         @Override
+        @JsonProperty("type")
+        @Schema(type = "string", allowableValues = { "BIP_STATE_CHANGE" }, requiredMode = Schema.RequiredMode.REQUIRED)
         public String getType() {
             return "BIP_STATE_CHANGE";
         }
