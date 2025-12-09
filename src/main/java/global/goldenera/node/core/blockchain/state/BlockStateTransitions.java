@@ -185,7 +185,8 @@ public class BlockStateTransitions {
 					Collections.reverse(forkChain); // Now it's Ancestor -> ... -> NewBlock
 
 					// 2. Execute Switch
-					chainSwitchService.executeAtomicReorgSwap(commonAncestor, forkChain, true);
+					chainSwitchService.executeAtomicReorgSwap(commonAncestor, forkChain, true,
+							ChainSwitchService.SwitchType.REORG);
 					return; // Done, reorg service handled everything
 
 				} catch (Exception e) {
@@ -223,8 +224,10 @@ public class BlockStateTransitions {
 			long end = System.currentTimeMillis();
 
 			if (performFullConnect) {
-				log.info("Block connected as NEW HEAD at height {} (TD: {}) in {}s",
-						block.getHeight(), cumulativeDifficulty, String.format("%.2f", (end - start) / 1000.0));
+				int txCount = block.getTxs().size();
+				log.info("Block connected as NEW HEAD at height {} ({} txs, TD: {}) in {}s",
+						block.getHeight(), txCount, cumulativeDifficulty,
+						String.format("%.2f", (end - start) / 1000.0));
 
 				Wei totalFees = height == 0 ? Wei.ZERO : executionResult.getTotalFeesCollected();
 				Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();

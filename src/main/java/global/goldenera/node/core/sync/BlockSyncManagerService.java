@@ -56,6 +56,7 @@ import global.goldenera.cryptoj.common.BlockImpl;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.utils.TxRootUtil;
+import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.events.BlockMinedEvent;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
@@ -69,8 +70,8 @@ import global.goldenera.node.core.p2p.events.P2PBlockReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PHeadersReceivedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
+import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
-import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -85,12 +86,36 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE)
 public class BlockSyncManagerService {
 
-	static final int SYNC_CHUNK_SIZE_HEADERS = 500;
-	// Max 4 bodies per request due to MAX_FRAME_SIZE (32MB) and blocks up to 6MB
-	// each
-	static final int BODY_DOWNLOAD_BATCH_SIZE = 4;
-	static final long TIMEOUT_SECONDS = 30;
+	// Sync configuration
+	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch (increased from 500)
+	static final long TIMEOUT_SECONDS = 15; // Timeout per request (reduced for faster failover)
 	static final long SYNC_POLL_DELAY_MS = 100;
+
+	/**
+	 * Calculate max bodies per request based on frame size and max block size.
+	 * Uses base maxBlockSizeInBytes (not height-dependent overrides) since we need
+	 * a conservative estimate that works for any block height during sync.
+	 * Leaves ~15% headroom for RLP encoding overhead and envelope framing.
+	 */
+	static int calculateBodyBatchSize() {
+		long maxFrameSize = P2PChannelInitializer.MAX_FRAME_SIZE;
+		long maxBlockSize = Constants.getSettings().maxBlockSizeInBytes();
+		// Reserve 15% for overhead, minimum 1 block per batch
+		int batchSize = (int) ((maxFrameSize * 0.85) / maxBlockSize);
+		return Math.max(1, batchSize);
+	}
+
+	/**
+	 * Calculate optimal pipeline depth based on batch sizes.
+	 * More blocks per batch = fewer requests = can afford deeper pipeline.
+	 * Range: 3-8 concurrent requests.
+	 */
+	static int calculatePipelineDepth(int bodyBatchSize) {
+		// Base: 3, scale up if we're sending fewer requests
+		// With batchSize=6: depth=5, with batchSize=3: depth=4
+		int depth = 3 + (bodyBatchSize / 2);
+		return Math.min(8, Math.max(3, depth));
+	}
 
 	final MeterRegistry registry;
 	final ReentrantLock masterChainLock;
@@ -103,7 +128,6 @@ public class BlockSyncManagerService {
 	final TxValidator txValidationService;
 
 	final ChainQuery chainQueryService;
-	final BlockRepository blockRepository;
 	final BlockReorgs blockReorgService;
 	final PeerRegistry peerRegistry;
 	final PeerReputationService peerReputationService;
@@ -118,7 +142,6 @@ public class BlockSyncManagerService {
 			BlockValidator blockValidationService,
 			TxValidator txValidationService,
 			ChainQuery chainQueryService,
-			BlockRepository blockRepository,
 			BlockReorgs blockReorgService,
 			PeerRegistry peerRegistry,
 			PeerReputationService peerReputationService,
@@ -131,7 +154,6 @@ public class BlockSyncManagerService {
 		this.blockValidationService = blockValidationService;
 		this.txValidationService = txValidationService;
 		this.chainQueryService = chainQueryService;
-		this.blockRepository = blockRepository;
 		this.blockReorgService = blockReorgService;
 		this.peerRegistry = peerRegistry;
 		this.peerReputationService = peerReputationService;
@@ -246,7 +268,7 @@ public class BlockSyncManagerService {
 			List<StoredBlock> newChainBlocks = downloadAndPersistBodies(peer, headersToSync);
 			long bodyTime = System.currentTimeMillis() - bodyStart;
 
-			log.info("Downloaded and persisted {} block bodies in {}ms", newChainBlocks.size(), bodyTime);
+			log.info("Downloaded {} block bodies in {}ms", newChainBlocks.size(), bodyTime);
 
 			if (!newChainBlocks.isEmpty()) {
 				miningService.pauseMining();
@@ -388,16 +410,18 @@ public class BlockSyncManagerService {
 		BigInteger currentCumulativeDifficulty = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash)
 				.getCumulativeDifficulty();
 
-		// Pipeline: Keep up to PIPELINE_DEPTH requests in flight simultaneously
-		final int PIPELINE_DEPTH = 3;
+		// Pipeline: Keep multiple requests in flight simultaneously for better
+		// throughput
+		final int bodyBatchSize = calculateBodyBatchSize();
+		final int pipelineDepth = calculatePipelineDepth(bodyBatchSize);
 		List<PendingBodyRequest> pendingRequests = new ArrayList<>();
 		int nextBatchIndex = 0;
 
 		while (nextBatchIndex < headers.size() || !pendingRequests.isEmpty()) {
 			// Send new requests up to pipeline depth
-			while (pendingRequests.size() < PIPELINE_DEPTH && nextBatchIndex < headers.size()) {
+			while (pendingRequests.size() < pipelineDepth && nextBatchIndex < headers.size()) {
 				int startIdx = nextBatchIndex;
-				int endIdx = Math.min(nextBatchIndex + BODY_DOWNLOAD_BATCH_SIZE, headers.size());
+				int endIdx = Math.min(nextBatchIndex + bodyBatchSize, headers.size());
 				List<BlockHeader> batchHeaders = headers.subList(startIdx, endIdx);
 				// getHash() is now O(1) - cached from validateBatch()
 				List<Hash> hashes = batchHeaders.stream().map(BlockHeader::getHash).collect(Collectors.toList());
@@ -464,14 +488,11 @@ public class BlockSyncManagerService {
 			}
 		}
 
-		if (!allDownloadedBlocks.isEmpty()) {
-			blockRepository.executeAtomicBatch(batch -> {
-				for (StoredBlock sb : allDownloadedBlocks) {
-					blockRepository.saveBlockDataToBatch(batch, sb);
-				}
-			});
-		}
-
+		// Blocks are kept in memory and returned to caller.
+		// They will be persisted atomically in executeAtomicReorgSwap() where state
+		// execution extracts events (block rewards, fees, BIP changes, etc.) that get
+		// included in the stored block. This ensures blocks are written only once with
+		// complete metadata.
 		return allDownloadedBlocks;
 	}
 

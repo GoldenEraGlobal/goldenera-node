@@ -48,6 +48,7 @@ public class BlockReorgs {
 	public void executeAtomicReorgSwap(
 			@NonNull StoredBlock commonAncestor,
 			@NonNull List<StoredBlock> newChainHeaders) throws Exception {
-		chainSwitchService.executeAtomicReorgSwap(commonAncestor, newChainHeaders, false);
+		chainSwitchService.executeAtomicReorgSwap(commonAncestor, newChainHeaders, false,
+				ChainSwitchService.SwitchType.SYNC);
 	}
 }

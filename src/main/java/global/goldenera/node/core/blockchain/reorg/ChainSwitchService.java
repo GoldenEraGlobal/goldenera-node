@@ -63,6 +63,15 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ChainSwitchService {
 
+    /**
+     * Distinguishes between sync (catching up to chain tip) and reorg (switching to
+     * a better fork).
+     */
+    public enum SwitchType {
+        SYNC, // Catching up to the chain tip, no blocks being disconnected
+        REORG // Switching to a different fork, blocks being disconnected
+    }
+
     ChainQuery chainQueryService;
     BlockRepository blockRepository;
     WorldStateFactory worldStateFactory;
@@ -97,7 +106,8 @@ public class ChainSwitchService {
     public void executeAtomicReorgSwap(
             @NonNull StoredBlock commonAncestor,
             @NonNull List<StoredBlock> newChainHeaders,
-            boolean saveTipData) throws Exception {
+            boolean saveTipData,
+            @NonNull SwitchType switchType) throws Exception {
 
         masterChainLock.lock();
         try {
@@ -111,8 +121,16 @@ public class ChainSwitchService {
             List<BlockDisconnectedEvent> blockDisconnectedEvents = new ArrayList<>();
             List<BlockConnectedEvent> blockConnectedEvents = new ArrayList<>();
 
-            log.info("REORG STARTING: disconnecting {} blocks, connecting {} blocks (common ancestor at height {})",
-                    oldChainStored.size(), newChainHeaders.size(), commonAncestor.getHeight());
+            String opName = switchType == SwitchType.REORG ? "REORG" : "SYNC";
+            boolean isReorg = switchType == SwitchType.REORG;
+
+            if (isReorg || oldChainStored.size() > 0) {
+                log.info("{} STARTING: disconnecting {} blocks, connecting {} blocks (common ancestor at height {})",
+                        opName, oldChainStored.size(), newChainHeaders.size(), commonAncestor.getHeight());
+            } else {
+                log.info("SYNC: connecting {} blocks from height {}",
+                        newChainHeaders.size(), commonAncestor.getHeight() + 1);
+            }
 
             try {
                 blockRepository.getRepository().executeAtomicBatch(batch -> {
@@ -188,9 +206,12 @@ public class ChainSwitchService {
                         worldState.persistToBatch(batch);
                         entityIndexRepository.saveEntities(batch, blockToConnect, worldState);
 
+                        // Save block with events. All blocks (not just tip) need full persistence
+                        // since they arrive from sync without events and get them during execution.
                         if (saveTipData && i == newChainHeaders.size() - 1) {
                             blockRepository.addBlockToBatch(batch, storedBlockWithEvents);
                         } else {
+                            blockRepository.saveBlockDataToBatch(batch, storedBlockWithEvents);
                             blockRepository.connectBlockIndexToBatch(batch, storedBlockWithEvents);
                         }
 
@@ -219,12 +240,13 @@ public class ChainSwitchService {
                         worldState.prepareForNextBlock();
                         previousBlock = blockToConnect;
 
-                        // Progress logging
-                        if ((i + 1) % progressInterval == 0 || i == newChainHeaders.size() - 1) {
+                        // Progress logging (only for large batches)
+                        if (newChainHeaders.size() >= 50
+                                && ((i + 1) % progressInterval == 0 || i == newChainHeaders.size() - 1)) {
                             long elapsed = System.currentTimeMillis() - batchStart;
                             double blocksPerSec = (i + 1) * 1000.0 / elapsed;
-                            log.info("REORG PROGRESS: {}/{} blocks processed ({}%) - {} blocks/sec",
-                                    i + 1, newChainHeaders.size(),
+                            log.info("{} PROGRESS: {}/{} blocks processed ({}%) - {} blocks/sec",
+                                    opName, i + 1, newChainHeaders.size(),
                                     (i + 1) * 100 / newChainHeaders.size(),
                                     String.format("%.1f", blocksPerSec));
                         }
@@ -232,17 +254,23 @@ public class ChainSwitchService {
                 });
                 entityIndexRepository.invalidateCaches();
             } catch (RuntimeException e) {
-                log.error("Reorg DB write failed", e);
+                log.error("{} DB write failed", opName, e);
                 if (e.getCause() instanceof GEFailedException) {
                     throw (GEFailedException) e.getCause();
                 }
-                throw new GEFailedException("Reorg DB commit failed: " + e.getMessage(), e);
+                throw new GEFailedException(opName + " DB commit failed: " + e.getMessage(), e);
             }
 
             // 3. PUBLISH EVENTS
             StoredBlock newTip = newChainHeaders.get(newChainHeaders.size() - 1);
-            log.info("REORG COMPLETE: new tip at height {} with hash {}",
-                    newTip.getBlock().getHeight(), newTip.getBlock().getHash().toShortLogString());
+            if (isReorg || newChainHeaders.size() >= 50) {
+                int totalTxCount = blockConnectedEvents.stream()
+                        .mapToInt(e -> e.getBlock().getTxs().size()).sum();
+                log.info("{} COMPLETE: {} blocks ({} txs) connected, new tip at height {} ({})",
+                        opName, newChainHeaders.size(), totalTxCount,
+                        newTip.getBlock().getHeight(),
+                        newTip.getBlock().getHash().toShortLogString());
+            }
 
             blockDisconnectedEvents.forEach(applicationEventPublisher::publishEvent);
             blockConnectedEvents.forEach(applicationEventPublisher::publishEvent);

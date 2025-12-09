@@ -129,8 +129,21 @@ public class ExIndexerService {
 			exBlockDataCoreService.insertTransactions(block.getTxs(), block.getHeight(), block.getHash());
 			exBlockDataCoreService.insertTransfers(txToTransferMapper.map(event));
 			exStatusCoreService.updateStatus(block.getHeader());
-			log.info("Indexed block #{} ({}) in {} ms", block.getHeight(), block.getTxs().size(),
-					System.currentTimeMillis() - start);
+
+			long elapsed = System.currentTimeMillis() - start;
+			int txCount = block.getTxs().size();
+
+			// Reduce log spam during sync:
+			// - Log every 100 blocks with summary
+			// - Log individual blocks only if they have transactions or are slow (>500ms)
+			// - Use DEBUG for routine empty blocks
+			if (block.getHeight() % 100 == 0) {
+				log.info("Explorer indexed to block #{} in {} ms", block.getHeight(), elapsed);
+			} else if (txCount > 0 || elapsed > 500) {
+				log.info("Indexed block #{} ({} txs) in {} ms", block.getHeight(), txCount, elapsed);
+			} else {
+				log.debug("Indexed block #{} ({}) in {} ms", block.getHeight(), txCount, elapsed);
+			}
 
 		} catch (Exception e) {
 			log.error("CRITICAL: Failed to index block #{}. Rolling back.", block.getHeight(), e);

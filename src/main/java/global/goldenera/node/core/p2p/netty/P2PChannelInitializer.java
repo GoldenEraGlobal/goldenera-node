@@ -44,7 +44,7 @@ public class P2PChannelInitializer extends ChannelInitializer<SocketChannel> {
 
 	ApplicationContext applicationContext;
 
-	static final int MAX_FRAME_SIZE = 32 * 1024 * 1024;
+	public static final int MAX_FRAME_SIZE = 40 * 1024 * 1024;
 
 	@Override
 	protected void initChannel(SocketChannel ch) {
