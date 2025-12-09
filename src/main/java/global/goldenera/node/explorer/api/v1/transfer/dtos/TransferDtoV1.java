@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.ethereum.Wei;
 
 import global.goldenera.cryptoj.datatypes.Address;
@@ -52,10 +53,14 @@ public class TransferDtoV1 {
 	Hash blockHash;
 	Instant timestamp;
 	Hash txHash;
+	Integer txIndex;
 	TransferType type;
 	Address from;
 	Address to;
 	Address tokenAddress;
 	Wei amount;
+	Wei fee;
+	Long nonce;
+	Bytes message;
 
 }

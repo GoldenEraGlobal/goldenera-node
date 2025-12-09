@@ -49,11 +49,15 @@ public class TransferMapper {
 				in.getBlockHash(),
 				in.getTimestamp(),
 				in.getTxHash(),
+				in.getTxIndex(),
 				in.getType(),
 				in.getFrom(),
 				in.getTo(),
 				in.getTokenAddress(),
-				in.getAmount());
+				in.getAmount(),
+				in.getFee(),
+				in.getNonce(),
+				in.getMessage());
 	}
 
 	public List<TransferDtoV1> map(@NonNull List<ExTransfer> in) {

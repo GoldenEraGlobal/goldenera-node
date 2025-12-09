@@ -101,9 +101,11 @@ public class ExIndexerTxToTransferMapper {
 		}
 
 		// 2. TRANSACTIONS (Native & Fees)
+		int txIndex = 0;
 		for (Tx tx : block.getTxs()) {
 			var txBuilder = baseBuilder.build().toBuilder().txHash(tx.getHash());
-			processTransaction(tx, block, txBuilder, transfers);
+			processTransaction(tx, block, txBuilder, transfers, txIndex);
+			txIndex++;
 		}
 
 		// 3. BIP EXECUTION (Mints & Burns)
@@ -115,7 +117,7 @@ public class ExIndexerTxToTransferMapper {
 	}
 
 	private void processTransaction(Tx tx, Block block, ExTransfer.ExTransferBuilder txBuilder,
-			List<ExTransfer> transfers) {
+			List<ExTransfer> transfers, int txIndex) {
 
 		// A. VALUE TRANSFER
 		if (tx.getType() == TxType.TRANSFER && tx.getAmount() != null && !tx.getAmount().isZero()) {
@@ -128,6 +130,10 @@ public class ExIndexerTxToTransferMapper {
 					.to(tx.getRecipient())
 					.amount(tx.getAmount())
 					.tokenAddress(tokenAddr)
+					.fee(tx.getFee())
+					.nonce(tx.getNonce())
+					.message(tx.getMessage())
+					.txIndex(txIndex)
 					.build());
 		}
 	}

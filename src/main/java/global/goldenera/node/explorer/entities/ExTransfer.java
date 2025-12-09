@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.ethereum.Wei;
 
 import global.goldenera.cryptoj.datatypes.Address;
@@ -34,6 +35,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.explorer.converters.TransferTypeConverter;
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.shared.converters.AddressConverter;
+import global.goldenera.node.shared.converters.BytesConverter;
 import global.goldenera.node.shared.converters.HashConverter;
 import global.goldenera.node.shared.converters.WeiConverter;
 import jakarta.persistence.Column;
@@ -86,6 +88,9 @@ public class ExTransfer {
 	@Convert(converter = HashConverter.class)
 	Hash txHash;
 
+	@Column(name = "tx_index", nullable = true, updatable = false)
+	Integer txIndex;
+
 	@Column(name = "type", nullable = false, updatable = false, columnDefinition = "INTEGER")
 	@Convert(converter = TransferTypeConverter.class)
 	TransferType type;
@@ -105,4 +110,15 @@ public class ExTransfer {
 	@Column(name = "amount", nullable = true, updatable = false, precision = 80, scale = 0, columnDefinition = "NUMERIC")
 	@Convert(converter = WeiConverter.class)
 	Wei amount;
+
+	@Column(name = "fee", nullable = true, updatable = false, precision = 80, scale = 0, columnDefinition = "NUMERIC")
+	@Convert(converter = WeiConverter.class)
+	Wei fee;
+
+	@Column(name = "nonce", nullable = true, updatable = false)
+	Long nonce;
+
+	@Column(name = "message", nullable = true, updatable = false, columnDefinition = "BYTEA")
+	@Convert(converter = BytesConverter.class)
+	Bytes message;
 }
