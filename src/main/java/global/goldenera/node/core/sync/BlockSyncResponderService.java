@@ -120,8 +120,11 @@ public class BlockSyncResponderService {
 			return;
 		}
 
-		if (hashes.size() > 5) {
-			hashes = hashes.subList(0, 5); // Limit to 5 blocks
+		// Limit body requests to prevent excessive memory usage
+		// Use same calculation as client to ensure compatibility
+		int maxBodiesPerRequest = BlockSyncManagerService.calculateBodyBatchSize();
+		if (hashes.size() > maxBodiesPerRequest) {
+			hashes = hashes.subList(0, maxBodiesPerRequest);
 		}
 
 		// Batch fetch all blocks at once (uses multiGet internally)
