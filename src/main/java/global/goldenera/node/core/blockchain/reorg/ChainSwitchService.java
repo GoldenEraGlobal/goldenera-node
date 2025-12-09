@@ -208,10 +208,17 @@ public class ChainSwitchService {
 
                         // Save block with events. All blocks (not just tip) need full persistence
                         // since they arrive from sync without events and get them during execution.
+                        // For SYNC: use optimized method that skips cache (populated on-demand)
+                        // For REORG: use regular method to populate cache (blocks will be accessed
+                        // soon)
                         if (saveTipData && i == newChainHeaders.size() - 1) {
                             blockRepository.addBlockToBatch(batch, storedBlockWithEvents);
-                        } else {
+                        } else if (isReorg) {
                             blockRepository.saveBlockDataToBatch(batch, storedBlockWithEvents);
+                            blockRepository.connectBlockIndexToBatch(batch, storedBlockWithEvents);
+                        } else {
+                            // SYNC - skip cache population for performance
+                            blockRepository.saveBlockDataToBatchForSync(batch, storedBlockWithEvents);
                             blockRepository.connectBlockIndexToBatch(batch, storedBlockWithEvents);
                         }
 

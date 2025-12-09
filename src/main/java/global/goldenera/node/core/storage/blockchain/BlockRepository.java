@@ -472,6 +472,22 @@ public class BlockRepository {
 	 * Saves StoredBlock (Block + Metadata) and indexes transactions.
 	 */
 	public void saveBlockDataToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
+		saveBlockDataToBatch(batch, storedBlock, false);
+	}
+
+	/**
+	 * Saves StoredBlock optimized for sync - skips cache population since synced
+	 * blocks won't be immediately accessed and cache will be populated on-demand.
+	 */
+	public void saveBlockDataToBatchForSync(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
+		saveBlockDataToBatch(batch, storedBlock, true);
+	}
+
+	/**
+	 * Internal implementation with optional cache skip for sync optimization.
+	 */
+	private void saveBlockDataToBatch(WriteBatch batch, StoredBlock storedBlock, boolean skipCache)
+			throws RocksDBException {
 		Block block = storedBlock.getBlock();
 		byte[] hashBytes = storedBlock.getHash().toArray();
 
@@ -479,25 +495,34 @@ public class BlockRepository {
 		Bytes encoded = StoredBlockEncoder.INSTANCE.encode(storedBlock, StoredBlockVersion.V1);
 		batch.put(cf.blocks(), hashBytes, encoded.toArray());
 
-		// Put the block into cache immediately so it's available for serving
-		// (instead of just invalidating, which would require a DB read on next access)
-		StoredBlock cachedBlock = storedBlock.toBuilder().encodedSize(encoded.size()).build();
-		scheduleInvalidation(() -> blockCache.put(storedBlock.getHash(), cachedBlock));
-		scheduleInvalidation(() -> headerCache.invalidate(storedBlock.getHash())); // Invalidate partial cache
+		// 2. Cache handling - skip during sync for performance
+		if (!skipCache) {
+			// Put the block into cache immediately so it's available for serving
+			StoredBlock cachedBlock = storedBlock.toBuilder().encodedSize(encoded.size()).build();
+			scheduleInvalidation(() -> blockCache.put(storedBlock.getHash(), cachedBlock));
+			scheduleInvalidation(() -> headerCache.invalidate(storedBlock.getHash()));
 
-		// Update latestBlockCache if we are updating the current tip
-		StoredBlock currentLatest = latestBlockCache.get();
-		if (currentLatest != null && currentLatest.getHash().equals(storedBlock.getHash())) {
-			scheduleInvalidation(() -> latestBlockCache.set(cachedBlock));
+			// Update latestBlockCache if we are updating the current tip
+			StoredBlock currentLatest = latestBlockCache.get();
+			if (currentLatest != null && currentLatest.getHash().equals(storedBlock.getHash())) {
+				scheduleInvalidation(() -> latestBlockCache.set(cachedBlock));
+			}
+		} else {
+			// During sync, just invalidate caches - they'll be populated on-demand
+			scheduleInvalidation(() -> blockCache.invalidate(storedBlock.getHash()));
+			scheduleInvalidation(() -> headerCache.invalidate(storedBlock.getHash()));
 		}
 
-		// 2. Index Transactions (TxHash -> BlockHash)
-		List<Hash> txHashes = new ArrayList<>(block.getTxs().size());
-		for (Tx tx : block.getTxs()) {
-			batch.put(cf.txIndex(), tx.getHash().toArray(), hashBytes);
-			txHashes.add(tx.getHash());
+		// 3. Index Transactions - collect hashes for bulk invalidation
+		List<Tx> txs = block.getTxs();
+		if (!txs.isEmpty()) {
+			List<Hash> txHashes = new ArrayList<>(txs.size());
+			for (Tx tx : txs) {
+				batch.put(cf.txIndex(), tx.getHash().toArray(), hashBytes);
+				txHashes.add(tx.getHash());
+			}
+			scheduleInvalidation(() -> txCache.invalidateAll(txHashes));
 		}
-		scheduleInvalidation(() -> txCache.invalidateAll(txHashes));
 	}
 
 	public void connectBlockIndexToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
