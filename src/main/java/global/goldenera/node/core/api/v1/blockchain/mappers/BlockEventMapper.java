@@ -41,11 +41,13 @@ import global.goldenera.node.core.api.v1.blockchain.dtos.BlockEventDtoV1.TokenCr
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockEventDtoV1.TokenMintedDto;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockEventDtoV1.TokenSupplyUpdatedDto;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockEventDtoV1.TokenUpdatedDto;
+import global.goldenera.node.core.api.v1.blockchain.dtos.TxPayloadDtoV1;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAliasAdded;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAliasRemoved;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityAdded;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityRemoved;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateChange;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.FeesCollected;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsChanged;
@@ -54,12 +56,19 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenCrea
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenMinted;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenSupplyUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenUpdated;
+import lombok.AccessLevel;
+import lombok.AllArgsConstructor;
+import lombok.experimental.FieldDefaults;
 
 /**
  * Maps BlockEvent domain objects to BlockEventDtoV1 subtypes for API responses.
  */
 @Component
+@AllArgsConstructor
+@FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class BlockEventMapper {
+
+        TxMapper txMapper;
 
         public List<BlockEventDtoV1> map(List<BlockEvent> events) {
                 if (events == null || events.isEmpty()) {
@@ -85,34 +94,24 @@ public class BlockEventMapper {
 
                         case TokenCreated e -> new TokenCreatedDto(
                                         e.bipHash(),
-                                        e.tokenAddress(),
-                                        e.name(),
-                                        e.smallestUnitName(),
-                                        e.decimals(),
-                                        e.websiteUrl(),
-                                        e.logoUrl(),
-                                        e.maxSupply(),
-                                        e.userBurnable());
+                                        e.derivedTokenAddress(),
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.TokenCreate) txMapper.mapPayload(e.payload()));
 
                         case TokenUpdated e -> new TokenUpdatedDto(
                                         e.bipHash(),
-                                        e.tokenAddress(),
-                                        e.name(),
-                                        e.smallestUnitName(),
-                                        e.websiteUrl(),
-                                        e.logoUrl());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.TokenUpdate) txMapper.mapPayload(e.payload()));
 
                         case TokenMinted e -> new TokenMintedDto(
                                         e.bipHash(),
-                                        e.tokenAddress(),
-                                        e.recipient(),
-                                        e.amount());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.TokenMint) txMapper.mapPayload(e.payload()));
 
                         case TokenBurned e -> new TokenBurnedDto(
                                         e.bipHash(),
-                                        e.tokenAddress(),
-                                        e.owner(),
-                                        e.requestedAmount(),
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.TokenBurn) txMapper.mapPayload(e.payload()),
                                         e.actualBurnedAmount());
 
                         case TokenSupplyUpdated e -> new TokenSupplyUpdatedDto(
@@ -121,30 +120,38 @@ public class BlockEventMapper {
 
                         case AuthorityAdded e -> new AuthorityAddedDto(
                                         e.bipHash(),
-                                        e.authorityAddress());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.AuthorityAdd) txMapper.mapPayload(e.payload()));
 
                         case AuthorityRemoved e -> new AuthorityRemovedDto(
                                         e.bipHash(),
-                                        e.authorityAddress());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.AuthorityRemove) txMapper.mapPayload(e.payload()));
 
                         case NetworkParamsChanged e -> new NetworkParamsChangedDto(
                                         e.bipHash(),
-                                        e.newBlockReward(),
-                                        e.newBlockRewardPoolAddress(),
-                                        e.newTargetMiningTimeMs(),
-                                        e.newAsertHalfLifeBlocks(),
-                                        e.newMinDifficulty(),
-                                        e.newMinTxBaseFee(),
-                                        e.newMinTxByteFee());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.NetworkParamsSet) txMapper.mapPayload(e.payload()));
 
                         case AddressAliasAdded e -> new AddressAliasAddedDto(
                                         e.bipHash(),
-                                        e.address(),
-                                        e.alias());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.AddressAliasAdd) txMapper.mapPayload(e.payload()));
 
                         case AddressAliasRemoved e -> new AddressAliasRemovedDto(
                                         e.bipHash(),
-                                        e.alias());
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.AddressAliasRemove) txMapper.mapPayload(e.payload()));
+
+                        case BipStateChange e -> new BlockEventDtoV1.BipStateChangeDto(
+                                        e.bipHash(),
+                                        e.status(),
+                                        e.isActionExecuted(),
+                                        e.approvers(),
+                                        e.disapprovers(),
+                                        e.updatedByTxHash(),
+                                        e.updatedAtBlockHeight(),
+                                        e.updatedAtTimestamp());
                 };
         }
 }

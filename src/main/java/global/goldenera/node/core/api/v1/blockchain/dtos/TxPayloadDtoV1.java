@@ -33,6 +33,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.BipVoteType;
 import global.goldenera.cryptoj.enums.TxPayloadType;
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -45,20 +46,42 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.EXISTING_PROPERTY, property = "payloadType", visible = true)
+@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY, property = "payloadType", visible = true)
 @JsonSubTypes({
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.AddressAliasAdd.class, name = "0"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.AddressAliasRemove.class, name = "1"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityAdd.class, name = "2"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityRemove.class, name = "3"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.NetworkParamsSet.class, name = "4"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenBurn.class, name = "5"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenCreate.class, name = "6"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenMint.class, name = "7"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenUpdate.class, name = "8"),
-        @JsonSubTypes.Type(value = TxPayloadDtoV1.Vote.class, name = "9")
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.AddressAliasAdd.class, name = "BIP_ADDRESS_ALIAS_ADD"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.AddressAliasRemove.class, name = "BIP_ADDRESS_ALIAS_REMOVE"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityAdd.class, name = "BIP_AUTHORITY_ADD"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityRemove.class, name = "BIP_AUTHORITY_REMOVE"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.NetworkParamsSet.class, name = "BIP_NETWORK_PARAMS_SET"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenBurn.class, name = "BIP_TOKEN_BURN"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenCreate.class, name = "BIP_TOKEN_CREATE"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenMint.class, name = "BIP_TOKEN_MINT"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenUpdate.class, name = "BIP_TOKEN_UPDATE"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.Vote.class, name = "BIP_VOTE")
 })
-public abstract class TxPayloadDtoV1 {
+@Schema(description = "Transaction payload", discriminatorProperty = "payloadType", oneOf = {
+        TxPayloadDtoV1.AddressAliasAdd.class,
+        TxPayloadDtoV1.AddressAliasRemove.class,
+        TxPayloadDtoV1.AuthorityAdd.class,
+        TxPayloadDtoV1.AuthorityRemove.class,
+        TxPayloadDtoV1.NetworkParamsSet.class,
+        TxPayloadDtoV1.TokenBurn.class,
+        TxPayloadDtoV1.TokenCreate.class,
+        TxPayloadDtoV1.TokenMint.class,
+        TxPayloadDtoV1.TokenUpdate.class,
+        TxPayloadDtoV1.Vote.class
+})
+public abstract sealed class TxPayloadDtoV1 permits
+        TxPayloadDtoV1.AddressAliasAdd,
+        TxPayloadDtoV1.AddressAliasRemove,
+        TxPayloadDtoV1.AuthorityAdd,
+        TxPayloadDtoV1.AuthorityRemove,
+        TxPayloadDtoV1.NetworkParamsSet,
+        TxPayloadDtoV1.TokenBurn,
+        TxPayloadDtoV1.TokenCreate,
+        TxPayloadDtoV1.TokenMint,
+        TxPayloadDtoV1.TokenUpdate,
+        TxPayloadDtoV1.Vote {
 
     TxPayloadType payloadType;
 
@@ -68,7 +91,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class AddressAliasAdd extends TxPayloadDtoV1 {
+    public static final class AddressAliasAdd extends TxPayloadDtoV1 {
         Address address;
         String alias;
     }
@@ -77,7 +100,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class AddressAliasRemove extends TxPayloadDtoV1 {
+    public static final class AddressAliasRemove extends TxPayloadDtoV1 {
         String alias;
     }
 
@@ -85,7 +108,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class AuthorityAdd extends TxPayloadDtoV1 {
+    public static final class AuthorityAdd extends TxPayloadDtoV1 {
         Address address;
     }
 
@@ -93,7 +116,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class AuthorityRemove extends TxPayloadDtoV1 {
+    public static final class AuthorityRemove extends TxPayloadDtoV1 {
         Address address;
     }
 
@@ -101,7 +124,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class NetworkParamsSet extends TxPayloadDtoV1 {
+    public static final class NetworkParamsSet extends TxPayloadDtoV1 {
         Wei blockReward;
         Address blockRewardPoolAddress;
         Long targetMiningTimeMs;
@@ -115,7 +138,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class TokenBurn extends TxPayloadDtoV1 {
+    public static final class TokenBurn extends TxPayloadDtoV1 {
         Address tokenAddress;
         Address sender;
         Wei amount;
@@ -125,7 +148,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class TokenCreate extends TxPayloadDtoV1 {
+    public static final class TokenCreate extends TxPayloadDtoV1 {
         String name;
         String smallestUnitName;
         int numberOfDecimals;
@@ -139,7 +162,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class TokenMint extends TxPayloadDtoV1 {
+    public static final class TokenMint extends TxPayloadDtoV1 {
         Address tokenAddress;
         Address recipient;
         Wei amount;
@@ -149,7 +172,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class TokenUpdate extends TxPayloadDtoV1 {
+    public static final class TokenUpdate extends TxPayloadDtoV1 {
         Address tokenAddress;
         String name;
         String smallestUnitName;
@@ -161,7 +184,7 @@ public abstract class TxPayloadDtoV1 {
     @NoArgsConstructor
     @AllArgsConstructor
     @EqualsAndHashCode(callSuper = false)
-    public static class Vote extends TxPayloadDtoV1 {
+    public static final class Vote extends TxPayloadDtoV1 {
         BipVoteType type;
     }
 }

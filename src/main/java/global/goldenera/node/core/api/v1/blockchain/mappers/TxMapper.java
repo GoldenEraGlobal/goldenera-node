@@ -81,7 +81,7 @@ public class TxMapper {
         return result;
     }
 
-    private TxPayloadDtoV1 mapPayload(TxPayload payload) {
+    public TxPayloadDtoV1 mapPayload(TxPayload payload) {
         if (payload == null) {
             return null;
         }

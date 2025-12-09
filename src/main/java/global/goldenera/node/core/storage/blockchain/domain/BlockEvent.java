@@ -23,12 +23,24 @@
  */
 package global.goldenera.node.core.storage.blockchain.domain;
 
-import java.math.BigInteger;
+import java.time.Instant;
+import java.util.LinkedHashSet;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.TxVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
 
 /**
  * Represents an "invisible" state change event that occurred in a block.
@@ -85,6 +97,7 @@ public sealed interface BlockEvent {
         public Hash bipHash() {
             return null;
         }
+
     }
 
     /**
@@ -119,14 +132,9 @@ public sealed interface BlockEvent {
      */
     record TokenCreated(
             Hash bipHash,
-            Address tokenAddress,
-            String name,
-            String smallestUnitName,
-            int decimals,
-            String websiteUrl,
-            String logoUrl,
-            BigInteger maxSupply,
-            boolean userBurnable) implements BlockEvent {
+            Address derivedTokenAddress,
+            TxVersion txVersion,
+            TxBipTokenCreatePayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -139,11 +147,8 @@ public sealed interface BlockEvent {
      */
     record TokenUpdated(
             Hash bipHash,
-            Address tokenAddress,
-            String name,
-            String smallestUnitName,
-            String websiteUrl,
-            String logoUrl) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipTokenUpdatePayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -157,9 +162,8 @@ public sealed interface BlockEvent {
      */
     record TokenMinted(
             Hash bipHash,
-            Address tokenAddress,
-            Address recipient,
-            Wei amount) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipTokenMintPayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -172,9 +176,8 @@ public sealed interface BlockEvent {
      */
     record TokenBurned(
             Hash bipHash,
-            Address tokenAddress,
-            Address owner,
-            Wei requestedAmount,
+            TxVersion txVersion,
+            TxBipTokenBurnPayload payload,
             Wei actualBurnedAmount) implements BlockEvent {
 
         @Override
@@ -204,7 +207,7 @@ public sealed interface BlockEvent {
 
         @Override
         public Hash bipHash() {
-            return null; // Not tied to a specific BIP
+            return null;
         }
     }
 
@@ -217,7 +220,8 @@ public sealed interface BlockEvent {
      */
     record AuthorityAdded(
             Hash bipHash,
-            Address authorityAddress) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipAuthorityAddPayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -230,7 +234,8 @@ public sealed interface BlockEvent {
      */
     record AuthorityRemoved(
             Hash bipHash,
-            Address authorityAddress) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipAuthorityRemovePayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -244,13 +249,8 @@ public sealed interface BlockEvent {
      */
     record NetworkParamsChanged(
             Hash bipHash,
-            Wei newBlockReward,
-            Address newBlockRewardPoolAddress,
-            Long newTargetMiningTimeMs,
-            Long newAsertHalfLifeBlocks,
-            BigInteger newMinDifficulty,
-            Wei newMinTxBaseFee,
-            Wei newMinTxByteFee) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipNetworkParamsSetPayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -267,8 +267,8 @@ public sealed interface BlockEvent {
      */
     record AddressAliasAdded(
             Hash bipHash,
-            Address address,
-            String alias) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipAddressAliasAddPayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
@@ -281,11 +281,28 @@ public sealed interface BlockEvent {
      */
     record AddressAliasRemoved(
             Hash bipHash,
-            String alias) implements BlockEvent {
+            TxVersion txVersion,
+            TxBipAddressAliasRemovePayload payload) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
             return BlockEventType.ADDRESS_ALIAS_REMOVED;
+        }
+    }
+
+    record BipStateChange(
+            Hash bipHash,
+            BipStatus status,
+            boolean isActionExecuted,
+            LinkedHashSet<Address> approvers,
+            LinkedHashSet<Address> disapprovers,
+            Hash updatedByTxHash,
+            long updatedAtBlockHeight,
+            Instant updatedAtTimestamp) implements BlockEvent {
+
+        @Override
+        public BlockEventType type() {
+            return BlockEventType.BIP_STATE_CHANGE;
         }
     }
 }

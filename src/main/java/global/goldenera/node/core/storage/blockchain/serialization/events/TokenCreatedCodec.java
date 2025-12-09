@@ -23,10 +23,12 @@
  */
 package global.goldenera.node.core.storage.blockchain.serialization.events;
 
-import java.math.BigInteger;
-
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.TxVersion;
+import global.goldenera.cryptoj.serialization.tx.payload.TxPayloadDecoder;
+import global.goldenera.cryptoj.serialization.tx.payload.TxPayloadEncoder;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenCreated;
 import global.goldenera.rlp.RLPInput;
 import global.goldenera.rlp.RLPOutput;
@@ -34,6 +36,8 @@ import global.goldenera.rlp.RLPOutput;
 public class TokenCreatedCodec implements BlockEventCodec<TokenCreated> {
 
     public static final TokenCreatedCodec INSTANCE = new TokenCreatedCodec();
+
+    private TokenCreatedCodec() {}
 
     @Override
     public int currentVersion() {
@@ -43,29 +47,20 @@ public class TokenCreatedCodec implements BlockEventCodec<TokenCreated> {
     @Override
     public void encode(RLPOutput out, TokenCreated event, int version) {
         out.writeBytes32(event.bipHash());
-        out.writeBytes(event.tokenAddress());
-        out.writeString(event.name());
-        out.writeString(event.smallestUnitName());
-        out.writeIntScalar(event.decimals());
-        out.writeOptionalString(event.websiteUrl());
-        out.writeOptionalString(event.logoUrl());
-        out.writeBigIntegerScalar(event.maxSupply());
-        out.writeIntScalar(event.userBurnable() ? 1 : 0);
+        out.writeBytes(event.derivedTokenAddress());
+        out.writeIntScalar(event.txVersion().getCode());
+        out.writeRaw(TxPayloadEncoder.INSTANCE.encode(event.payload(), event.txVersion()));
     }
 
     @Override
     public TokenCreated decode(RLPInput input, int version) {
         Hash bipHash = Hash.wrap(input.readBytes32());
-        Address tokenAddress = Address.wrap(input.readBytes());
-        String name = input.readString();
-        String smallestUnitName = input.readString();
-        int decimals = input.readIntScalar();
-        String websiteUrl = input.readOptionalString();
-        String logoUrl = input.readOptionalString();
-        BigInteger maxSupply = input.readBigIntegerScalar();
-        boolean userBurnable = input.readIntScalar() == 1;
-        return new TokenCreated(bipHash, tokenAddress, name, smallestUnitName, decimals, websiteUrl, logoUrl, maxSupply,
-                userBurnable);
+        Address derivedAddress = Address.wrap(input.readBytes());
+        int txVersionCode = input.readIntScalar();
+        TxVersion txVersion = TxVersion.fromCode(txVersionCode);
+        TxBipTokenCreatePayload payload = (TxBipTokenCreatePayload) TxPayloadDecoder.INSTANCE.decode(input.readRaw(), txVersion);
+
+        return new TokenCreated(bipHash, derivedAddress, txVersion, payload);
     }
 
     @Override

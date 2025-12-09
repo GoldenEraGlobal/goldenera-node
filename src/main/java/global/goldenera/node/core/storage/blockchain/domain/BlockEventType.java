@@ -124,7 +124,13 @@ public enum BlockEventType {
      * Alias was removed from an address via approved BIP.
      * Affects: previously aliased address
      */
-    ADDRESS_ALIAS_REMOVED(31);
+    ADDRESS_ALIAS_REMOVED(31),
+
+    /**
+     * BIP state was changed via vote.
+     * Affects: bip status
+     */
+    BIP_STATE_CHANGE(40);
 
     private final int code;
 

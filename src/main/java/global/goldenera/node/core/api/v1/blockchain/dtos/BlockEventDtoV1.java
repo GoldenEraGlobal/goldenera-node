@@ -23,7 +23,8 @@
  */
 package global.goldenera.node.core.api.v1.blockchain.dtos;
 
-import java.math.BigInteger;
+import java.time.Instant;
+import java.util.LinkedHashSet;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
@@ -32,6 +33,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.TxVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
 import io.swagger.v3.oas.annotations.media.DiscriminatorMapping;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AccessLevel;
@@ -58,7 +61,8 @@ import lombok.experimental.FieldDefaults;
         @JsonSubTypes.Type(value = BlockEventDtoV1.AuthorityRemovedDto.class, name = "AUTHORITY_REMOVED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.NetworkParamsChangedDto.class, name = "NETWORK_PARAMS_CHANGED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasAddedDto.class, name = "ADDRESS_ALIAS_ADDED"),
-        @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasRemovedDto.class, name = "ADDRESS_ALIAS_REMOVED")
+        @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasRemovedDto.class, name = "ADDRESS_ALIAS_REMOVED"),
+        @JsonSubTypes.Type(value = BlockEventDtoV1.BipStateChangeDto.class, name = "BIP_STATE_CHANGE")
 })
 @Schema(description = "Block event", discriminatorProperty = "type", discriminatorMapping = {
         @DiscriminatorMapping(value = "BLOCK_REWARD", schema = BlockEventDtoV1.BlockRewardDto.class),
@@ -72,7 +76,8 @@ import lombok.experimental.FieldDefaults;
         @DiscriminatorMapping(value = "AUTHORITY_REMOVED", schema = BlockEventDtoV1.AuthorityRemovedDto.class),
         @DiscriminatorMapping(value = "NETWORK_PARAMS_CHANGED", schema = BlockEventDtoV1.NetworkParamsChangedDto.class),
         @DiscriminatorMapping(value = "ADDRESS_ALIAS_ADDED", schema = BlockEventDtoV1.AddressAliasAddedDto.class),
-        @DiscriminatorMapping(value = "ADDRESS_ALIAS_REMOVED", schema = BlockEventDtoV1.AddressAliasRemovedDto.class)
+        @DiscriminatorMapping(value = "ADDRESS_ALIAS_REMOVED", schema = BlockEventDtoV1.AddressAliasRemovedDto.class),
+        @DiscriminatorMapping(value = "BIP_STATE_CHANGE", schema = BlockEventDtoV1.BipStateChangeDto.class)
 }, oneOf = {
         BlockEventDtoV1.BlockRewardDto.class,
         BlockEventDtoV1.FeesCollectedDto.class,
@@ -85,9 +90,23 @@ import lombok.experimental.FieldDefaults;
         BlockEventDtoV1.AuthorityRemovedDto.class,
         BlockEventDtoV1.NetworkParamsChangedDto.class,
         BlockEventDtoV1.AddressAliasAddedDto.class,
-        BlockEventDtoV1.AddressAliasRemovedDto.class
+        BlockEventDtoV1.AddressAliasRemovedDto.class,
+        BlockEventDtoV1.BipStateChangeDto.class
 })
-public abstract sealed class BlockEventDtoV1 {
+public abstract sealed class BlockEventDtoV1 permits
+        BlockEventDtoV1.BlockRewardDto,
+        BlockEventDtoV1.FeesCollectedDto,
+        BlockEventDtoV1.TokenCreatedDto,
+        BlockEventDtoV1.TokenUpdatedDto,
+        BlockEventDtoV1.TokenMintedDto,
+        BlockEventDtoV1.TokenBurnedDto,
+        BlockEventDtoV1.TokenSupplyUpdatedDto,
+        BlockEventDtoV1.AuthorityAddedDto,
+        BlockEventDtoV1.AuthorityRemovedDto,
+        BlockEventDtoV1.NetworkParamsChangedDto,
+        BlockEventDtoV1.AddressAliasAddedDto,
+        BlockEventDtoV1.AddressAliasRemovedDto,
+        BlockEventDtoV1.BipStateChangeDto {
 
     // ============================
     // BLOCK LEVEL EVENTS
@@ -134,22 +153,12 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class TokenCreatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that created this token")
         Hash bipHash;
-        @Schema(description = "Token address")
-        Address tokenAddress;
-        @Schema(description = "Token name")
-        String name;
-        @Schema(description = "Smallest unit name")
-        String smallestUnitName;
-        @Schema(description = "Number of decimals")
-        int decimals;
-        @Schema(description = "Website URL")
-        String websiteUrl;
-        @Schema(description = "Logo URL")
-        String logoUrl;
-        @Schema(description = "Maximum supply")
-        BigInteger maxSupply;
-        @Schema(description = "Whether users can burn tokens")
-        boolean userBurnable;
+        @Schema(description = "Derived token address")
+        Address derivedTokenAddress;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.TokenCreate payload;
     }
 
     @Getter
@@ -161,16 +170,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class TokenUpdatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that updated this token")
         Hash bipHash;
-        @Schema(description = "Token address")
-        Address tokenAddress;
-        @Schema(description = "Updated name")
-        String name;
-        @Schema(description = "Updated smallest unit name")
-        String smallestUnitName;
-        @Schema(description = "Updated website URL")
-        String websiteUrl;
-        @Schema(description = "Updated logo URL")
-        String logoUrl;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.TokenUpdate payload;
     }
 
     @Getter
@@ -182,12 +185,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class TokenMintedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that minted tokens")
         Hash bipHash;
-        @Schema(description = "Token address")
-        Address tokenAddress;
-        @Schema(description = "Recipient address")
-        Address recipient;
-        @Schema(description = "Amount minted")
-        Wei amount;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.TokenMint payload;
     }
 
     @Getter
@@ -199,12 +200,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class TokenBurnedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that burned tokens")
         Hash bipHash;
-        @Schema(description = "Token address")
-        Address tokenAddress;
-        @Schema(description = "Owner address whose tokens were burned")
-        Address owner;
-        @Schema(description = "Requested burn amount")
-        Wei requestedAmount;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.TokenBurn payload;
         @Schema(description = "Actual amount burned")
         Wei actualBurnedAmount;
     }
@@ -235,8 +234,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class AuthorityAddedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that added the authority")
         Hash bipHash;
-        @Schema(description = "Authority address")
-        Address authorityAddress;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.AuthorityAdd payload;
     }
 
     @Getter
@@ -248,8 +249,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class AuthorityRemovedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that removed the authority")
         Hash bipHash;
-        @Schema(description = "Authority address")
-        Address authorityAddress;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.AuthorityRemove payload;
     }
 
     @Getter
@@ -261,20 +264,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class NetworkParamsChangedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that changed params")
         Hash bipHash;
-        @Schema(description = "New block reward (null if unchanged)")
-        Wei newBlockReward;
-        @Schema(description = "New reward pool address (null if unchanged)")
-        Address newBlockRewardPoolAddress;
-        @Schema(description = "New target mining time in ms (null if unchanged)")
-        Long newTargetMiningTimeMs;
-        @Schema(description = "New ASERT half-life blocks (null if unchanged)")
-        Long newAsertHalfLifeBlocks;
-        @Schema(description = "New minimum difficulty (null if unchanged)")
-        BigInteger newMinDifficulty;
-        @Schema(description = "New minimum tx base fee (null if unchanged)")
-        Wei newMinTxBaseFee;
-        @Schema(description = "New minimum tx byte fee (null if unchanged)")
-        Wei newMinTxByteFee;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.NetworkParamsSet payload;
     }
 
     // ============================
@@ -290,10 +283,10 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class AddressAliasAddedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that added the alias")
         Hash bipHash;
-        @Schema(description = "Address for the alias")
-        Address address;
-        @Schema(description = "Alias string")
-        String alias;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.AddressAliasAdd payload;
     }
 
     @Getter
@@ -305,7 +298,34 @@ public abstract sealed class BlockEventDtoV1 {
     public static final class AddressAliasRemovedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that removed the alias")
         Hash bipHash;
-        @Schema(description = "Alias string that was removed")
-        String alias;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.AddressAliasRemove payload;
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @FieldDefaults(level = AccessLevel.PRIVATE)
+    @Schema(description = "BIP state/status changed")
+    public static final class BipStateChangeDto extends BlockEventDtoV1 {
+        @Schema(description = "BIP hash")
+        Hash bipHash;
+        @Schema(description = "New status")
+        BipStatus status;
+        @Schema(description = "Is action executed")
+        boolean actionExecuted;
+        @Schema(description = "Approvers")
+        LinkedHashSet<Address> approvers;
+        @Schema(description = "Disapprovers")
+        LinkedHashSet<Address> disapprovers;
+        @Schema(description = "Hash of the transaction that triggered the update")
+        Hash updatedByTxHash;
+        @Schema(description = "Block height of the update")
+        long updatedAtBlockHeight;
+        @Schema(description = "Timestamp of the update")
+        Instant updatedAtTimestamp;
     }
 }

@@ -23,22 +23,49 @@
  */
 package global.goldenera.node.core.storage.blockchain.serialization.events;
 
-import org.apache.tuweni.units.ethereum.Wei;
-
-import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
+import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxVersion;
 import global.goldenera.cryptoj.serialization.tx.payload.TxPayloadDecoder;
 import global.goldenera.cryptoj.serialization.tx.payload.TxPayloadEncoder;
-import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenBurned;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.rlp.RLPInput;
 import global.goldenera.rlp.RLPOutput;
 
-public class TokenBurnedCodec implements BlockEventCodec<TokenBurned> {
+/**
+ * Generic codec for BlockEvents that contain a BipHash and a specific
+ * TxPayload.
+ */
+public class GenericPayloadEventCodec<T extends BlockEvent, P extends TxPayload> implements BlockEventCodec<T> {
 
-    public static final TokenBurnedCodec INSTANCE = new TokenBurnedCodec();
+    @FunctionalInterface
+    public interface EventFactory<T, P> {
+        T create(Hash bipHash, TxVersion version, P payload);
+    }
 
-    private TokenBurnedCodec() {
+    private final EventFactory<T, P> factory;
+
+    // Interface to access fields from the event instance for encoding
+    @FunctionalInterface
+    public interface PayloadExtractor<T, P> {
+        P extract(T event);
+    }
+
+    @FunctionalInterface
+    public interface VersionExtractor<T> {
+        TxVersion extract(T event);
+    }
+
+    private final PayloadExtractor<T, P> payloadExtractor;
+    private final VersionExtractor<T> versionExtractor;
+
+    public GenericPayloadEventCodec(
+            EventFactory<T, P> factory,
+            PayloadExtractor<T, P> payloadExtractor,
+            VersionExtractor<T> versionExtractor) {
+        this.factory = factory;
+        this.payloadExtractor = payloadExtractor;
+        this.versionExtractor = versionExtractor;
     }
 
     @Override
@@ -47,23 +74,27 @@ public class TokenBurnedCodec implements BlockEventCodec<TokenBurned> {
     }
 
     @Override
-    public void encode(RLPOutput out, TokenBurned event, int version) {
+    public void encode(RLPOutput out, T event, int version) {
         out.writeBytes32(event.bipHash());
-        out.writeIntScalar(event.txVersion().getCode());
-        out.writeRaw(TxPayloadEncoder.INSTANCE.encode(event.payload(), event.txVersion()));
-        out.writeWeiScalar(event.actualBurnedAmount());
+
+        TxVersion txVersion = versionExtractor.extract(event);
+        out.writeIntScalar(txVersion.getCode());
+
+        P payload = payloadExtractor.extract(event);
+        out.writeRaw(TxPayloadEncoder.INSTANCE.encode(payload, txVersion));
     }
 
+    @SuppressWarnings("unchecked")
     @Override
-    public TokenBurned decode(RLPInput input, int version) {
+    public T decode(RLPInput input, int version) {
         Hash bipHash = Hash.wrap(input.readBytes32());
+
         int txVersionCode = input.readIntScalar();
         TxVersion txVersion = TxVersion.fromCode(txVersionCode);
-        TxBipTokenBurnPayload payload = (TxBipTokenBurnPayload) TxPayloadDecoder.INSTANCE.decode(input.readRaw(),
-                txVersion);
-        Wei actualBurnedAmount = input.readWeiScalar();
 
-        return new TokenBurned(bipHash, txVersion, payload, actualBurnedAmount);
+        P payload = (P) TxPayloadDecoder.INSTANCE.decode(input.readRaw(), txVersion);
+
+        return factory.create(bipHash, txVersion, payload);
     }
 
     @Override

@@ -45,11 +45,13 @@ import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.TxVersion;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAliasAdded;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAliasRemoved;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityAdded;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityRemoved;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateChange;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.FeesCollected;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsChanged;
@@ -126,10 +128,24 @@ public class BlockEventExtractor {
                                 BipState oldState = diff.getOldValue();
                                 BipState newState = diff.getNewValue();
 
+                                // Only extract event if status changed
+                                if (oldState.getStatus() != newState.getStatus()) {
+                                        events.add(new BipStateChange(
+                                                        bipHash,
+                                                        newState.getStatus(),
+                                                        newState.isActionExecuted(),
+                                                        newState.getApprovers(),
+                                                        newState.getDisapprovers(),
+                                                        newState.getUpdatedByTxHash(),
+                                                        newState.getUpdatedAtBlockHeight(),
+                                                        newState.getUpdatedAtTimestamp()));
+                                }
+
                                 // Only extract event if action was just executed in this block
                                 if (!oldState.isActionExecuted() && newState.isActionExecuted()) {
                                         TxPayload payload = newState.getMetadata().getTxPayload();
                                         BlockEvent event = createBipExecutionEvent(bipHash, payload,
+                                                        newState.getMetadata().getTxVersion(),
                                                         newState.getMetadata().getDerivedTokenAddress(),
                                                         actualBurnAmounts);
                                         if (event != null) {
@@ -142,71 +158,62 @@ public class BlockEventExtractor {
                 return events;
         }
 
-        private BlockEvent createBipExecutionEvent(Hash bipHash, TxPayload payload,
+        private BlockEvent createBipExecutionEvent(Hash bipHash, TxPayload payload, TxVersion txVersion,
                         Address derivedTokenAddress, Map<Hash, Wei> actualBurnAmounts) {
+                if (payload == null) {
+                        return null;
+                }
 
                 return switch (payload) {
                         case TxBipTokenCreatePayload p -> new TokenCreated(
                                         bipHash,
                                         derivedTokenAddress,
-                                        p.getName(),
-                                        p.getSmallestUnitName(),
-                                        p.getNumberOfDecimals(),
-                                        p.getWebsiteUrl(),
-                                        p.getLogoUrl(),
-                                        p.getMaxSupply(),
-                                        p.isUserBurnable());
+                                        txVersion,
+                                        p);
 
                         case TxBipTokenUpdatePayload p -> new TokenUpdated(
                                         bipHash,
-                                        p.getTokenAddress(),
-                                        p.getName(),
-                                        p.getSmallestUnitName(),
-                                        p.getWebsiteUrl(),
-                                        p.getLogoUrl());
+                                        txVersion,
+                                        p);
 
                         case TxBipTokenMintPayload p -> new TokenMinted(
                                         bipHash,
-                                        p.getTokenAddress(),
-                                        p.getRecipient(),
-                                        p.getAmount());
+                                        txVersion,
+                                        p);
 
                         case TxBipTokenBurnPayload p -> {
                                 Wei actualBurned = actualBurnAmounts != null ? actualBurnAmounts.get(bipHash) : null;
                                 yield new TokenBurned(
                                                 bipHash,
-                                                p.getTokenAddress(),
-                                                p.getSender(),
-                                                p.getAmount(),
+                                                txVersion,
+                                                p,
                                                 actualBurned != null ? actualBurned : Wei.ZERO);
                         }
 
                         case TxBipAuthorityAddPayload p -> new AuthorityAdded(
                                         bipHash,
-                                        p.getAddress());
+                                        txVersion,
+                                        p);
 
                         case TxBipAuthorityRemovePayload p -> new AuthorityRemoved(
                                         bipHash,
-                                        p.getAddress());
+                                        txVersion,
+                                        p);
 
                         case TxBipNetworkParamsSetPayload p -> new NetworkParamsChanged(
                                         bipHash,
-                                        p.getBlockReward(),
-                                        p.getBlockRewardPoolAddress(),
-                                        p.getTargetMiningTimeMs(),
-                                        p.getAsertHalfLifeBlocks(),
-                                        p.getMinDifficulty(),
-                                        p.getMinTxBaseFee(),
-                                        p.getMinTxByteFee());
+                                        txVersion,
+                                        p);
 
                         case TxBipAddressAliasAddPayload p -> new AddressAliasAdded(
                                         bipHash,
-                                        p.getAddress(),
-                                        p.getAlias());
+                                        txVersion,
+                                        p);
 
                         case TxBipAddressAliasRemovePayload p -> new AddressAliasRemoved(
                                         bipHash,
-                                        p.getAlias());
+                                        txVersion,
+                                        p);
 
                         default -> null;
                 };

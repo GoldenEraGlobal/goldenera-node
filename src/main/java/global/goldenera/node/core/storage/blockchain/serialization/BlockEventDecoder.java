@@ -30,19 +30,14 @@ import java.util.Map;
 
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEventType;
-import global.goldenera.node.core.storage.blockchain.serialization.events.AddressAliasAddedCodec;
-import global.goldenera.node.core.storage.blockchain.serialization.events.AddressAliasRemovedCodec;
-import global.goldenera.node.core.storage.blockchain.serialization.events.AuthorityAddedCodec;
-import global.goldenera.node.core.storage.blockchain.serialization.events.AuthorityRemovedCodec;
+import global.goldenera.node.core.storage.blockchain.serialization.events.BipStateChangeCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockEventCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockRewardCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.FeesCollectedCodec;
-import global.goldenera.node.core.storage.blockchain.serialization.events.NetworkParamsChangedCodec;
+import global.goldenera.node.core.storage.blockchain.serialization.events.GenericPayloadEventCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.TokenBurnedCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.TokenCreatedCodec;
-import global.goldenera.node.core.storage.blockchain.serialization.events.TokenMintedCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.TokenSupplyUpdatedCodec;
-import global.goldenera.node.core.storage.blockchain.serialization.events.TokenUpdatedCodec;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.rlp.RLPInput;
 
@@ -63,15 +58,25 @@ public class BlockEventDecoder {
 		codecs.put(BlockEventType.BLOCK_REWARD, BlockRewardCodec.INSTANCE);
 		codecs.put(BlockEventType.FEES_COLLECTED, FeesCollectedCodec.INSTANCE);
 		codecs.put(BlockEventType.TOKEN_CREATED, TokenCreatedCodec.INSTANCE);
-		codecs.put(BlockEventType.TOKEN_UPDATED, TokenUpdatedCodec.INSTANCE);
-		codecs.put(BlockEventType.TOKEN_MINTED, TokenMintedCodec.INSTANCE);
+		codecs.put(BlockEventType.TOKEN_UPDATED, new GenericPayloadEventCodec<>(BlockEvent.TokenUpdated::new,
+				BlockEvent.TokenUpdated::payload, BlockEvent.TokenUpdated::txVersion));
+		codecs.put(BlockEventType.TOKEN_MINTED, new GenericPayloadEventCodec<>(BlockEvent.TokenMinted::new,
+				BlockEvent.TokenMinted::payload, BlockEvent.TokenMinted::txVersion));
 		codecs.put(BlockEventType.TOKEN_BURNED, TokenBurnedCodec.INSTANCE);
 		codecs.put(BlockEventType.TOKEN_SUPPLY_UPDATED, TokenSupplyUpdatedCodec.INSTANCE);
-		codecs.put(BlockEventType.AUTHORITY_ADDED, AuthorityAddedCodec.INSTANCE);
-		codecs.put(BlockEventType.AUTHORITY_REMOVED, AuthorityRemovedCodec.INSTANCE);
-		codecs.put(BlockEventType.NETWORK_PARAMS_CHANGED, NetworkParamsChangedCodec.INSTANCE);
-		codecs.put(BlockEventType.ADDRESS_ALIAS_ADDED, AddressAliasAddedCodec.INSTANCE);
-		codecs.put(BlockEventType.ADDRESS_ALIAS_REMOVED, AddressAliasRemovedCodec.INSTANCE);
+		codecs.put(BlockEventType.AUTHORITY_ADDED, new GenericPayloadEventCodec<>(BlockEvent.AuthorityAdded::new,
+				BlockEvent.AuthorityAdded::payload, BlockEvent.AuthorityAdded::txVersion));
+		codecs.put(BlockEventType.AUTHORITY_REMOVED, new GenericPayloadEventCodec<>(BlockEvent.AuthorityRemoved::new,
+				BlockEvent.AuthorityRemoved::payload, BlockEvent.AuthorityRemoved::txVersion));
+		codecs.put(BlockEventType.NETWORK_PARAMS_CHANGED,
+				new GenericPayloadEventCodec<>(BlockEvent.NetworkParamsChanged::new,
+						BlockEvent.NetworkParamsChanged::payload, BlockEvent.NetworkParamsChanged::txVersion));
+		codecs.put(BlockEventType.ADDRESS_ALIAS_ADDED, new GenericPayloadEventCodec<>(BlockEvent.AddressAliasAdded::new,
+				BlockEvent.AddressAliasAdded::payload, BlockEvent.AddressAliasAdded::txVersion));
+		codecs.put(BlockEventType.ADDRESS_ALIAS_REMOVED,
+				new GenericPayloadEventCodec<>(BlockEvent.AddressAliasRemoved::new,
+						BlockEvent.AddressAliasRemoved::payload, BlockEvent.AddressAliasRemoved::txVersion));
+		codecs.put(BlockEventType.BIP_STATE_CHANGE, BipStateChangeCodec.INSTANCE);
 	}
 
 	/**
