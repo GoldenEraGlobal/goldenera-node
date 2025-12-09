@@ -28,7 +28,6 @@ import static lombok.AccessLevel.PRIVATE;
 import java.util.List;
 
 import global.goldenera.cryptoj.datatypes.Hash;
-import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -51,7 +50,6 @@ public class BlockchainBlockHeaderDtoV1 {
     @Schema(description = "Block metadata")
     BlockchainBlockHeaderMetadataDtoV1 metadata;
 
-    @ArraySchema(schema = @Schema(implementation = BlockEventDtoV1.class))
     @Schema(description = "Block events (only included when withEvents=true)")
     List<BlockEventDtoV1> events;
 

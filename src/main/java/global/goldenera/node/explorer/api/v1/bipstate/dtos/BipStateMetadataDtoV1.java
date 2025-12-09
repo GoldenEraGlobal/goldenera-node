@@ -25,10 +25,10 @@ package global.goldenera.node.explorer.api.v1.bipstate.dtos;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.TxVersion;
 import global.goldenera.cryptoj.enums.state.BipStateMetadataVersion;
+import global.goldenera.node.explorer.api.v1.tx.dtos.TxPayloadDtoV1;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -47,6 +47,6 @@ public class BipStateMetadataDtoV1 {
 	BipStateMetadataVersion version;
 	TxVersion txVersion;
 	Address derivedTokenAddress;
-	TxPayload txPayload;
+	TxPayloadDtoV1 txPayload;
 
 }

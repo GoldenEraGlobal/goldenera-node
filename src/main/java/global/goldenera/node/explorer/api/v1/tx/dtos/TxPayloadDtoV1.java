@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.api.v1.blockchain.dtos;
+package global.goldenera.node.explorer.api.v1.tx.dtos;
 
 import java.math.BigInteger;
 

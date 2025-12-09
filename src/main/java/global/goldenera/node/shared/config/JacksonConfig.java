@@ -24,7 +24,6 @@
 package global.goldenera.node.shared.config;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 
@@ -97,11 +96,6 @@ public class JacksonConfig {
 		ObjectMapper mapper = builder.createXmlMapper(false).build();
 		SimpleModule module = new SimpleModule("GoldeneraCryptoModule");
 
-		// ENUMS
-		for (Class<? extends Enum<?>> enumClass : GlobalTypeRegistry.CODE_ENUMS) {
-			registerReflectionEnum(module, enumClass);
-		}
-
 		// CUSTOM TYPES
 		for (GlobalTypeRegistry.StringTypeAdapter<?> adapter : GlobalTypeRegistry.STRING_ADAPTERS) {
 			registerStringAdapter(module, adapter);
@@ -173,44 +167,6 @@ public class JacksonConfig {
 				}
 			}
 		});
-	}
-
-	@SuppressWarnings({ "unchecked", "rawtypes" })
-	private void registerReflectionEnum(SimpleModule module, Class enumClass) {
-		try {
-			Method getCodeMethod = enumClass.getMethod("getCode");
-			Method fromCodeMethod = enumClass.getMethod("fromCode", int.class);
-
-			module.addSerializer(enumClass, new JsonSerializer() {
-				@Override
-				public void serialize(Object value, JsonGenerator gen, SerializerProvider s) throws IOException {
-					try {
-						if (value == null)
-							gen.writeNull();
-						else
-							gen.writeNumber((int) getCodeMethod.invoke(value));
-					} catch (Exception e) {
-						gen.writeNull();
-					}
-				}
-			});
-
-			module.addDeserializer(enumClass, new JsonDeserializer() {
-				@Override
-				public Object deserialize(JsonParser p, DeserializationContext c) throws IOException {
-					if (p.getCurrentToken() == JsonToken.VALUE_NULL)
-						return null;
-					try {
-						return fromCodeMethod.invoke(null, p.getValueAsInt());
-					} catch (Exception e) {
-						return null;
-					}
-				}
-			});
-
-		} catch (NoSuchMethodException e) {
-			throw new RuntimeException("Error with registering enum: " + enumClass.getSimpleName(), e);
-		}
 	}
 
 }

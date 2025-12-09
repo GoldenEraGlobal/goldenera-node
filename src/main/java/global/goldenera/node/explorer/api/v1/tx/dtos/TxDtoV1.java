@@ -30,7 +30,6 @@ import java.time.Instant;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.ethereum.Wei;
 
-import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
@@ -68,7 +67,7 @@ public class TxDtoV1 {
     Hash referenceHash;
     Signature signature;
     TxPayloadType payloadType;
-    TxPayload payload;
+    TxPayloadDtoV1 payload;
     int size;
     Hash blockHash;
     long blockHeight;

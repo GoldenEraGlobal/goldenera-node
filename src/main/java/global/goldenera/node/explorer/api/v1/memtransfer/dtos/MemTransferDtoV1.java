@@ -30,7 +30,6 @@ import java.time.Instant;
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.ethereum.Wei;
 
-import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
@@ -38,6 +37,7 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.cryptoj.enums.TxPayloadType;
 import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.cryptoj.enums.TxVersion;
+import global.goldenera.node.explorer.api.v1.tx.dtos.TxPayloadDtoV1;
 import global.goldenera.node.explorer.enums.TransferType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -72,6 +72,6 @@ public class MemTransferDtoV1 {
 	Hash referenceHash;
 	Bytes message;
 	TxPayloadType payloadType;
-	TxPayload payload;
+	TxPayloadDtoV1 payload;
 
 }

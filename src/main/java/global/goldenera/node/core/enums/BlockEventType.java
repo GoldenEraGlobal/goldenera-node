@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.blockchain.domain;
+package global.goldenera.node.core.enums;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;

@@ -30,7 +30,6 @@ import org.springframework.core.convert.converter.Converter;
 import org.springframework.format.FormatterRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-import global.goldenera.node.shared.converters.ReflectionEnumConverter;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import lombok.experimental.FieldDefaults;
 
@@ -39,14 +38,7 @@ import lombok.experimental.FieldDefaults;
 public class WebConfig implements WebMvcConfigurer {
 
     @Override
-    @SuppressWarnings({ "unchecked", "rawtypes" })
     public void addFormatters(FormatterRegistry registry) {
-
-        // 1. ENUMS
-        for (Class<? extends Enum<?>> enumClass : GlobalTypeRegistry.CODE_ENUMS) {
-            registry.addConverter(String.class, enumClass, new ReflectionEnumConverter(enumClass));
-        }
-
         // 2. CUSTOM TYPES
         for (GlobalTypeRegistry.StringTypeAdapter<?> adapter : GlobalTypeRegistry.STRING_ADAPTERS) {
             registerStringAdapter(registry, adapter);

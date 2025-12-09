@@ -28,8 +28,8 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 
+import global.goldenera.node.core.enums.BlockEventType;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
-import global.goldenera.node.core.storage.blockchain.domain.BlockEventType;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BipStateChangeCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockEventCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockRewardCodec;

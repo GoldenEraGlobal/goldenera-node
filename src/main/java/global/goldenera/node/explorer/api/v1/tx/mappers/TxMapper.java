@@ -28,8 +28,20 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Component;
 
+import global.goldenera.cryptoj.common.payloads.TxPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipVotePayload;
 import global.goldenera.node.explorer.api.v1.tx.dtos.TxDtoV1;
 import global.goldenera.node.explorer.api.v1.tx.dtos.TxDtoV1_Page;
+import global.goldenera.node.explorer.api.v1.tx.dtos.TxPayloadDtoV1;
 import global.goldenera.node.explorer.entities.ExTx;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -59,7 +71,7 @@ public class TxMapper {
                 in.getReferenceHash(),
                 in.getSignature(),
                 in.getPayloadType(),
-                in.getPayload(),
+                mapPayload(in.getPayload()),
                 in.getSize(),
                 in.getBlockHash(),
                 in.getBlockHeight(),
@@ -78,4 +90,86 @@ public class TxMapper {
                 in.getTotalElements());
     }
 
+    public TxPayloadDtoV1 mapPayload(TxPayload payload) {
+        if (payload == null) {
+            return null;
+        }
+
+        TxPayloadDtoV1 dto = switch (payload) {
+            case TxBipAddressAliasAddPayload p -> {
+                var d = new TxPayloadDtoV1.AddressAliasAdd();
+                d.setAddress(p.getAddress());
+                d.setAlias(p.getAlias());
+                yield d;
+            }
+            case TxBipAddressAliasRemovePayload p -> {
+                var d = new TxPayloadDtoV1.AddressAliasRemove();
+                d.setAlias(p.getAlias());
+                yield d;
+            }
+            case TxBipAuthorityAddPayload p -> {
+                var d = new TxPayloadDtoV1.AuthorityAdd();
+                d.setAddress(p.getAddress());
+                yield d;
+            }
+            case TxBipAuthorityRemovePayload p -> {
+                var d = new TxPayloadDtoV1.AuthorityRemove();
+                d.setAddress(p.getAddress());
+                yield d;
+            }
+            case TxBipNetworkParamsSetPayload p -> {
+                var d = new TxPayloadDtoV1.NetworkParamsSet();
+                d.setBlockReward(p.getBlockReward());
+                d.setBlockRewardPoolAddress(p.getBlockRewardPoolAddress());
+                d.setTargetMiningTimeMs(p.getTargetMiningTimeMs());
+                d.setAsertHalfLifeBlocks(p.getAsertHalfLifeBlocks());
+                d.setMinDifficulty(p.getMinDifficulty());
+                d.setMinTxBaseFee(p.getMinTxBaseFee());
+                d.setMinTxByteFee(p.getMinTxByteFee());
+                yield d;
+            }
+            case TxBipTokenBurnPayload p -> {
+                var d = new TxPayloadDtoV1.TokenBurn();
+                d.setTokenAddress(p.getTokenAddress());
+                d.setSender(p.getSender());
+                d.setAmount(p.getAmount());
+                yield d;
+            }
+            case TxBipTokenCreatePayload p -> {
+                var d = new TxPayloadDtoV1.TokenCreate();
+                d.setName(p.getName());
+                d.setSmallestUnitName(p.getSmallestUnitName());
+                d.setNumberOfDecimals(p.getNumberOfDecimals());
+                d.setWebsiteUrl(p.getWebsiteUrl());
+                d.setLogoUrl(p.getLogoUrl());
+                d.setMaxSupply(p.getMaxSupply());
+                d.setUserBurnable(p.isUserBurnable());
+                yield d;
+            }
+            case TxBipTokenMintPayload p -> {
+                var d = new TxPayloadDtoV1.TokenMint();
+                d.setTokenAddress(p.getTokenAddress());
+                d.setRecipient(p.getRecipient());
+                d.setAmount(p.getAmount());
+                yield d;
+            }
+            case TxBipTokenUpdatePayload p -> {
+                var d = new TxPayloadDtoV1.TokenUpdate();
+                d.setTokenAddress(p.getTokenAddress());
+                d.setName(p.getName());
+                d.setSmallestUnitName(p.getSmallestUnitName());
+                d.setWebsiteUrl(p.getWebsiteUrl());
+                d.setLogoUrl(p.getLogoUrl());
+                yield d;
+            }
+            case TxBipVotePayload p -> {
+                var d = new TxPayloadDtoV1.Vote();
+                d.setType(p.getType());
+                yield d;
+            }
+            default -> throw new IllegalArgumentException("Unknown payload type: " + payload.getClass());
+        };
+
+        return dto;
+    }
 }

@@ -30,6 +30,7 @@ import org.springframework.stereotype.Component;
 
 import global.goldenera.node.explorer.api.v1.memtransfer.dtos.MemTransferDtoV1;
 import global.goldenera.node.explorer.api.v1.memtransfer.dtos.MemTransferDtoV1_Page;
+import global.goldenera.node.explorer.api.v1.tx.mappers.TxMapper;
 import global.goldenera.node.explorer.entities.ExMemTransfer;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -40,6 +41,8 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class MemTransferMapper {
+
+	TxMapper txMapper;
 
 	public MemTransferDtoV1 map(
 			@NonNull ExMemTransfer in) {
@@ -62,7 +65,7 @@ public class MemTransferMapper {
 				in.getReferenceHash(),
 				in.getMessage(),
 				in.getPayloadType(),
-				in.getPayload());
+				txMapper.mapPayload(in.getPayload()));
 	}
 
 	public List<MemTransferDtoV1> map(@NonNull List<ExMemTransfer> in) {

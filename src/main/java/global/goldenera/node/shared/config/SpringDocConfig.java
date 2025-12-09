@@ -27,23 +27,14 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.Iterator;
 
 import org.springdoc.core.models.GroupedOpenApi;
 import org.springdoc.core.utils.SpringDocUtils;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import com.fasterxml.jackson.databind.JavaType;
-
-import io.swagger.v3.core.converter.AnnotatedType;
-import io.swagger.v3.core.converter.ModelConverter;
-import io.swagger.v3.core.converter.ModelConverterContext;
-import io.swagger.v3.core.util.Json;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
-import io.swagger.v3.oas.models.media.IntegerSchema;
-import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import lombok.AllArgsConstructor;
@@ -115,60 +106,5 @@ public class SpringDocConfig {
 					op.addSecurityItem(new SecurityRequirement().addList(BASIC_AUTH_SCHEME));
 					return op;
 				}).build();
-	}
-
-	// --- ENUM DOC GENERATOR ---
-	@Bean
-	public ModelConverter enumSchemaConverter() {
-		return new ModelConverter() {
-			@Override
-			public Schema resolve(AnnotatedType type, ModelConverterContext context, Iterator<ModelConverter> chain) {
-				JavaType javaType = Json.mapper().constructType(type.getType());
-				if (javaType != null && javaType.isEnumType()) {
-					Class<?> cls = javaType.getRawClass();
-					if (GlobalTypeRegistry.CODE_ENUMS.contains(cls)) {
-						return createEnumSchema(cls);
-					}
-				}
-				if (chain.hasNext())
-					return chain.next().resolve(type, context, chain);
-				return null;
-			}
-		};
-	}
-
-	private Schema createEnumSchema(Class<?> cls) {
-		IntegerSchema schema = new IntegerSchema();
-		Object[] constants = cls.getEnumConstants();
-		StringBuilder description = new StringBuilder();
-		description.append("<b>Enum Values:</b><br>");
-		description.append("<table border=\"1\" style=\"border-collapse: collapse;\">");
-		description.append(
-				"<thead><tr><th style=\"padding: 4px;\">Code</th><th style=\"padding: 4px;\">Name</th></tr></thead>");
-		description.append("<tbody>");
-
-		try {
-			for (Object obj : constants) {
-				int code = (int) cls.getMethod("getCode").invoke(obj);
-				String name = ((Enum<?>) obj).name();
-
-				description.append(String.format(
-						"<tr><td style=\"padding: 4px;\"><code>%d</code></td><td style=\"padding: 4px;\">%s</td></tr>",
-						code, name));
-			}
-		} catch (Exception e) {
-		}
-
-		description.append("</tbody></table>");
-
-		schema.setDescription(description.toString());
-
-		try {
-			int firstCode = (int) cls.getMethod("getCode").invoke(constants[0]);
-			schema.setExample(firstCode);
-		} catch (Exception e) {
-		}
-
-		return schema;
 	}
 }

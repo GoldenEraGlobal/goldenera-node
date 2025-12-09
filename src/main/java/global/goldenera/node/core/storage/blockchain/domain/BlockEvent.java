@@ -41,6 +41,7 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.node.core.enums.BlockEventType;
 
 /**
  * Represents an "invisible" state change event that occurred in a block.

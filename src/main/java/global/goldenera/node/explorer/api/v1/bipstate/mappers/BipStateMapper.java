@@ -33,6 +33,7 @@ import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateMetadataDtoV1;
+import global.goldenera.node.explorer.api.v1.tx.mappers.TxMapper;
 import global.goldenera.node.explorer.entities.ExBipState;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -43,6 +44,8 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class BipStateMapper {
+
+    TxMapper txMapper;
 
     public BipStateDtoV1 map(@NonNull ExBipState bipState) {
         BipStatus status = bipState.getStatus();
@@ -89,6 +92,6 @@ public class BipStateMapper {
                 bipState.getMetadata().getVersion(),
                 bipState.getMetadata().getTxVersion(),
                 bipState.getMetadata().getDerivedTokenAddress(),
-                bipState.getMetadata().getTxPayload());
+                txMapper.mapPayload(bipState.getMetadata().getTxPayload()));
     }
 }
