@@ -291,7 +291,10 @@ public sealed interface BlockEvent {
         }
     }
 
-    record BipStateChange(
+    /**
+     * New BIP was created/submitted.
+     */
+    record BipStateCreated(
             Hash bipHash,
             BipStatus status,
             boolean isActionExecuted,
@@ -303,7 +306,26 @@ public sealed interface BlockEvent {
 
         @Override
         public BlockEventType type() {
-            return BlockEventType.BIP_STATE_CHANGE;
+            return BlockEventType.BIP_STATE_CREATED;
+        }
+    }
+
+    /**
+     * BIP state was updated via vote or time-based status change.
+     */
+    record BipStateUpdated(
+            Hash bipHash,
+            BipStatus status,
+            boolean isActionExecuted,
+            LinkedHashSet<Address> approvers,
+            LinkedHashSet<Address> disapprovers,
+            Hash updatedByTxHash,
+            long updatedAtBlockHeight,
+            Instant updatedAtTimestamp) implements BlockEvent {
+
+        @Override
+        public BlockEventType type() {
+            return BlockEventType.BIP_STATE_UPDATED;
         }
     }
 }

@@ -29,7 +29,7 @@ import java.util.Map;
 
 import global.goldenera.node.core.enums.BlockEventType;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
-import global.goldenera.node.core.storage.blockchain.serialization.events.BipStateChangeCodec;
+import global.goldenera.node.core.storage.blockchain.serialization.events.BipStateCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockEventCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockRewardCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.FeesCollectedCodec;
@@ -75,7 +75,8 @@ public class BlockEventEncoder {
 		codecs.put(BlockEventType.ADDRESS_ALIAS_REMOVED,
 				new GenericPayloadEventCodec<>(BlockEvent.AddressAliasRemoved::new,
 						BlockEvent.AddressAliasRemoved::payload, BlockEvent.AddressAliasRemoved::txVersion));
-		codecs.put(BlockEventType.BIP_STATE_CHANGE, BipStateChangeCodec.INSTANCE);
+		codecs.put(BlockEventType.BIP_STATE_CREATED, BipStateCodec.CREATED_INSTANCE);
+		codecs.put(BlockEventType.BIP_STATE_UPDATED, BipStateCodec.UPDATED_INSTANCE);
 	}
 
 	/**

@@ -47,7 +47,8 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAl
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAliasRemoved;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityAdded;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityRemoved;
-import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateChange;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateCreated;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.FeesCollected;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsChanged;
@@ -143,7 +144,17 @@ public class BlockEventMapper {
                                         e.txVersion(),
                                         (TxPayloadDtoV1.AddressAliasRemove) txMapper.mapPayload(e.payload()));
 
-                        case BipStateChange e -> new BlockEventDtoV1.BipStateChangeDto(
+                        case BipStateCreated e -> new BlockEventDtoV1.BipStateCreatedDto(
+                                        e.bipHash(),
+                                        e.status(),
+                                        e.isActionExecuted(),
+                                        e.approvers(),
+                                        e.disapprovers(),
+                                        e.updatedByTxHash(),
+                                        e.updatedAtBlockHeight(),
+                                        e.updatedAtTimestamp());
+
+                        case BipStateUpdated e -> new BlockEventDtoV1.BipStateUpdatedDto(
                                         e.bipHash(),
                                         e.status(),
                                         e.isActionExecuted(),

@@ -127,10 +127,16 @@ public enum BlockEventType {
     ADDRESS_ALIAS_REMOVED(31),
 
     /**
-     * BIP state was changed via vote.
+     * New BIP was created/submitted.
      * Affects: bip status
      */
-    BIP_STATE_CHANGE(40);
+    BIP_STATE_CREATED(40),
+
+    /**
+     * BIP state was updated via vote or time-based status change.
+     * Affects: bip status
+     */
+    BIP_STATE_UPDATED(41);
 
     private final int code;
 

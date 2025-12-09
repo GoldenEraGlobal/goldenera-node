@@ -51,7 +51,8 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAl
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AddressAliasRemoved;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityAdded;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.AuthorityRemoved;
-import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateChange;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateCreated;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.FeesCollected;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsChanged;
@@ -122,15 +123,29 @@ public class BlockEventExtractor {
                         });
                 }
 
-                // 4. BIP execution events
-                if (bipDiffs != null) {
+                // 4. BIP state events
+                if (bipDiffs != null && !bipDiffs.isEmpty()) {
                         bipDiffs.forEach((bipHash, diff) -> {
                                 BipState oldState = diff.getOldValue();
                                 BipState newState = diff.getNewValue();
 
-                                // Only extract event if status changed
-                                if (oldState.getStatus() != newState.getStatus()) {
-                                        events.add(new BipStateChange(
+                                // Detect if this is a new BIP creation:
+                                // A fresh/new BIP has updatedAtBlockHeight < 0 in oldState
+                                boolean isNewBip = !oldState.exists();
+
+                                if (isNewBip) {
+                                        events.add(new BipStateCreated(
+                                                        bipHash,
+                                                        newState.getStatus(),
+                                                        newState.isActionExecuted(),
+                                                        newState.getApprovers(),
+                                                        newState.getDisapprovers(),
+                                                        newState.getUpdatedByTxHash(),
+                                                        newState.getUpdatedAtBlockHeight(),
+                                                        newState.getUpdatedAtTimestamp()));
+                                } else {
+                                        // BIP state was updated - emit event on every update
+                                        events.add(new BipStateUpdated(
                                                         bipHash,
                                                         newState.getStatus(),
                                                         newState.isActionExecuted(),
@@ -141,7 +156,7 @@ public class BlockEventExtractor {
                                                         newState.getUpdatedAtTimestamp()));
                                 }
 
-                                // Only extract event if action was just executed in this block
+                                // Extract BIP action execution event if action was just executed in this block
                                 if (!oldState.isActionExecuted() && newState.isActionExecuted()) {
                                         TxPayload payload = newState.getMetadata().getTxPayload();
                                         BlockEvent event = createBipExecutionEvent(bipHash, payload,

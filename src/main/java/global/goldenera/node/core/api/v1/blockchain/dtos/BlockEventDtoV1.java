@@ -66,7 +66,8 @@ import lombok.experimental.FieldDefaults;
         @JsonSubTypes.Type(value = BlockEventDtoV1.NetworkParamsChangedDto.class, name = "NETWORK_PARAMS_CHANGED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasAddedDto.class, name = "ADDRESS_ALIAS_ADDED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasRemovedDto.class, name = "ADDRESS_ALIAS_REMOVED"),
-        @JsonSubTypes.Type(value = BlockEventDtoV1.BipStateChangeDto.class, name = "BIP_STATE_CHANGE")
+        @JsonSubTypes.Type(value = BlockEventDtoV1.BipStateCreatedDto.class, name = "BIP_STATE_CREATED"),
+        @JsonSubTypes.Type(value = BlockEventDtoV1.BipStateUpdatedDto.class, name = "BIP_STATE_UPDATED")
 })
 @Schema(description = "Block event", discriminatorProperty = "type", discriminatorMapping = {
         @DiscriminatorMapping(value = "BLOCK_REWARD", schema = BlockEventDtoV1.BlockRewardDto.class),
@@ -81,7 +82,8 @@ import lombok.experimental.FieldDefaults;
         @DiscriminatorMapping(value = "NETWORK_PARAMS_CHANGED", schema = BlockEventDtoV1.NetworkParamsChangedDto.class),
         @DiscriminatorMapping(value = "ADDRESS_ALIAS_ADDED", schema = BlockEventDtoV1.AddressAliasAddedDto.class),
         @DiscriminatorMapping(value = "ADDRESS_ALIAS_REMOVED", schema = BlockEventDtoV1.AddressAliasRemovedDto.class),
-        @DiscriminatorMapping(value = "BIP_STATE_CHANGE", schema = BlockEventDtoV1.BipStateChangeDto.class)
+        @DiscriminatorMapping(value = "BIP_STATE_CREATED", schema = BlockEventDtoV1.BipStateCreatedDto.class),
+        @DiscriminatorMapping(value = "BIP_STATE_UPDATED", schema = BlockEventDtoV1.BipStateUpdatedDto.class)
 })
 public abstract sealed class BlockEventDtoV1 permits
         BlockEventDtoV1.BlockRewardDto,
@@ -96,7 +98,8 @@ public abstract sealed class BlockEventDtoV1 permits
         BlockEventDtoV1.NetworkParamsChangedDto,
         BlockEventDtoV1.AddressAliasAddedDto,
         BlockEventDtoV1.AddressAliasRemovedDto,
-        BlockEventDtoV1.BipStateChangeDto {
+        BlockEventDtoV1.BipStateCreatedDto,
+        BlockEventDtoV1.BipStateUpdatedDto {
 
     @Schema(description = "Type discriminator", requiredMode = Schema.RequiredMode.REQUIRED, type = "string", example = "BLOCK_REWARD")
     public abstract BlockEventType getType();
@@ -362,7 +365,37 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    public static final class BipStateChangeDto extends BlockEventDtoV1 {
+    public static final class BipStateCreatedDto extends BlockEventDtoV1 {
+        @Schema(description = "BIP hash")
+        Hash bipHash;
+        @Schema(description = "Initial status")
+        BipStatus status;
+        @Schema(description = "Is action executed")
+        boolean actionExecuted;
+        @Schema(description = "Approvers")
+        LinkedHashSet<Address> approvers;
+        @Schema(description = "Disapprovers")
+        LinkedHashSet<Address> disapprovers;
+        @Schema(description = "Hash of the transaction that created the BIP")
+        Hash updatedByTxHash;
+        @Schema(description = "Block height of the creation")
+        long updatedAtBlockHeight;
+        @Schema(description = "Timestamp of the creation")
+        Instant updatedAtTimestamp;
+
+        @Override
+        @JsonProperty("type")
+        public BlockEventType getType() {
+            return BlockEventType.BIP_STATE_CREATED;
+        }
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @FieldDefaults(level = AccessLevel.PRIVATE)
+    public static final class BipStateUpdatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash")
         Hash bipHash;
         @Schema(description = "New status")
@@ -383,7 +416,7 @@ public abstract sealed class BlockEventDtoV1 permits
         @Override
         @JsonProperty("type")
         public BlockEventType getType() {
-            return BlockEventType.BIP_STATE_CHANGE;
+            return BlockEventType.BIP_STATE_UPDATED;
         }
     }
 }
