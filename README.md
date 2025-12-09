@@ -139,7 +139,7 @@ SPRING_PROFILES_ACTIVE="prod"
 LISTEN_PORT=8080
 
 # Explorer enable (if false, explorer will not sync and will not be available)
-EXPLORER_ENABLE=true
+EXPLORER_ENABLE=false
 
 # Node
 NODE_IDENTITY_FILE="./node_data/.node_identity"

@@ -120,7 +120,7 @@ public class ExIndexerTxToTransferMapper {
 			List<ExTransfer> transfers, int txIndex) {
 
 		// A. VALUE TRANSFER
-		if (tx.getType() == TxType.TRANSFER && tx.getAmount() != null && !tx.getAmount().isZero()) {
+		if (tx.getType() == TxType.TRANSFER) {
 			Address tokenAddr = tx.getTokenAddress() != null ? tx.getTokenAddress() : NATIVE_TOKEN_ADDRESS;
 			TransferType type = TransferType.resolveFromTx(tx);
 

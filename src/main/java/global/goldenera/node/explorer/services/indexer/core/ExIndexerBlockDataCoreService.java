@@ -142,9 +142,9 @@ public class ExIndexerBlockDataCoreService {
 
 		String sql = """
 				    INSERT INTO explorer_transfer (
-				        block_height, block_hash, timestamp, tx_hash, type,
-				        from_address, to_address, token_address, amount
-				    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				        block_height, block_hash, timestamp, tx_hash, tx_index, type,
+				        from_address, to_address, token_address, amount, fee, nonce, message
+				    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""";
 
 		jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
@@ -159,15 +159,27 @@ public class ExIndexerBlockDataCoreService {
 				} else {
 					ps.setNull(4, Types.VARBINARY);
 				}
-				ps.setInt(5, t.getType().getCode());
-				if (t.getFrom() != null) {
-					ps.setBytes(6, t.getFrom().toArray());
+				if (t.getTxIndex() != null) {
+					ps.setInt(5, t.getTxIndex());
 				} else {
-					ps.setNull(6, Types.VARBINARY);
+					ps.setNull(5, Types.INTEGER);
 				}
-				ps.setBytes(7, t.getTo() != null ? t.getTo().toArray() : null);
-				ps.setBytes(8, t.getTokenAddress() != null ? t.getTokenAddress().toArray() : null);
-				ps.setBigDecimal(9, t.getAmount() != null ? new BigDecimal(t.getAmount().toBigInteger()) : null);
+				ps.setInt(6, t.getType().getCode());
+				if (t.getFrom() != null) {
+					ps.setBytes(7, t.getFrom().toArray());
+				} else {
+					ps.setNull(7, Types.VARBINARY);
+				}
+				ps.setBytes(8, t.getTo() != null ? t.getTo().toArray() : null);
+				ps.setBytes(9, t.getTokenAddress() != null ? t.getTokenAddress().toArray() : null);
+				ps.setBigDecimal(10, t.getAmount() != null ? new BigDecimal(t.getAmount().toBigInteger()) : null);
+				ps.setBigDecimal(11, t.getFee() != null ? new BigDecimal(t.getFee().toBigInteger()) : null);
+				if (t.getNonce() != null) {
+					ps.setLong(12, t.getNonce());
+				} else {
+					ps.setNull(12, Types.BIGINT);
+				}
+				ps.setBytes(13, t.getMessage() != null ? t.getMessage().toArray() : null);
 			}
 
 			@Override
