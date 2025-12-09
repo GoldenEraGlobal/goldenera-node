@@ -96,20 +96,13 @@ public class BlockSyncManagerService {
 	 * Uses base maxBlockSizeInBytes (not height-dependent overrides) since we need
 	 * a conservative estimate that works for any block height during sync.
 	 * Leaves ~15% headroom for RLP encoding overhead and envelope framing.
-	 * 
-	 * IMPORTANT: Capped at 5 for backward compatibility with old nodes that have
-	 * hardcoded limit of 5 blocks per response. Can be increased once all nodes
-	 * are updated.
 	 */
-	static final int LEGACY_MAX_BODIES_PER_REQUEST = 5;
-
 	static int calculateBodyBatchSize() {
 		long maxFrameSize = P2PChannelInitializer.MAX_FRAME_SIZE;
 		long maxBlockSize = Constants.getSettings().maxBlockSizeInBytes();
 		// Reserve 15% for overhead, minimum 1 block per batch
 		int batchSize = (int) ((maxFrameSize * 0.85) / maxBlockSize);
-		// Cap at legacy limit for backward compatibility
-		return Math.min(LEGACY_MAX_BODIES_PER_REQUEST, Math.max(1, batchSize));
+		return Math.max(1, batchSize);
 	}
 
 	/**
