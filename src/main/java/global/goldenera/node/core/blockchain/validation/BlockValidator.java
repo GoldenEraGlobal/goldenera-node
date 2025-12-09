@@ -39,6 +39,7 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
@@ -85,6 +86,10 @@ public class BlockValidator {
 			// 2. Checkpoint (Fast fail)
 			if (!checkpointService.verifyCheckpoint(header.getHeight(), header.getHash())) {
 				throw new GEValidationException("Checkpoint mismatch for block " + header.getHeight());
+			}
+
+			if (header.getCoinbase().equals(Address.ZERO)) {
+				throw new GEValidationException("Consensus violation: Miner coinbase cannot be the zero address.");
 			}
 
 			// 3. RandomX PoW Calculation
