@@ -108,6 +108,9 @@ public abstract sealed class BlockEventDtoV1 permits
         BlockEventDtoV1.AddressAliasRemovedDto,
         BlockEventDtoV1.BipStateChangeDto {
 
+    @Schema(description = "Event type", requiredMode = Schema.RequiredMode.REQUIRED)
+    public abstract String getType();
+
     // ============================
     // BLOCK LEVEL EVENTS
     // ============================
@@ -117,7 +120,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Miner received block reward from reward pool")
+    @Schema(name = "BlockRewardDto", description = "Miner received block reward from reward pool", requiredProperties = "type")
     public static final class BlockRewardDto extends BlockEventDtoV1 {
         @Schema(description = "Miner address who received the reward")
         Address minerAddress;
@@ -125,6 +128,11 @@ public abstract sealed class BlockEventDtoV1 permits
         Address rewardPoolAddress;
         @Schema(description = "Reward amount")
         Wei amount;
+
+        @Override
+        public String getType() {
+            return "BLOCK_REWARD";
+        }
     }
 
     @Getter
@@ -132,12 +140,17 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Miner collected transaction fees")
+    @Schema(name = "FeesCollectedDto", description = "Miner collected transaction fees", requiredProperties = "type")
     public static final class FeesCollectedDto extends BlockEventDtoV1 {
         @Schema(description = "Miner address who collected the fees")
         Address minerAddress;
         @Schema(description = "Total fees collected")
         Wei amount;
+
+        @Override
+        public String getType() {
+            return "FEES_COLLECTED";
+        }
     }
 
     // ============================
@@ -149,7 +162,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "New token was created via approved BIP")
+    @Schema(name = "TokenCreatedDto", description = "New token was created via approved BIP", requiredProperties = "type")
     public static final class TokenCreatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that created this token")
         Hash bipHash;
@@ -159,6 +172,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.TokenCreate payload;
+
+        @Override
+        public String getType() {
+            return "TOKEN_CREATED";
+        }
     }
 
     @Getter
@@ -166,7 +184,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Token metadata was updated via approved BIP")
+    @Schema(name = "TokenUpdatedDto", description = "Token metadata was updated via approved BIP", requiredProperties = "type")
     public static final class TokenUpdatedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that updated this token")
         Hash bipHash;
@@ -174,6 +192,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.TokenUpdate payload;
+
+        @Override
+        public String getType() {
+            return "TOKEN_UPDATED";
+        }
     }
 
     @Getter
@@ -181,7 +204,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Tokens were minted to an address via approved BIP")
+    @Schema(name = "TokenMintedDto", description = "Tokens were minted to an address via approved BIP", requiredProperties = "type")
     public static final class TokenMintedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that minted tokens")
         Hash bipHash;
@@ -189,6 +212,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.TokenMint payload;
+
+        @Override
+        public String getType() {
+            return "TOKEN_MINTED";
+        }
     }
 
     @Getter
@@ -196,7 +224,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Tokens were burned via approved BIP")
+    @Schema(name = "TokenBurnedDto", description = "Tokens were burned via approved BIP", requiredProperties = "type")
     public static final class TokenBurnedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that burned tokens")
         Hash bipHash;
@@ -206,6 +234,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxPayloadDtoV1.TokenBurn payload;
         @Schema(description = "Actual amount burned")
         Wei actualBurnedAmount;
+
+        @Override
+        public String getType() {
+            return "TOKEN_BURNED";
+        }
     }
 
     @Getter
@@ -213,12 +246,17 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Token total supply was updated")
+    @Schema(name = "TokenSupplyUpdatedDto", description = "Token total supply was updated", requiredProperties = "type")
     public static final class TokenSupplyUpdatedDto extends BlockEventDtoV1 {
         @Schema(description = "Token address")
         Address tokenAddress;
         @Schema(description = "New total supply after this block")
         Wei newTotalSupply;
+
+        @Override
+        public String getType() {
+            return "TOKEN_SUPPLY_UPDATED";
+        }
     }
 
     // ============================
@@ -230,7 +268,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Authority was added to governance via approved BIP")
+    @Schema(name = "AuthorityAddedDto", description = "Authority was added to governance via approved BIP", requiredProperties = "type")
     public static final class AuthorityAddedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that added the authority")
         Hash bipHash;
@@ -238,6 +276,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.AuthorityAdd payload;
+
+        @Override
+        public String getType() {
+            return "AUTHORITY_ADDED";
+        }
     }
 
     @Getter
@@ -245,7 +288,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Authority was removed from governance via approved BIP")
+    @Schema(name = "AuthorityRemovedDto", description = "Authority was removed from governance via approved BIP", requiredProperties = "type")
     public static final class AuthorityRemovedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that removed the authority")
         Hash bipHash;
@@ -253,6 +296,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.AuthorityRemove payload;
+
+        @Override
+        public String getType() {
+            return "AUTHORITY_REMOVED";
+        }
     }
 
     @Getter
@@ -260,7 +308,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Network parameters were changed via approved BIP")
+    @Schema(name = "NetworkParamsChangedDto", description = "Network parameters were changed via approved BIP", requiredProperties = "type")
     public static final class NetworkParamsChangedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that changed params")
         Hash bipHash;
@@ -268,6 +316,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.NetworkParamsSet payload;
+
+        @Override
+        public String getType() {
+            return "NETWORK_PARAMS_CHANGED";
+        }
     }
 
     // ============================
@@ -279,7 +332,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Address alias was added via approved BIP")
+    @Schema(name = "AddressAliasAddedDto", description = "Address alias was added via approved BIP", requiredProperties = "type")
     public static final class AddressAliasAddedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that added the alias")
         Hash bipHash;
@@ -287,6 +340,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.AddressAliasAdd payload;
+
+        @Override
+        public String getType() {
+            return "ADDRESS_ALIAS_ADDED";
+        }
     }
 
     @Getter
@@ -294,7 +352,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "Address alias was removed via approved BIP")
+    @Schema(name = "AddressAliasRemovedDto", description = "Address alias was removed via approved BIP", requiredProperties = "type")
     public static final class AddressAliasRemovedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that removed the alias")
         Hash bipHash;
@@ -302,6 +360,11 @@ public abstract sealed class BlockEventDtoV1 permits
         TxVersion txVersion;
         @Schema(description = "Payload details")
         TxPayloadDtoV1.AddressAliasRemove payload;
+
+        @Override
+        public String getType() {
+            return "ADDRESS_ALIAS_REMOVED";
+        }
     }
 
     @Getter
@@ -309,7 +372,7 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
-    @Schema(description = "BIP state/status changed")
+    @Schema(name = "BipStateChangeDto", description = "BIP state/status changed", requiredProperties = "type")
     public static final class BipStateChangeDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash")
         Hash bipHash;
@@ -327,5 +390,10 @@ public abstract sealed class BlockEventDtoV1 permits
         long updatedAtBlockHeight;
         @Schema(description = "Timestamp of the update")
         Instant updatedAtTimestamp;
+
+        @Override
+        public String getType() {
+            return "BIP_STATE_CHANGE";
+        }
     }
 }

@@ -63,8 +63,8 @@ public class BlockchainBlockHeaderMapper {
                 in.getBlockSize(),
                 in.getTxCount());
 
-        List<BlockEventDtoV1> eventDtos = null;
-        if (withEvents && in.getEvents() != null && !in.getEvents().isEmpty()) {
+        List<BlockEventDtoV1> eventDtos = new ArrayList<>();
+        if (withEvents) {
             eventDtos = blockEventMapper.map(in.getEvents());
         }
 

@@ -27,8 +27,6 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-
 import global.goldenera.cryptoj.datatypes.Hash;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -45,7 +43,6 @@ import lombok.experimental.FieldDefaults;
 @NoArgsConstructor
 @ToString
 @FieldDefaults(level = PRIVATE)
-@JsonInclude(JsonInclude.Include.NON_NULL)
 public class BlockchainBlockHeaderDtoV1 {
 
     @Schema(description = "Block header data")

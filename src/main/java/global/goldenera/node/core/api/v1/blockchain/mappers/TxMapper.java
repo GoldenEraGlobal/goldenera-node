@@ -161,7 +161,6 @@ public class TxMapper {
             default -> throw new IllegalArgumentException("Unknown payload type: " + payload.getClass());
         };
 
-        dto.setPayloadType(payload.getPayloadType());
         return dto;
     }
 }
