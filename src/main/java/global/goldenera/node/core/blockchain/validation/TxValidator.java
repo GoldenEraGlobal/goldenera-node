@@ -40,6 +40,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.Constants;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.utils.ValidatorUtil;
@@ -137,6 +138,9 @@ public class TxValidator {
 					if (p.getRecipient() == null) {
 						throw new GEValidationException("Mint recipient cannot be null");
 					}
+					if (p.getRecipient().equals(Address.ZERO)) {
+						throw new GEValidationException("Mint recipient cannot be the zero address");
+					}
 				}
 				break;
 			case BIP_TOKEN_BURN:
@@ -148,12 +152,18 @@ public class TxValidator {
 					if (p.getSender() == null) {
 						throw new GEValidationException("Burn target (sender) cannot be null");
 					}
+					if (p.getSender().equals(Address.ZERO)) {
+						throw new GEValidationException("Burn target (sender) cannot be the zero address");
+					}
 				}
 				break;
 			case BIP_AUTHORITY_ADD:
 				if (tx.getPayload() instanceof TxBipAuthorityAddPayload p) {
 					if (p.getAddress() == null) {
 						throw new GEValidationException("Authority address cannot be null");
+					}
+					if (p.getAddress().equals(Address.ZERO)) {
+						throw new GEValidationException("Authority address cannot be the zero address");
 					}
 				}
 				break;
@@ -162,6 +172,9 @@ public class TxValidator {
 					if (p.getAddress() == null) {
 						throw new GEValidationException("Authority address cannot be null");
 					}
+					if (p.getAddress().equals(Address.ZERO)) {
+						throw new GEValidationException("Authority address cannot be the zero address");
+					}
 				}
 				break;
 			case BIP_ADDRESS_ALIAS_ADD:
@@ -169,6 +182,9 @@ public class TxValidator {
 					validateAddressAlias(p.getAlias());
 					if (p.getAddress() == null) {
 						throw new GEValidationException("Alias address cannot be null");
+					}
+					if (p.getAddress().equals(Address.ZERO)) {
+						throw new GEValidationException("Alias address cannot be the zero address");
 					}
 				}
 				break;
