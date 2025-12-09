@@ -124,6 +124,13 @@ public class BlockSyncManagerService {
 		return Math.min(8, Math.max(3, depth));
 	}
 
+	/**
+	 * Number of StoredBlocks to accumulate before persisting to disk.
+	 * This limits RAM usage while allowing efficient batch writes.
+	 * At 5MB per block max, 250 blocks = ~1.25GB RAM worst case.
+	 */
+	static final int PERSIST_BATCH_SIZE = 250;
+
 	final MeterRegistry registry;
 	final ReentrantLock masterChainLock;
 	final Executor coreTaskExecutor;
@@ -271,33 +278,17 @@ public class BlockSyncManagerService {
 			long validateTime = System.currentTimeMillis() - validateStart;
 			log.info("Validated {} headers in {}ms", headersToSync.size(), validateTime);
 
+			// Download bodies and persist in batches to limit RAM usage
+			miningService.pauseMining();
 			long bodyStart = System.currentTimeMillis();
-			List<StoredBlock> newChainBlocks = downloadAndPersistBodies(peer, headersToSync);
+			int totalBlocksProcessed = downloadAndPersistBodiesInBatches(peer, headersToSync);
 			long bodyTime = System.currentTimeMillis() - bodyStart;
 
-			log.info("Downloaded {} block bodies in {}ms", newChainBlocks.size(), bodyTime);
-
-			if (!newChainBlocks.isEmpty()) {
-				miningService.pauseMining();
-				StoredBlock commonAncestor = chainQueryService
-						.getStoredBlockByHashOrThrow(headersToSync.get(0).getPreviousHash());
-				masterChainLock.lock();
-				try {
-					long reorgStart = System.currentTimeMillis();
-					blockReorgService.executeAtomicReorgSwap(commonAncestor, newChainBlocks);
-					long reorgTime = System.currentTimeMillis() - reorgStart;
-
-					log.info(
-							"Sync batch completed, {} blocks connected in {}ms (total batch: {}ms), new tip at height {}",
-							newChainBlocks.size(), reorgTime, headerTime + bodyTime + reorgTime,
-							newChainBlocks.get(newChainBlocks.size() - 1).getBlock().getHeight());
-				} finally {
-					masterChainLock.unlock();
-				}
-			}
+			log.info("Sync completed: {} blocks downloaded and persisted in {}ms (headers: {}ms, validation: {}ms)",
+					totalBlocksProcessed, bodyTime, headerTime, validateTime);
 
 			peerReputationService.recordSuccess(peer.getIdentity());
-			registry.counter("blockchain.sync.blocks_downloaded").increment(newChainBlocks.size());
+			registry.counter("blockchain.sync.blocks_downloaded").increment(totalBlocksProcessed);
 			return true;
 		} catch (Exception e) {
 			String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -307,6 +298,143 @@ public class BlockSyncManagerService {
 			return false;
 		} finally {
 			sample.stop(registry.timer("blockchain.sync.batch_time"));
+		}
+	}
+
+	/**
+	 * Downloads block bodies and persists them in batches of PERSIST_BATCH_SIZE.
+	 * This limits RAM usage while maintaining efficient network and disk I/O.
+	 * 
+	 * @return Total number of blocks processed
+	 */
+	private int downloadAndPersistBodiesInBatches(RemotePeer peer, List<BlockHeader> headers) throws Exception {
+		if (headers.isEmpty())
+			return 0;
+
+		int totalProcessed = 0;
+		List<StoredBlock> currentBatch = new ArrayList<>(PERSIST_BATCH_SIZE);
+
+		Hash firstParentHash = headers.get(0).getPreviousHash();
+		StoredBlock commonAncestor = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash);
+		BigInteger currentCumulativeDifficulty = commonAncestor.getCumulativeDifficulty();
+
+		// Pipeline configuration
+		final int bodyBatchSize = calculateBodyBatchSize();
+		final int pipelineDepth = calculatePipelineDepth(bodyBatchSize);
+		List<PendingBodyRequest> pendingRequests = new ArrayList<>();
+		int nextBatchIndex = 0;
+
+		while (nextBatchIndex < headers.size() || !pendingRequests.isEmpty()) {
+			// Send new requests up to pipeline depth
+			while (pendingRequests.size() < pipelineDepth && nextBatchIndex < headers.size()) {
+				int startIdx = nextBatchIndex;
+				int endIdx = Math.min(nextBatchIndex + bodyBatchSize, headers.size());
+				List<BlockHeader> batchHeaders = headers.subList(startIdx, endIdx);
+				List<Hash> hashes = batchHeaders.stream().map(BlockHeader::getHash).collect(Collectors.toList());
+
+				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
+				long reqId = peer.reserveRequestId();
+				pendingBodyRequests.put(reqId, future);
+				peer.sendGetBlockBodies(hashes, reqId);
+
+				pendingRequests.add(new PendingBodyRequest(reqId, batchHeaders, future, startIdx));
+				nextBatchIndex = endIdx;
+			}
+
+			if (pendingRequests.isEmpty())
+				break;
+
+			// Wait for the oldest request in the pipeline
+			PendingBodyRequest oldest = pendingRequests.remove(0);
+			try {
+				List<List<Tx>> bodies = oldest.future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+				if (bodies == null || bodies.isEmpty()) {
+					throw new GEValidationException("Empty body response from peer");
+				}
+
+				if (bodies.size() != oldest.batchHeaders.size()) {
+					throw new GEValidationException("Mismatch body count from peer: got " + bodies.size()
+							+ ", expected " + oldest.batchHeaders.size());
+				}
+
+				for (int j = 0; j < bodies.size(); j++) {
+					BlockHeader header = oldest.batchHeaders.get(j);
+					Long height = header.getHeight();
+					List<Tx> txs = bodies.get(j);
+
+					txs.parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
+
+					Hash calculatedRoot = TxRootUtil.txRootHash(txs);
+					if (!calculatedRoot.equals(header.getTxRootHash())) {
+						throw new GEValidationException("Invalid Merkle Root at height " + height);
+					}
+
+					currentCumulativeDifficulty = currentCumulativeDifficulty.add(header.getDifficulty());
+
+					Block block = BlockImpl.builder()
+							.header(header)
+							.txs(txs)
+							.build();
+
+					StoredBlock storedBlock = StoredBlock.builder()
+							.block(block)
+							.cumulativeDifficulty(currentCumulativeDifficulty)
+							.receivedAt(block.getHeader().getTimestamp())
+							.receivedFrom(peer.getIdentity())
+							.connectedSource(ConnectedSource.REORG)
+							.computeIndexes()
+							.build();
+
+					currentBatch.add(storedBlock);
+
+					// Persist batch when full
+					if (currentBatch.size() >= PERSIST_BATCH_SIZE) {
+						persistBatch(commonAncestor, currentBatch);
+						totalProcessed += currentBatch.size();
+						// Update ancestor for next batch
+						commonAncestor = currentBatch.get(currentBatch.size() - 1);
+						currentBatch.clear();
+					}
+				}
+
+			} catch (Exception e) {
+				pendingBodyRequests.remove(oldest.reqId);
+				for (PendingBodyRequest req : pendingRequests) {
+					pendingBodyRequests.remove(req.reqId);
+				}
+				throw e;
+			}
+		}
+
+		// Persist remaining blocks
+		if (!currentBatch.isEmpty()) {
+			persistBatch(commonAncestor, currentBatch);
+			totalProcessed += currentBatch.size();
+		}
+
+		return totalProcessed;
+	}
+
+	/**
+	 * Persists a batch of blocks atomically.
+	 */
+	private void persistBatch(StoredBlock commonAncestor, List<StoredBlock> blocks) throws Exception {
+		if (blocks.isEmpty())
+			return;
+
+		masterChainLock.lock();
+		try {
+			long start = System.currentTimeMillis();
+			blockReorgService.executeAtomicReorgSwap(commonAncestor, blocks);
+			long elapsed = System.currentTimeMillis() - start;
+			log.info("Persisted batch of {} blocks (heights {}-{}) in {}ms",
+					blocks.size(),
+					blocks.get(0).getHeight(),
+					blocks.get(blocks.size() - 1).getHeight(),
+					elapsed);
+		} finally {
+			masterChainLock.unlock();
 		}
 	}
 
@@ -404,110 +532,6 @@ public class BlockSyncManagerService {
 			contextMap.put(h.getHeight(), h.getHash()); // Now cached, O(1)
 			blockValidationService.validateHeader(h, contextMap);
 		});
-	}
-
-	private List<StoredBlock> downloadAndPersistBodies(RemotePeer peer, List<BlockHeader> headers) throws Exception {
-		List<StoredBlock> allDownloadedBlocks = new ArrayList<>();
-		if (headers.isEmpty())
-			return allDownloadedBlocks;
-
-		// Header hashes are already cached from validateBatch()
-
-		Hash firstParentHash = headers.get(0).getPreviousHash();
-		BigInteger currentCumulativeDifficulty = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash)
-				.getCumulativeDifficulty();
-
-		// Pipeline: Keep multiple requests in flight simultaneously for better
-		// throughput
-		final int bodyBatchSize = calculateBodyBatchSize();
-		final int pipelineDepth = calculatePipelineDepth(bodyBatchSize);
-		List<PendingBodyRequest> pendingRequests = new ArrayList<>();
-		int nextBatchIndex = 0;
-
-		while (nextBatchIndex < headers.size() || !pendingRequests.isEmpty()) {
-			// Send new requests up to pipeline depth
-			while (pendingRequests.size() < pipelineDepth && nextBatchIndex < headers.size()) {
-				int startIdx = nextBatchIndex;
-				int endIdx = Math.min(nextBatchIndex + bodyBatchSize, headers.size());
-				List<BlockHeader> batchHeaders = headers.subList(startIdx, endIdx);
-				// getHash() is now O(1) - cached from validateBatch()
-				List<Hash> hashes = batchHeaders.stream().map(BlockHeader::getHash).collect(Collectors.toList());
-
-				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
-				long reqId = peer.reserveRequestId();
-				pendingBodyRequests.put(reqId, future);
-				peer.sendGetBlockBodies(hashes, reqId);
-
-				pendingRequests.add(new PendingBodyRequest(reqId, batchHeaders, future, startIdx));
-				nextBatchIndex = endIdx;
-			}
-
-			if (pendingRequests.isEmpty())
-				break;
-
-			// Wait for the oldest request in the pipeline
-			PendingBodyRequest oldest = pendingRequests.remove(0);
-			try {
-				List<List<Tx>> bodies = oldest.future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-				if (bodies == null || bodies.isEmpty()) {
-					throw new GEValidationException("Empty body response from peer");
-				}
-
-				// With capped batch size, we should always get expected count.
-				// If peer returns fewer, it's an error - fail and retry with different peer
-				if (bodies.size() != oldest.batchHeaders.size()) {
-					throw new GEValidationException("Mismatch body count from peer: got " + bodies.size()
-							+ ", expected " + oldest.batchHeaders.size());
-				}
-
-				for (int j = 0; j < bodies.size(); j++) {
-					BlockHeader header = oldest.batchHeaders.get(j);
-					Long height = header.getHeight();
-					List<Tx> txs = bodies.get(j);
-
-					txs.parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
-
-					Hash calculatedRoot = TxRootUtil.txRootHash(txs);
-					if (!calculatedRoot.equals(header.getTxRootHash())) {
-						throw new GEValidationException("Invalid Merkle Root at height " + height);
-					}
-
-					currentCumulativeDifficulty = currentCumulativeDifficulty.add(header.getDifficulty());
-
-					Block block = BlockImpl.builder()
-							.header(header)
-							.txs(txs)
-							.build();
-
-					StoredBlock storedBlock = StoredBlock.builder()
-							.block(block)
-							.cumulativeDifficulty(currentCumulativeDifficulty)
-							.receivedAt(block.getHeader().getTimestamp())
-							.receivedFrom(peer.getIdentity())
-							.connectedSource(ConnectedSource.REORG)
-							.computeIndexes()
-							.build();
-
-					allDownloadedBlocks.add(storedBlock);
-				}
-
-			} catch (Exception e) {
-				pendingBodyRequests.remove(oldest.reqId);
-				// Cancel remaining requests
-				for (PendingBodyRequest req : pendingRequests) {
-					pendingBodyRequests.remove(req.reqId);
-				}
-				throw e;
-			}
-		}
-
-		// Blocks are kept in memory and returned to caller.
-		// They will be persisted atomically in executeAtomicReorgSwap() where state
-		// execution extracts events (block rewards, fees, BIP changes, etc.) that get
-		// included in the stored block. This ensures blocks are written only once with
-		// complete metadata.
-		return allDownloadedBlocks;
 	}
 
 	private record PendingBodyRequest(long reqId, List<BlockHeader> batchHeaders,
