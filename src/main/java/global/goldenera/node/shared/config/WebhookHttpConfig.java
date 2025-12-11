@@ -21,29 +21,39 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.config;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
 import lombok.AllArgsConstructor;
-import lombok.Getter;
 import lombok.experimental.FieldDefaults;
+import okhttp3.ConnectionPool;
+import okhttp3.Dispatcher;
+import okhttp3.OkHttpClient;
 
-@Getter
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+@Configuration
+@AllArgsConstructor
+public class WebhookHttpConfig {
 
-	int code;
+    @Bean("webhookOkHttpClient")
+    public OkHttpClient webhookOkHttpClient() {
+        Dispatcher dispatcher = new Dispatcher();
+        dispatcher.setMaxRequests(500);
+        dispatcher.setMaxRequestsPerHost(20);
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
+        return new OkHttpClient.Builder()
+                .dispatcher(dispatcher)
+                .connectTimeout(Duration.ofSeconds(3))
+                .writeTimeout(Duration.ofSeconds(3))
+                .readTimeout(Duration.ofSeconds(3))
+                .connectionPool(new ConnectionPool(50, 5, TimeUnit.MINUTES))
+                .build();
+    }
 }

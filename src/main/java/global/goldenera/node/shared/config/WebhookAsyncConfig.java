@@ -21,29 +21,25 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.config;
 
-import static lombok.AccessLevel.PRIVATE;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.experimental.FieldDefaults;
+@Configuration
+@EnableAsync
+public class WebhookAsyncConfig {
 
-@Getter
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+    public static final String CORE_WEBHOOK_SCHEDULER = "coreWebhookTaskScheduler";
 
-	int code;
-
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
+    @Bean(name = CORE_WEBHOOK_SCHEDULER)
+    public ThreadPoolTaskScheduler coreWebhookTaskScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(2);
+        scheduler.setThreadNamePrefix("Shared-Webhook-Sched-");
+        scheduler.initialize();
+        return scheduler;
+    }
 }

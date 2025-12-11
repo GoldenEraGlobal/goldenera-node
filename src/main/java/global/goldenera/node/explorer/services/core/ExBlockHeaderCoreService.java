@@ -41,6 +41,7 @@ import global.goldenera.node.explorer.entities.ExBlockHeader;
 import global.goldenera.node.explorer.repositories.ExBlockHeaderRepository;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.utils.PaginationUtil;
+import jakarta.persistence.EntityManager;
 import jakarta.persistence.criteria.Predicate;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -52,9 +53,44 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExBlockHeaderCoreService {
 
+    /**
+     * Combined SQL query to get all unique affected addresses from both
+     * explorer_transfer and explorer_tx tables. Uses UNION ALL with outer DISTINCT
+     * for maximum efficiency - each subquery uses covering indexes for index-only
+     * scans.
+     */
+    private static final String AFFECTED_ADDRESSES_BY_HEIGHT_SQL = """
+            SELECT DISTINCT addr FROM (
+                SELECT v.addr
+                FROM explorer_transfer t
+                CROSS JOIN LATERAL (VALUES (t.from_address), (t.to_address)) AS v(addr)
+                WHERE t.block_height = :blockHeight AND v.addr IS NOT NULL
+                UNION ALL
+                SELECT v.addr
+                FROM explorer_tx tx
+                CROSS JOIN LATERAL (VALUES (tx.sender), (tx.recipient)) AS v(addr)
+                WHERE tx.block_height = :blockHeight AND v.addr IS NOT NULL
+            ) AS combined
+            """;
+
+    private static final String AFFECTED_ADDRESSES_BY_HASH_SQL = """
+            SELECT DISTINCT addr FROM (
+                SELECT v.addr
+                FROM explorer_transfer t
+                CROSS JOIN LATERAL (VALUES (t.from_address), (t.to_address)) AS v(addr)
+                WHERE t.block_hash = :blockHash AND v.addr IS NOT NULL
+                UNION ALL
+                SELECT v.addr
+                FROM explorer_tx tx
+                CROSS JOIN LATERAL (VALUES (tx.sender), (tx.recipient)) AS v(addr)
+                WHERE tx.block_hash = :blockHash AND v.addr IS NOT NULL
+            ) AS combined
+            """;
+
     static final long MAX_BLOCK_HEADER_RANGE = 1000;
 
     ExBlockHeaderRepository exBlockHeaderRepository;
+    EntityManager entityManager;
 
     @Transactional(readOnly = true)
     public ExBlockHeader getByHash(@NonNull Hash hash) {
@@ -172,5 +208,53 @@ public class ExBlockHeaderCoreService {
     @Transactional(readOnly = true)
     public long getCount() {
         return exBlockHeaderRepository.count();
+    }
+
+    // ==================== AFFECTED ADDRESSES ====================
+
+    /**
+     * Gets all unique addresses affected by a block (as sender or recipient).
+     * Queries both explorer_transfer (for transfers) and explorer_tx (for BIP
+     * votes, creates, etc).
+     * Ultra-fast implementation using combined UNION query with covering indexes.
+     * 
+     * @param height
+     *            block height
+     * @return list of unique affected addresses
+     */
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public List<Address> getAffectedAddressesByHeight(long height) {
+        List<byte[]> rawAddresses = entityManager.createNativeQuery(AFFECTED_ADDRESSES_BY_HEIGHT_SQL)
+                .setParameter("blockHeight", height)
+                .getResultList();
+        List<Address> addresses = new ArrayList<>(rawAddresses.size());
+        for (byte[] raw : rawAddresses) {
+            addresses.add(Address.wrap(raw));
+        }
+        return addresses;
+    }
+
+    /**
+     * Gets all unique addresses affected by a block (as sender or recipient).
+     * Queries both explorer_transfer (for transfers) and explorer_tx (for BIP
+     * votes, creates, etc).
+     * Direct hash-based query for maximum performance (single DB call).
+     * 
+     * @param hash
+     *            block hash
+     * @return list of unique affected addresses
+     */
+    @Transactional(readOnly = true)
+    @SuppressWarnings("unchecked")
+    public List<Address> getAffectedAddressesByHash(@NonNull Hash hash) {
+        List<byte[]> rawAddresses = entityManager.createNativeQuery(AFFECTED_ADDRESSES_BY_HASH_SQL)
+                .setParameter("blockHash", hash.toArray())
+                .getResultList();
+        List<Address> addresses = new ArrayList<>(rawAddresses.size());
+        for (byte[] raw : rawAddresses) {
+            addresses.add(Address.wrap(raw));
+        }
+        return addresses;
     }
 }

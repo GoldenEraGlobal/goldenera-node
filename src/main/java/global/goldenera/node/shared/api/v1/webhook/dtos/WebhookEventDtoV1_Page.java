@@ -21,29 +21,28 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.api.v1.webhook.dtos;
 
-import static lombok.AccessLevel.PRIVATE;
+import java.util.List;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
+import global.goldenera.node.explorer.api.v1.PaginatedDtoV1;
+import lombok.AccessLevel;
 import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
 import lombok.experimental.FieldDefaults;
 
 @Getter
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+@Setter
+@FieldDefaults(level = AccessLevel.PRIVATE)
+public class WebhookEventDtoV1_Page extends PaginatedDtoV1<WebhookEventDtoV1> {
 
-	int code;
+    public WebhookEventDtoV1_Page(@NonNull List<WebhookEventDtoV1> list, int totalPages, long totalElements) {
+        super(list, totalPages, totalElements);
+    }
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
+    public WebhookEventDtoV1_Page() {
+        super();
+    }
+
 }

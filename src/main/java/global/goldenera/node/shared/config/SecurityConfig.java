@@ -50,7 +50,7 @@ import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.filters.ApiKeyAuthFilter;
 import global.goldenera.node.shared.filters.ThrottlingFilter;
 import global.goldenera.node.shared.properties.GeneralProperties;
-import global.goldenera.node.shared.services.ApiKeyCoreService;
+import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;

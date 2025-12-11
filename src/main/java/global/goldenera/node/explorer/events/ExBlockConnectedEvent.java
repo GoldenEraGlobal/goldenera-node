@@ -21,29 +21,49 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.explorer.events;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
+import java.math.BigInteger;
+import java.util.List;
+
+import org.apache.tuweni.units.ethereum.Wei;
+import org.springframework.context.ApplicationEvent;
+
+import global.goldenera.cryptoj.common.Block;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 
 @Getter
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+public class ExBlockConnectedEvent extends ApplicationEvent {
 
-	int code;
+	@NonNull
+	Block block;
+	@NonNull
+	BigInteger cumulativeDifficulty;
+	@NonNull
+	Wei totalFees;
+	@NonNull
+	Wei blockReward;
+	@NonNull
+	List<BlockEvent> events;
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
+	public ExBlockConnectedEvent(
+			Object source,
+			Block block,
+			BigInteger cumulativeDifficulty,
+			Wei totalFees,
+			Wei blockReward,
+			List<BlockEvent> events) {
+		super(source);
+		this.block = block;
+		this.cumulativeDifficulty = cumulativeDifficulty;
+		this.totalFees = totalFees;
+		this.blockReward = blockReward;
+		this.events = events;
 	}
 }

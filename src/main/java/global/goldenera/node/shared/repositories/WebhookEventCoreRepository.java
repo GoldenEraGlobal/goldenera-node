@@ -21,29 +21,17 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.repositories;
 
-import static lombok.AccessLevel.PRIVATE;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.repository.ListPagingAndSortingRepository;
+import org.springframework.stereotype.Repository;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
-import lombok.Getter;
-import lombok.experimental.FieldDefaults;
+import global.goldenera.node.shared.entities.WebhookEvent;
+import io.hypersistence.utils.spring.repository.BaseJpaRepository;
 
-@Getter
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+@Repository
+public interface WebhookEventCoreRepository extends BaseJpaRepository<WebhookEvent, Long>,
+		ListPagingAndSortingRepository<WebhookEvent, Long>, JpaSpecificationExecutor<WebhookEvent> {
 
-	int code;
-
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
 }

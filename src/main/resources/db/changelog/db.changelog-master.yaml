@@ -5,3 +5,5 @@ databaseChangeLog:
                   file: db/changelog/changesets/002-partitions.yaml
         - include:
                   file: db/changelog/changesets/003-custom-indexes.yaml
+        - include:
+                  file: db/changelog/changesets/004-transfer-covering-indexes.yaml

@@ -25,6 +25,7 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,6 +37,8 @@ import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.explorer.entities.ExStatus;
+import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
+import global.goldenera.node.explorer.events.ExBlockReorgEvent;
 import global.goldenera.node.explorer.exceptions.AlreadyIndexedException;
 import global.goldenera.node.explorer.exceptions.ChainSplitException;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerBlockDataCoreService;
@@ -60,6 +63,7 @@ public class ExIndexerService {
 	MeterRegistry registry;
 	ChainQuery chainQueryService;
 	ExIndexerEventReconstructionService eventReconstructionService;
+	ApplicationEventPublisher eventPublisher;
 
 	ExIndexerStatusCoreService exStatusCoreService;
 	ExIndexerRevertService exRevertService;
@@ -94,7 +98,12 @@ public class ExIndexerService {
 						block.getHeight() - 1, attempts);
 				try {
 					ExStatus status = exStatusCoreService.getStatusOrThrow();
-					exRevertService.revertBlock(status.getSyncedBlockHash(), status.getSyncedBlockHeight());
+					Hash oldHash = status.getSyncedBlockHash();
+					Long oldHeight = status.getSyncedBlockHeight();
+					exRevertService.revertBlock(oldHash, oldHeight);
+					// Publish reorg event after successful revert
+					eventPublisher.publishEvent(new ExBlockReorgEvent(
+							this, oldHeight, oldHash, block.getHeight(), block.getHash()));
 					continue;
 				} catch (Exception ex) {
 					log.error("Automatic Revert Failed! Explorer is stuck.", ex);
@@ -129,6 +138,15 @@ public class ExIndexerService {
 			exBlockDataCoreService.insertTransactions(block.getTxs(), block.getHeight(), block.getHash());
 			exBlockDataCoreService.insertTransfers(txToTransferMapper.map(event));
 			exStatusCoreService.updateStatus(block.getHeader());
+
+			// Publish explorer block connected event for webhook notifications
+			eventPublisher.publishEvent(new ExBlockConnectedEvent(
+					this,
+					block,
+					event.getCumulativeDifficulty(),
+					event.getMinerTotalFees(),
+					event.getMinerActualRewardPaid(),
+					event.getEvents()));
 
 			long elapsed = System.currentTimeMillis() - start;
 			int txCount = block.getTxs().size();

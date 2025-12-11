@@ -43,7 +43,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.entities.ApiKey;
-import global.goldenera.node.shared.services.ApiKeyCoreService;
+import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

@@ -21,29 +21,36 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.api.v1.metrics;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
 import global.goldenera.node.shared.exceptions.GEFailedException;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
 import lombok.experimental.FieldDefaults;
 
-@Getter
+@RestController
 @AllArgsConstructor
+@PreAuthorize("hasAuthority('READ_NODE_METRICS')")
+@RequestMapping(value = "api/shared/v1/metrics")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+public class MetricsApiV1 {
 
-	int code;
+    MeterRegistry registry;
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
+    @GetMapping(produces = "text/plain")
+    public ResponseEntity<String> getMetrics() {
+        if (registry instanceof PrometheusMeterRegistry) {
+            return ResponseEntity.ok(((PrometheusMeterRegistry) registry).scrape());
+        }
+        throw new GEFailedException("Registry is not Prometheus!");
+    }
 }

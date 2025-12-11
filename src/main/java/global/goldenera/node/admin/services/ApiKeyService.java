@@ -39,7 +39,7 @@ import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
-import global.goldenera.node.shared.services.ApiKeyCoreService;
+import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import global.goldenera.node.shared.utils.StringUtil;
 import lombok.AllArgsConstructor;
 import lombok.Getter;

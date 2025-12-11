@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.enums;
 
 import static lombok.AccessLevel.PRIVATE;
 
@@ -33,17 +33,17 @@ import lombok.experimental.FieldDefaults;
 @Getter
 @AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+public enum WebhookType {
+    BLOCKCHAIN(0), EXPLORER(1);
 
-	int code;
+    int code;
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
+    public static WebhookType fromCode(int code) {
+        for (WebhookType type : values()) {
+            if (type.getCode() == code) {
+                return type;
+            }
+        }
+        throw new GEFailedException("Failed to get WebhookType from code: " + code);
+    }
 }

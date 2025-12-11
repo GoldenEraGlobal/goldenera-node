@@ -43,7 +43,7 @@ import global.goldenera.node.admin.api.v1.apikey.dtos.ApiKeySetEnabledInDtoV1;
 import global.goldenera.node.admin.api.v1.apikey.mappers.ApiKeyMapper;
 import global.goldenera.node.admin.services.ApiKeyService;
 import global.goldenera.node.shared.entities.ApiKey;
-import global.goldenera.node.shared.services.ApiKeyCoreService;
+import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 

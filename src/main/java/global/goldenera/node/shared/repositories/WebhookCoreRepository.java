@@ -21,43 +21,37 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.explorer.repositories;
+package global.goldenera.node.shared.repositories;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
-import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.ListPagingAndSortingRepository;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import global.goldenera.node.explorer.entities.ExTransfer;
+import global.goldenera.node.shared.entities.Webhook;
 import io.hypersistence.utils.spring.repository.BaseJpaRepository;
 
 @Repository
-public interface ExTransferRepository
-                extends BaseJpaRepository<ExTransfer, Long>,
-                ListPagingAndSortingRepository<ExTransfer, Long>,
-                JpaSpecificationExecutor<ExTransfer> {
+public interface WebhookCoreRepository extends BaseJpaRepository<Webhook, UUID>,
+		ListPagingAndSortingRepository<Webhook, UUID>, JpaSpecificationExecutor<Webhook> {
 
-        @Query(value = "SELECT * FROM explorer_transfer WHERE tx_hash = :txHash", nativeQuery = true)
-        List<ExTransfer> findAllByTxHash(@Param("txHash") byte[] txHash);
+	@Query("SELECT w FROM Webhook w WHERE w.createdByApiKey.id = :apiKeyId")
+	List<Webhook> findByApiKeyId(@Param("apiKeyId") long apiKeyId);
 
-        @Query(value = "SELECT * FROM explorer_transfer WHERE block_hash = :blockHash ORDER BY id ASC", nativeQuery = true)
-        List<ExTransfer> findAllByBlockHash(@Param("blockHash") byte[] blockHash);
+	@Query("SELECT COUNT(w) FROM Webhook w WHERE w.createdByApiKey.id = :apiKeyId")
+	long countByApiKeyId(@Param("apiKeyId") long apiKeyId);
 
-        @Query(value = """
-                        SELECT * FROM explorer_transfer WHERE from_address = :address
-                        UNION ALL
-                        SELECT * FROM explorer_transfer WHERE to_address = :address
-                        ORDER BY block_height DESC
-                        LIMIT :limit OFFSET :offset
-                        """, nativeQuery = true)
-        List<ExTransfer> findHistoryByAddress(@Param("address") byte[] address, @Param("limit") int limit,
-                        @Param("offset") int offset);
+	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey k WHERE w.enabled = true AND k.enabled = true")
+	List<Webhook> findAllEnabledWithEvents();
 
-        @Modifying
-        @Query(value = "DELETE FROM explorer_transfer WHERE block_hash = :blockHash", nativeQuery = true)
-        void deleteAllByBlockHash(@Param("blockHash") byte[] blockHash);
+	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey k WHERE w.createdByApiKey.id = :apiKeyId AND w.enabled = true AND k.enabled = true")
+	List<Webhook> findEnabledByApiKeyIdWithEvents(@Param("apiKeyId") long apiKeyId);
+
+	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events WHERE w.id = :id")
+	Optional<Webhook> findByIdWithEvents(@Param("id") UUID id);
 }

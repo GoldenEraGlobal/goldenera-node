@@ -41,6 +41,7 @@ import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
@@ -281,6 +282,17 @@ public class ChainSwitchService {
 
             blockDisconnectedEvents.forEach(applicationEventPublisher::publishEvent);
             blockConnectedEvents.forEach(applicationEventPublisher::publishEvent);
+
+            // Publish BlockReorgEvent for webhook notifications when it's a real reorg
+            if (isReorg && !oldChainStored.isEmpty()) {
+                StoredBlock oldTip = oldChainStored.get(0); // First in reversed list is the old tip
+                applicationEventPublisher.publishEvent(new BlockReorgEvent(
+                        this,
+                        oldTip.getHeight(),
+                        oldTip.getHash(),
+                        newTip.getHeight(),
+                        newTip.getHash()));
+            }
         } finally {
             masterChainLock.unlock();
         }

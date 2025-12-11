@@ -109,4 +109,14 @@ public class BlockHeaderApiV1 {
                 return exBlockHeaderCoreService.getCount();
         }
 
+        @GetMapping("by-hash/{hash}/affected-addresses")
+        public List<Address> apiV1BlockGetAffectedAddressesByHash(@PathVariable Hash hash) {
+                return exBlockHeaderCoreService.getAffectedAddressesByHash(hash);
+        }
+
+        @GetMapping("by-height/{height}/affected-addresses")
+        public List<Address> apiV1BlockGetAffectedAddressesByHeight(@PathVariable long height) {
+                return exBlockHeaderCoreService.getAffectedAddressesByHeight(height);
+        }
+
 }

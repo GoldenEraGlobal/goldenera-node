@@ -21,29 +21,35 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.explorer.events;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
+import org.springframework.context.ApplicationEvent;
+
+import global.goldenera.cryptoj.datatypes.Hash;
 import lombok.Getter;
+import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 
 @Getter
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+public class ExBlockReorgEvent extends ApplicationEvent {
 
-	int code;
+	@NonNull
+	Long oldHeight;
+	@NonNull
+	Hash oldHash;
+	@NonNull
+	Long newHeight;
+	@NonNull
+	Hash newHash;
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
+	public ExBlockReorgEvent(Object source, Long oldHeight, Hash oldHash, Long newHeight, Hash newHash) {
+		super(source);
+		this.oldHeight = oldHeight;
+		this.oldHash = oldHash;
+		this.newHeight = newHeight;
+		this.newHash = newHash;
 	}
 }

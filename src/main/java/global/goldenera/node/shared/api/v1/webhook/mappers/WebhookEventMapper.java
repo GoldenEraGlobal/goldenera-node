@@ -21,29 +21,44 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.api.v1.webhook.mappers;
 
-import static lombok.AccessLevel.PRIVATE;
+import java.util.List;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
+import org.springframework.data.domain.Page;
+import org.springframework.stereotype.Component;
+
+import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookEventDtoV1;
+import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookEventDtoV1_Page;
+import global.goldenera.node.shared.entities.WebhookEvent;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
-import lombok.Getter;
+import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 
-@Getter
+@Component
 @AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+@FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
+public class WebhookEventMapper {
 
-	int code;
+    public WebhookEventDtoV1 map(@NonNull WebhookEvent in) {
+        return new WebhookEventDtoV1(
+                in.getType(),
+                in.getAddressFilter(),
+                in.getTokenAddressFilter());
+    }
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
-	}
+    public List<WebhookEventDtoV1> map(@NonNull List<WebhookEvent> in) {
+        return in.stream()
+                .map(this::map)
+                .toList();
+    }
+
+    public WebhookEventDtoV1_Page map(@NonNull Page<WebhookEvent> in) {
+        return new WebhookEventDtoV1_Page(
+                map(in.toList()),
+                in.getTotalPages(),
+                in.getTotalElements());
+    }
+
 }

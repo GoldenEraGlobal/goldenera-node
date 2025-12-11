@@ -21,29 +21,48 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.enums;
+package global.goldenera.node.shared.events;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
+import java.util.List;
+import java.util.UUID;
+
+import org.springframework.context.ApplicationEvent;
+
+import global.goldenera.node.shared.entities.Webhook;
+import global.goldenera.node.shared.services.core.WebhookCoreService.WebhookEventFilter;
 import lombok.Getter;
+import lombok.NonNull;
+import lombok.Setter;
 import lombok.experimental.FieldDefaults;
 
 @Getter
-@AllArgsConstructor
+@Setter
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-public enum WebhookEventType {
-	NEW_BLOCK(0), ADDRESS_ACTIVITY(1), REORG(2);
+public class WebhookEventsUpdateEvent extends ApplicationEvent {
 
-	int code;
+	@NonNull
+	UpdateType type;
 
-	public static WebhookEventType fromCode(int code) {
-		for (WebhookEventType eventType : values()) {
-			if (eventType.getCode() == code) {
-				return eventType;
-			}
-		}
-		throw new GEFailedException("Failed to get WebhookEventType from code: " + code);
+	@NonNull
+	UUID webhookId;
+
+	@NonNull
+	Webhook webhook;
+
+	List<WebhookEventFilter> events;
+
+	public WebhookEventsUpdateEvent(Object source, @NonNull UpdateType type, @NonNull UUID webhookId,
+			@NonNull Webhook webhook, @NonNull List<WebhookEventFilter> events) {
+		super(source);
+		this.type = type;
+		this.webhookId = webhookId;
+		this.webhook = webhook;
+		this.events = events;
+	}
+
+	public static enum UpdateType {
+		ADD_EVENTS, REMOVE_EVENTS,
 	}
 }
