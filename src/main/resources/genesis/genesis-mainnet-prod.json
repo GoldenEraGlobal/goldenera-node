@@ -3,38 +3,38 @@
     "maxHeaderSizeInBytes": 500,
     "maxTxSizeInBytes": 100000,
     "maxBlockSizeInBytes": 5000000,
-    "maxTxCountPerBlock": 100000
+    "maxTxCountPerBlock": 50000
   },
   "bip": {
     "expirationPeriodMs": 86400000,
     "approvalThresholdBps": 5100
   },
   "networkParams": {
-    "blockReward": "1000000000",
-    "blockRewardPoolAddress": "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76",
-    "targetMiningTimeMs": 15000,
-    "asertHalfLifeBlocks": 15,
+    "blockReward": "10000000",
+    "blockRewardPoolAddress": "0x132ff72468DC79F45221225b960e64FB1cE80A88",
+    "targetMiningTimeMs": 30000,
+    "asertHalfLifeBlocks": 64,
     "minDifficulty": "1000",
-    "minTxBaseFee": "100000",
-    "minTxByteFee": "1000"
+    "minTxBaseFee": "200",
+    "minTxByteFee": "5"
   },
   "authorities": [
-    "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
+    "0x1B4148166C78DBcd66Ffc195ded697dBd681bbD6"
   ],
   "genesisBlock": {
     "timestamp": 1764806403777,
-    "difficulty": "1000"
+    "difficulty": "2500"
   },
   "nativeToken": {
-    "name": "GoldenEraCoin",
-    "ticker": "GEC",
-    "decimals": 9,
+    "name": "Sun Coin",
+    "ticker": "SCGE",
+    "decimals": 8,
     "website": "https://goldenera.global",
     "logo": "https://goldenera.global/TokenTicker/logo.png",
     "userBurnable": false
   },
   "randomX": {
-    "epochLength": 2048,
+    "epochLength": 4096,
     "genesisKey": "GLDNR_RNDX_GENESIS_KEY",
     "batchSize": 32768
   }
