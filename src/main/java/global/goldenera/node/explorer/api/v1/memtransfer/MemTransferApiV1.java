@@ -31,6 +31,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -38,6 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.node.explorer.api.v1.common.BulkMemTransferPageRequestV1;
 import global.goldenera.node.explorer.api.v1.memtransfer.dtos.MemTransferDtoV1;
 import global.goldenera.node.explorer.api.v1.memtransfer.dtos.MemTransferDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.memtransfer.mappers.MemTransferMapper;
@@ -92,6 +95,24 @@ public class MemTransferApiV1 {
 						to,
 						tokenAddress,
 						referenceHash));
+	}
+
+	@PostMapping("page/bulk")
+	public MemTransferDtoV1_Page apiV1MemTransferGetPageBulk(@RequestBody BulkMemTransferPageRequestV1 request) {
+		return memTransferMapper.map(
+				exMemTransferCoreService.getPageBulk(
+						request.pageNumber(),
+						request.pageSize(),
+						request.direction(),
+						request.addresses(),
+						request.addedAtFrom(),
+						request.addedAtTo(),
+						request.transferType(),
+						request.txType(),
+						request.fromAddresses(),
+						request.toAddresses(),
+						request.tokenAddresses(),
+						request.referenceHash()));
 	}
 
 	@GetMapping("count")

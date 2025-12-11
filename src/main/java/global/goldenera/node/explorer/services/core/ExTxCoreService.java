@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -108,6 +109,69 @@ public class ExTxCoreService {
                         if (address != null) {
                                 Predicate senderMatch = cb.equal(root.get("sender"), address);
                                 Predicate recipientMatch = cb.equal(root.get("recipient"), address);
+                                predicates.add(cb.or(senderMatch, recipientMatch));
+                        }
+                        if (blockHeight != null) {
+                                predicates.add(cb.equal(root.get("blockHeight"), blockHeight));
+                        }
+                        if (timestampFrom != null) {
+                                predicates.add(cb.greaterThanOrEqualTo(root.get("timestamp"), timestampFrom));
+                        }
+                        if (timestampTo != null) {
+                                predicates.add(cb.lessThanOrEqualTo(root.get("timestamp"), timestampTo));
+                        }
+                        return cb.and(predicates.toArray(new Predicate[0]));
+                };
+                PageRequest pageable = PageRequest.of(pageNumber, pageSize,
+                                direction != null ? Sort.by(direction, "timestamp") : Sort.by("timestamp"));
+                return exTxRepository.findAll(spec, pageable);
+        }
+
+        /**
+         * Bulk page query supporting multiple addresses for sender, recipient,
+         * tokenAddress filters.
+         * Uses IN clause for efficient database queries.
+         */
+        @Transactional(readOnly = true)
+        public Page<ExTx> getPageBulk(
+                        int pageNumber,
+                        int pageSize,
+                        Sort.Direction direction,
+                        Set<Address> addresses,
+                        Long blockHeight,
+                        Instant timestampFrom,
+                        Instant timestampTo,
+                        TxType type,
+                        Hash blockHash,
+                        Set<Address> senders,
+                        Set<Address> recipients,
+                        Set<Address> tokenAddresses,
+                        Hash referenceHash) {
+                PaginationUtil.validatePageRequest(pageNumber, pageSize);
+                Specification<ExTx> spec = (root, query, cb) -> {
+                        List<Predicate> predicates = new ArrayList<>();
+
+                        if (type != null) {
+                                predicates.add(cb.equal(root.get("type"), type));
+                        }
+                        if (blockHash != null) {
+                                predicates.add(cb.equal(root.get("blockHash"), blockHash));
+                        }
+                        if (senders != null && !senders.isEmpty()) {
+                                predicates.add(root.get("sender").in(senders));
+                        }
+                        if (recipients != null && !recipients.isEmpty()) {
+                                predicates.add(root.get("recipient").in(recipients));
+                        }
+                        if (tokenAddresses != null && !tokenAddresses.isEmpty()) {
+                                predicates.add(root.get("tokenAddress").in(tokenAddresses));
+                        }
+                        if (referenceHash != null) {
+                                predicates.add(cb.equal(root.get("referenceHash"), referenceHash));
+                        }
+                        if (addresses != null && !addresses.isEmpty()) {
+                                Predicate senderMatch = root.get("sender").in(addresses);
+                                Predicate recipientMatch = root.get("recipient").in(addresses);
                                 predicates.add(cb.or(senderMatch, recipientMatch));
                         }
                         if (blockHeight != null) {

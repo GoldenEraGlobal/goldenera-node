@@ -300,14 +300,19 @@ public class BlockchainApiV1 {
         AccountNonceState nonceState = state.getNonce(address);
 
         Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
-        long nonce = nonceState.exists() ? nonceState.getNonce() : -1L;
+        // If account never sent a tx, confirmedNonce is -1
+        long confirmedNonce = nonceState.exists() ? nonceState.getNonce() : -1L;
         int pendingTxCount = mempoolStore.getPendingTxCount(address);
+
+        // Calculate next available nonce considering mempool transactions and gaps
+        // If confirmedNonce is -1 (never sent tx), nextNonce starts from 0
+        long nextNonce = mempoolStore.getNextAvailableNonce(address, confirmedNonce);
 
         AccountSummaryDtoV1.AccountSummaryDtoV1Builder builder = AccountSummaryDtoV1.builder()
                 .address(address)
                 .nativeBalance(nativeBalance)
-                .nonce(nonce)
-                .nextNonce(nonce + 1)
+                .nonce(confirmedNonce)
+                .nextNonce(nextNonce)
                 .pendingTxCount(pendingTxCount);
 
         // Optional token balance lookup

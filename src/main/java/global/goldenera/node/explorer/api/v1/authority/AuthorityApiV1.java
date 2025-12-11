@@ -26,17 +26,22 @@ package global.goldenera.node.explorer.api.v1.authority;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.explorer.api.v1.authority.dtos.AuthorityDtoV1;
 import global.goldenera.node.explorer.api.v1.authority.dtos.AuthorityDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.authority.mappers.AuthorityMapper;
+import global.goldenera.node.explorer.api.v1.common.BulkAuthorityPageRequestV1;
 import global.goldenera.node.explorer.services.core.ExAuthorityCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.GeneralApiSecurity;
@@ -65,9 +70,35 @@ public class AuthorityApiV1 {
                         @RequestParam(required = false) Instant createdAtTimestampFrom,
                         @RequestParam(required = false) Instant createdAtTimestampTo) {
                 return authorityMapper.map(
-                                authorityCoreService.getPage(pageNumber, pageSize, direction, originTxHash,
-                                                createdAtBlockHeightFrom, createdAtBlockHeightTo,
-                                                createdAtTimestampFrom, createdAtTimestampTo));
+                                authorityCoreService.getPage(
+                                                pageNumber,
+                                                pageSize,
+                                                direction,
+                                                originTxHash,
+                                                createdAtBlockHeightFrom,
+                                                createdAtBlockHeightTo,
+                                                createdAtTimestampFrom,
+                                                createdAtTimestampTo));
+        }
+
+        @PostMapping("page/bulk")
+        public AuthorityDtoV1_Page apiV1AuthorityGetPageBulk(@RequestBody BulkAuthorityPageRequestV1 request) {
+                return authorityMapper.map(
+                                authorityCoreService.getPageBulk(
+                                                request.pageNumber(),
+                                                request.pageSize(),
+                                                request.direction(),
+                                                request.addresses(),
+                                                request.originTxHash(),
+                                                request.createdAtBlockHeightFrom(),
+                                                request.createdAtBlockHeightTo(),
+                                                request.createdAtTimestampFrom(),
+                                                request.createdAtTimestampTo()));
+        }
+
+        @GetMapping("list")
+        public List<AuthorityDtoV1> apiV1AuthorityGetList() {
+                return authorityMapper.map(authorityCoreService.getAll());
         }
 
         @GetMapping("count")

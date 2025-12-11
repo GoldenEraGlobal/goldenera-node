@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -108,6 +109,65 @@ public class ExMemTransferCoreService {
 			if (address != null) {
 				Predicate fromMatch = cb.equal(root.get("from"), address);
 				Predicate toMatch = cb.equal(root.get("to"), address);
+				predicates.add(cb.or(fromMatch, toMatch));
+			}
+			if (addedAtFrom != null) {
+				predicates.add(cb.greaterThanOrEqualTo(root.get("addedAt"), addedAtFrom));
+			}
+			if (addedAtTo != null) {
+				predicates.add(cb.lessThanOrEqualTo(root.get("addedAt"), addedAtTo));
+			}
+			return cb.and(predicates.toArray(new Predicate[0]));
+		};
+		PageRequest pageable = PageRequest.of(pageNumber, pageSize,
+				direction != null ? Sort.by(direction, "addedAt") : Sort.by("addedAt"));
+		return exMemTransferRepository.findAll(spec, pageable);
+	}
+
+	/**
+	 * Bulk page query supporting multiple addresses for from, to, tokenAddress
+	 * filters.
+	 * Uses IN clause for efficient database queries.
+	 */
+	@Transactional(readOnly = true)
+	public Page<ExMemTransfer> getPageBulk(
+			int pageNumber,
+			int pageSize,
+			Sort.Direction direction,
+			Set<Address> addresses,
+			Instant addedAtFrom,
+			Instant addedAtTo,
+			TransferType transferType,
+			TxType txType,
+			Set<Address> fromAddresses,
+			Set<Address> toAddresses,
+			Set<Address> tokenAddresses,
+			Hash referenceHash) {
+		PaginationUtil.validatePageRequest(pageNumber, pageSize);
+		Specification<ExMemTransfer> spec = (root, query, cb) -> {
+			List<Predicate> predicates = new ArrayList<>();
+
+			if (transferType != null) {
+				predicates.add(cb.equal(root.get("transferType"), transferType));
+			}
+			if (txType != null) {
+				predicates.add(cb.equal(root.get("txType"), txType));
+			}
+			if (fromAddresses != null && !fromAddresses.isEmpty()) {
+				predicates.add(root.get("from").in(fromAddresses));
+			}
+			if (toAddresses != null && !toAddresses.isEmpty()) {
+				predicates.add(root.get("to").in(toAddresses));
+			}
+			if (tokenAddresses != null && !tokenAddresses.isEmpty()) {
+				predicates.add(root.get("tokenAddress").in(tokenAddresses));
+			}
+			if (referenceHash != null) {
+				predicates.add(cb.equal(root.get("referenceHash"), referenceHash));
+			}
+			if (addresses != null && !addresses.isEmpty()) {
+				Predicate fromMatch = root.get("from").in(addresses);
+				Predicate toMatch = root.get("to").in(addresses);
 				predicates.add(cb.or(fromMatch, toMatch));
 			}
 			if (addedAtFrom != null) {

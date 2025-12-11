@@ -27,6 +27,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -74,6 +76,24 @@ public class ExBipStateCoreService {
 	@Transactional(readOnly = true)
 	public long getCount() {
 		return exBipStateRepository.count();
+	}
+
+	/**
+	 * Fetches multiple BIP states by their hashes.
+	 * Maximum 100 hashes per request for performance.
+	 */
+	@Transactional(readOnly = true)
+	public List<ExBipState> getByBipHashesBulk(@NonNull Set<Hash> bipHashes) {
+		if (bipHashes.isEmpty()) {
+			return List.of();
+		}
+		if (bipHashes.size() > 100) {
+			throw new IllegalArgumentException("Maximum 100 BIP hashes allowed per request");
+		}
+		Set<ExBipState.BipStatePK> pks = bipHashes.stream()
+				.map(ExBipState.BipStatePK::new)
+				.collect(Collectors.toSet());
+		return exBipStateRepository.findAllById(pks);
 	}
 
 	@Transactional(readOnly = true)

@@ -32,6 +32,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,6 +42,7 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.explorer.api.v1.account.dtos.AccountBalanceDtoV1;
 import global.goldenera.node.explorer.api.v1.account.dtos.AccountBalanceDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.account.mappers.AccountBalanceMapper;
+import global.goldenera.node.explorer.api.v1.common.BulkAccountBalancePageRequestV1;
 import global.goldenera.node.explorer.services.core.ExAccountBalanceCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.GeneralApiSecurity;
@@ -65,8 +68,7 @@ public class AccountBalanceApiV1 {
                         tokenAddress = Address.NATIVE_TOKEN;
                 }
                 return accountBalanceMapper
-                                .map(accountBalanceCoreService.getByAddressAndTokenAddress(address,
-                                                tokenAddress));
+                                .map(accountBalanceCoreService.getByAddressAndTokenAddress(address, tokenAddress));
         }
 
         @GetMapping("page")
@@ -103,6 +105,28 @@ public class AccountBalanceApiV1 {
                                                 createdAtTimestampTo,
                                                 updatedAtTimestampFrom,
                                                 updatedAtTimestampTo));
+        }
+
+        @PostMapping("page/bulk")
+        public AccountBalanceDtoV1_Page apiV1AccountBalanceGetPageBulk(
+                        @RequestBody BulkAccountBalancePageRequestV1 request) {
+                return accountBalanceMapper.map(
+                                accountBalanceCoreService.getPageBulk(
+                                                request.pageNumber(),
+                                                request.pageSize(),
+                                                request.direction(),
+                                                request.addresses(),
+                                                request.tokenAddresses(),
+                                                request.balanceGreaterThan(),
+                                                request.balanceLessThan(),
+                                                request.createdAtBlockHeightFrom(),
+                                                request.createdAtBlockHeightTo(),
+                                                request.updatedAtBlockHeightFrom(),
+                                                request.updatedAtBlockHeightTo(),
+                                                request.createdAtTimestampFrom(),
+                                                request.createdAtTimestampTo(),
+                                                request.updatedAtTimestampFrom(),
+                                                request.updatedAtTimestampTo()));
         }
 
         @GetMapping("count")

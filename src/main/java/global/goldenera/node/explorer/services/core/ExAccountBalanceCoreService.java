@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.data.domain.Page;
@@ -100,6 +101,73 @@ public class ExAccountBalanceCoreService {
 			}
 			if (tokenAddress != null) {
 				predicates.add(cb.equal(root.get("tokenAddress"), tokenAddress));
+			}
+			if (balanceGreaterThan != null) {
+				predicates.add(cb.greaterThan(root.get("balance"), balanceGreaterThan));
+			}
+			if (balanceLessThan != null) {
+				predicates.add(cb.lessThan(root.get("balance"), balanceLessThan));
+			}
+			if (createdAtBlockHeightFrom != null) {
+				predicates.add(cb.greaterThanOrEqualTo(root.get("createdAtBlockHeight"), createdAtBlockHeightFrom));
+			}
+			if (createdAtBlockHeightTo != null) {
+				predicates.add(cb.lessThanOrEqualTo(root.get("createdAtBlockHeight"), createdAtBlockHeightTo));
+			}
+			if (updatedAtBlockHeightFrom != null) {
+				predicates.add(cb.greaterThanOrEqualTo(root.get("updatedAtBlockHeight"), updatedAtBlockHeightFrom));
+			}
+			if (updatedAtBlockHeightTo != null) {
+				predicates.add(cb.lessThanOrEqualTo(root.get("updatedAtBlockHeight"), updatedAtBlockHeightTo));
+			}
+			if (createdAtTimestampFrom != null) {
+				predicates.add(cb.greaterThanOrEqualTo(root.get("createdAtTimestamp"), createdAtTimestampFrom));
+			}
+			if (createdAtTimestampTo != null) {
+				predicates.add(cb.lessThanOrEqualTo(root.get("createdAtTimestamp"), createdAtTimestampTo));
+			}
+			if (updatedAtTimestampFrom != null) {
+				predicates.add(cb.greaterThanOrEqualTo(root.get("updatedAtTimestamp"), updatedAtTimestampFrom));
+			}
+			if (updatedAtTimestampTo != null) {
+				predicates.add(cb.lessThanOrEqualTo(root.get("updatedAtTimestamp"), updatedAtTimestampTo));
+			}
+			return cb.and(predicates.toArray(new Predicate[0]));
+		};
+		PageRequest pageable = PageRequest.of(pageNumber, pageSize,
+				direction != null ? Sort.by(direction, "balance") : Sort.by("balance"));
+		return addressBalanceCoreRepository.findAll(spec, pageable);
+	}
+
+	/**
+	 * Bulk page query supporting multiple addresses and tokenAddresses.
+	 * Uses IN clause for efficient database queries.
+	 */
+	@Transactional(readOnly = true)
+	public Page<ExAccountBalance> getPageBulk(
+			int pageNumber,
+			int pageSize,
+			Sort.Direction direction,
+			Set<Address> addresses,
+			Set<Address> tokenAddresses,
+			Wei balanceGreaterThan,
+			Wei balanceLessThan,
+			Long createdAtBlockHeightFrom,
+			Long createdAtBlockHeightTo,
+			Long updatedAtBlockHeightFrom,
+			Long updatedAtBlockHeightTo,
+			Instant createdAtTimestampFrom,
+			Instant createdAtTimestampTo,
+			Instant updatedAtTimestampFrom,
+			Instant updatedAtTimestampTo) {
+		PaginationUtil.validatePageRequest(pageNumber, pageSize);
+		Specification<ExAccountBalance> spec = (root, query, cb) -> {
+			List<Predicate> predicates = new ArrayList<>();
+			if (addresses != null && !addresses.isEmpty()) {
+				predicates.add(root.get("address").in(addresses));
+			}
+			if (tokenAddresses != null && !tokenAddresses.isEmpty()) {
+				predicates.add(root.get("tokenAddress").in(tokenAddresses));
 			}
 			if (balanceGreaterThan != null) {
 				predicates.add(cb.greaterThan(root.get("balance"), balanceGreaterThan));

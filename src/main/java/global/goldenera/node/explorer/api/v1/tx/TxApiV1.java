@@ -31,6 +31,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -38,6 +40,7 @@ import org.springframework.web.bind.annotation.RestController;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.node.explorer.api.v1.common.BulkTxPageRequestV1;
 import global.goldenera.node.explorer.api.v1.tx.dtos.TxDtoV1;
 import global.goldenera.node.explorer.api.v1.tx.dtos.TxDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.tx.mappers.TxMapper;
@@ -93,6 +96,25 @@ public class TxApiV1 {
                         recipient,
                         tokenAddress,
                         referenceHash));
+    }
+
+    @PostMapping("page/bulk")
+    public TxDtoV1_Page apiV1TxGetPageBulk(@RequestBody BulkTxPageRequestV1 request) {
+        return txMapper.map(
+                exTxCoreService.getPageBulk(
+                        request.pageNumber(),
+                        request.pageSize(),
+                        request.direction(),
+                        request.addresses(),
+                        request.blockHeight(),
+                        request.timestampFrom(),
+                        request.timestampTo(),
+                        request.type(),
+                        request.blockHash(),
+                        request.senders(),
+                        request.recipients(),
+                        request.tokenAddresses(),
+                        request.referenceHash()));
     }
 
     @GetMapping("confirmations/{hash}")

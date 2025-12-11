@@ -655,6 +655,45 @@ public class MempoolStore {
 		}
 	}
 
+	/**
+	 * Returns the next available nonce for a sender.
+	 * This considers both the confirmed chain nonce and any pending transactions in
+	 * the mempool.
+	 * If there's a gap in the nonce sequence (e.g., user sent future tx with nonce
+	 * 10 but nonce 9 is missing),
+	 * this will return the first missing nonce (9 in this example).
+	 * 
+	 * @param sender
+	 *            The sender address
+	 * @param confirmedNonce
+	 *            The last confirmed nonce from blockchain state (the highest used
+	 *            nonce)
+	 * @return The next nonce that should be used for a transaction to be
+	 *         immediately executable
+	 */
+	public long getNextAvailableNonce(Address sender, long confirmedNonce) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			// No pending transactions for this sender
+			return confirmedNonce + 1;
+		}
+		pool.lock.lock();
+		try {
+			// Start from the first expected nonce
+			long nextNonce = confirmedNonce + 1;
+
+			// Check both executable and future txs for each nonce
+			while (pool.getExecutableTxs().containsKey(nextNonce)
+					|| pool.getFutureTxs().containsKey(nextNonce)) {
+				nextNonce++;
+			}
+
+			return nextNonce;
+		} finally {
+			pool.lock.unlock();
+		}
+	}
+
 	public boolean isFull() {
 		return allTxsByHash.size() >= mempoolProperties.getMaxSize();
 	}

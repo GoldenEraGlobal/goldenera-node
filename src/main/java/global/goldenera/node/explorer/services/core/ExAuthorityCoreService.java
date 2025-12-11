@@ -26,6 +26,7 @@ package global.goldenera.node.explorer.services.core;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -65,6 +66,48 @@ public class ExAuthorityCoreService {
         PaginationUtil.validatePageRequest(pageNumber, pageSize);
         Specification<ExAuthority> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
+            if (originTxHash != null) {
+                predicates.add(cb.equal(root.get("originTxHash"), originTxHash));
+            }
+            if (createdAtBlockHeightFrom != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("createdAtBlockHeight"), createdAtBlockHeightFrom));
+            }
+            if (createdAtBlockHeightTo != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("createdAtBlockHeight"), createdAtBlockHeightTo));
+            }
+            if (createdAtTimestampFrom != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("createdAtTimestamp"), createdAtTimestampFrom));
+            }
+            if (createdAtTimestampTo != null) {
+                predicates.add(cb.lessThanOrEqualTo(root.get("createdAtTimestamp"), createdAtTimestampTo));
+            }
+            return cb.and(predicates.toArray(new Predicate[0]));
+        };
+        return authorityRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
+                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+    }
+
+    /**
+     * Bulk page query supporting multiple addresses for authority filtering.
+     * Uses IN clause for efficient database queries.
+     */
+    @Transactional(readOnly = true)
+    public Page<ExAuthority> getPageBulk(
+            int pageNumber,
+            int pageSize,
+            Sort.Direction direction,
+            Set<Address> addresses,
+            Hash originTxHash,
+            Long createdAtBlockHeightFrom,
+            Long createdAtBlockHeightTo,
+            Instant createdAtTimestampFrom,
+            Instant createdAtTimestampTo) {
+        PaginationUtil.validatePageRequest(pageNumber, pageSize);
+        Specification<ExAuthority> spec = (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            if (addresses != null && !addresses.isEmpty()) {
+                predicates.add(root.get("nodeIdentity").in(addresses));
+            }
             if (originTxHash != null) {
                 predicates.add(cb.equal(root.get("originTxHash"), originTxHash));
             }

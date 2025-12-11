@@ -26,11 +26,14 @@ package global.goldenera.node.explorer.api.v1.bipstate;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
+import java.util.List;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -41,6 +44,7 @@ import global.goldenera.cryptoj.enums.state.BipType;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1;
 import global.goldenera.node.explorer.api.v1.bipstate.dtos.BipStateDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.bipstate.mappers.BipStateMapper;
+import global.goldenera.node.explorer.api.v1.common.BulkBipStateRequestV1;
 import global.goldenera.node.explorer.services.core.ExBipStateCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.GeneralApiSecurity;
@@ -60,8 +64,12 @@ public class BipStateApiV1 {
 
         @GetMapping("by-hash/{hash}")
         public BipStateDtoV1 apiV1BipStateGetByHash(@PathVariable Hash hash) {
-                return bipStateMapper.map(
-                                bipStateCoreService.getByBipHash(hash));
+                return bipStateMapper.map(bipStateCoreService.getByBipHash(hash));
+        }
+
+        @PostMapping("bulk")
+        public List<BipStateDtoV1> apiV1BipStateGetBulk(@RequestBody BulkBipStateRequestV1 request) {
+                return bipStateMapper.map(bipStateCoreService.getByBipHashesBulk(request.bipHashes()));
         }
 
         @GetMapping("page")
@@ -94,7 +102,8 @@ public class BipStateApiV1 {
                                                 updatedAtBlockHeightTo,
                                                 createdAtTimestampFrom,
                                                 createdAtTimestampTo,
-                                                updatedAtTimestampFrom, updatedAtTimestampTo));
+                                                updatedAtTimestampFrom,
+                                                updatedAtTimestampTo));
         }
 
         @GetMapping("count")
