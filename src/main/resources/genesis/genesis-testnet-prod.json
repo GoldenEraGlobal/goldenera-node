@@ -22,8 +22,8 @@
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
   ],
   "genesisBlock": {
-    "timestamp": 1765488251629,
-    "difficulty": "2500"
+    "timestamp": 1765488799323,
+    "difficulty": "1000"
   },
   "nativeToken": {
     "name": "TSun Coin",
