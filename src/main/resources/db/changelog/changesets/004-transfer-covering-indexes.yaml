@@ -3,23 +3,20 @@ databaseChangeLog:
       id: add-affected-addresses-covering-indexes
       author: goldenera
       comment: "Covering indexes for ultra-fast affected addresses lookup. Enables index-only scans on both tables."
-      runInTransaction: false
       changes:
-        # explorer_transfer indexes
+        # explorer_transfer indexes (partitioned table - cannot use CONCURRENTLY)
         - sql:
             dbms: postgresql
             endDelimiter: ;
             sql: |
-              -- Covering index for block_height lookup with from/to addresses included
-              CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transfer_block_height_addresses
+              CREATE INDEX IF NOT EXISTS idx_transfer_block_height_addresses
               ON explorer_transfer (block_height)
               INCLUDE (from_address, to_address);
         - sql:
             dbms: postgresql
             endDelimiter: ;
             sql: |
-              -- Covering index for block_hash lookup with from/to addresses included
-              CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_transfer_block_hash_addresses
+              CREATE INDEX IF NOT EXISTS idx_transfer_block_hash_addresses
               ON explorer_transfer (block_hash)
               INCLUDE (from_address, to_address);
         # explorer_tx indexes
@@ -27,16 +24,14 @@ databaseChangeLog:
             dbms: postgresql
             endDelimiter: ;
             sql: |
-              -- Covering index for block_height lookup with sender/recipient addresses included
-              CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tx_block_height_addresses
+              CREATE INDEX IF NOT EXISTS idx_tx_block_height_addresses
               ON explorer_tx (block_height)
               INCLUDE (sender, recipient);
         - sql:
             dbms: postgresql
             endDelimiter: ;
             sql: |
-              -- Covering index for block_hash lookup with sender/recipient addresses included
-              CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tx_block_hash_addresses
+              CREATE INDEX IF NOT EXISTS idx_tx_block_hash_addresses
               ON explorer_tx (block_hash)
               INCLUDE (sender, recipient);
       rollback:
