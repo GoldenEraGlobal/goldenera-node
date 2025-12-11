@@ -51,6 +51,7 @@ public class WebhookMapper {
     public WebhookDtoV1 map(@NonNull Webhook in) {
         return new WebhookDtoV1(
                 in.getId().toString(),
+                in.getType(),
                 in.getLabel(),
                 in.getDescription(),
                 in.getUrl(),

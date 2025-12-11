@@ -28,6 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.time.Instant;
 import java.util.Map;
 
+import global.goldenera.node.shared.enums.WebhookType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -44,6 +45,7 @@ import lombok.experimental.FieldDefaults;
 public class WebhookDtoV1 {
 
     String id;
+    WebhookType type;
     String label;
     String description;
     String url;
