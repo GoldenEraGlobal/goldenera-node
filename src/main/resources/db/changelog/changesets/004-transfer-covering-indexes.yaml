@@ -3,6 +3,7 @@ databaseChangeLog:
       id: add-affected-addresses-covering-indexes
       author: goldenera
       comment: "Covering indexes for ultra-fast affected addresses lookup. Enables index-only scans on both tables."
+      runInTransaction: false
       changes:
         # explorer_transfer indexes
         - sql:
