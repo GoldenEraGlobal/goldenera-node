@@ -16,7 +16,7 @@
     "initialMintForAuthority": "8888878376800000000",
     "targetMiningTimeMs": 30000,
     "asertHalfLifeBlocks": 64,
-    "minDifficulty": "1000",
+    "minDifficulty": "5000",
     "minTxBaseFee": "200",
     "minTxByteFee": "5"
   },
@@ -24,8 +24,8 @@
     "0x1B4148166C78DBcd66Ffc195ded697dBd681bbD6"
   ],
   "genesisBlock": {
-    "timestamp": 1765576158657,
-    "difficulty": "1000"
+    "timestamp": 1765577191740,
+    "difficulty": "5000"
   },
   "nativeToken": {
     "name": "Sun Coin",

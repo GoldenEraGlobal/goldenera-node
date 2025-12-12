@@ -16,7 +16,7 @@
     "initialMintForAuthority": "8888878376800000000",
     "targetMiningTimeMs": 30000,
     "asertHalfLifeBlocks": 64,
-    "minDifficulty": "1000",
+    "minDifficulty": "2500",
     "minTxBaseFee": "200",
     "minTxByteFee": "5"
   },
@@ -24,8 +24,8 @@
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
   ],
   "genesisBlock": {
-    "timestamp": 1765576158657,
-    "difficulty": "1000"
+    "timestamp": 1765577191740,
+    "difficulty": "2500"
   },
   "nativeToken": {
     "name": "TSun Coin",
