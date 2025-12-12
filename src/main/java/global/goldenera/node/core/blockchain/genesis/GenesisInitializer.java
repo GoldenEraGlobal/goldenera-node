@@ -171,15 +171,22 @@ public class GenesisInitializer {
 		Address firstAuthorityAddress = authorities.get(0);
 		Address blockRewardPoolAddress = settings.genesisNetworkBlockRewardPoolAddress();
 
+		// Credit first authority with initial mint (credit() returns new immutable
+		// object)
 		AccountBalanceStateImpl firstAuthorityBalance = (AccountBalanceStateImpl) worldState
 				.getBalance(firstAuthorityAddress, Address.NATIVE_TOKEN);
-		firstAuthorityBalance.credit(settings.genesisNetworkInitialMintForAuthority(), GENESIS_HEIGHT, timestamp);
-		worldState.setBalance(firstAuthorityAddress, Address.NATIVE_TOKEN, firstAuthorityBalance);
+		AccountBalanceStateImpl newFirstAuthorityBalance = firstAuthorityBalance
+				.credit(settings.genesisNetworkInitialMintForAuthority(), GENESIS_HEIGHT, timestamp);
+		worldState.setBalance(firstAuthorityAddress, Address.NATIVE_TOKEN, newFirstAuthorityBalance);
 
+		// Credit block reward pool with initial mint
+		// Note: If blockRewardPoolAddress == firstAuthorityAddress, we need to get the
+		// updated balance
 		AccountBalanceStateImpl blockRewardPoolBalance = (AccountBalanceStateImpl) worldState
 				.getBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN);
-		blockRewardPoolBalance.credit(settings.genesisNetworkInitialMintForBlockReward(), GENESIS_HEIGHT, timestamp);
-		worldState.setBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN, blockRewardPoolBalance);
+		AccountBalanceStateImpl newBlockRewardPoolBalance = blockRewardPoolBalance
+				.credit(settings.genesisNetworkInitialMintForBlockReward(), GENESIS_HEIGHT, timestamp);
+		worldState.setBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN, newBlockRewardPoolBalance);
 	}
 
 	@Data

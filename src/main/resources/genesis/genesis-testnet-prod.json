@@ -11,7 +11,7 @@
   },
   "networkParams": {
     "blockReward": "10000000",
-    "blockRewardPoolAddress": "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76",
+    "blockRewardPoolAddress": "0x2976B7E6deB1bA7197f70E6Bbd15195C90A26cD6",
     "initialMintForBlockReward": "10512000000000",
     "initialMintForAuthority": "8888878376800000000",
     "targetMiningTimeMs": 30000,
@@ -24,7 +24,7 @@
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
   ],
   "genesisBlock": {
-    "timestamp": 1765577191740,
+    "timestamp": 1765578381366,
     "difficulty": "2500"
   },
   "nativeToken": {
