@@ -23,7 +23,7 @@
  */
 package global.goldenera.node.shared.converters;
 
-import global.goldenera.node.core.enums.WebhookEventType;
+import global.goldenera.node.shared.enums.WebhookEventType;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 

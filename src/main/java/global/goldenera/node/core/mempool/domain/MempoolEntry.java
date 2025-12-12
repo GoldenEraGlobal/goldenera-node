@@ -27,8 +27,6 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
 
-import org.springframework.modulith.NamedInterface;
-
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -43,7 +41,6 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = PRIVATE)
 @EqualsAndHashCode(of = "tx", callSuper = false)
 @AllArgsConstructor
-@NamedInterface("mempool-entry")
 public class MempoolEntry {
 
 	@NonNull

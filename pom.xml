@@ -39,7 +39,6 @@
         <guava.version>33.4.0</guava.version>
         <hibernate-validator.version>9.1.0.Final</hibernate-validator.version>
         <okhttp.version>5.3.0</okhttp.version>
-        <spring-modulith.version>1.4.4</spring-modulith.version>
         <rocksdb.version>9.1.0</rocksdb.version>
         <goldenera-randomx.version>0.0.1</goldenera-randomx.version>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
@@ -58,13 +57,6 @@
                 <version>${okhttp.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.modulith</groupId>
-                <artifactId>spring-modulith-bom</artifactId>
-                <version>${spring-modulith.version}</version>
-                <scope>import</scope>
-                <type>pom</type>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -145,11 +137,6 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.springframework.modulith</groupId>
-            <artifactId>spring-modulith-starter-core</artifactId>
-            <version>${spring-modulith.version}</version>
-        </dependency>
-        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
@@ -183,19 +170,16 @@
             <version>${postgresql.version}</version>
             <scope>runtime</scope>
         </dependency>
-
         <dependency>
             <groupId>org.liquibase</groupId>
             <artifactId>liquibase-core</artifactId>
             <version>${liquibase.version}</version>
         </dependency>
-
         <dependency>
             <groupId>org.liquibase.ext</groupId>
             <artifactId>liquibase-hibernate6</artifactId>
             <version>${liquibase.version}</version>
         </dependency>
-
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

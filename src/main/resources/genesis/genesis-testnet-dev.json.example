@@ -13,6 +13,8 @@
   "networkParams": {
     "blockReward": "5000000000",
     "blockRewardPoolAddress": "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76",
+    "initialMintForBlockReward": "10512000000000",
+    "initialMintForAuthority": "8888878376800000000",
     "targetMiningTimeMs": 15000,
     "asertHalfLifeBlocks": 25,
     "minDifficulty": "500",

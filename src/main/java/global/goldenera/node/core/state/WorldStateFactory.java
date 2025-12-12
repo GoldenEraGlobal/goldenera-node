@@ -30,7 +30,6 @@ import java.util.function.Function;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
-import org.springframework.modulith.NamedInterface;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
@@ -53,7 +52,6 @@ import lombok.experimental.FieldDefaults;
 @Service
 @RequiredArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-@NamedInterface("world-state-factory")
 public class WorldStateFactory {
 
 	RocksDBMerkleStorageFactory rocksDBMerkleStorageFactory;

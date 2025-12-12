@@ -63,6 +63,7 @@ public record NetworkSettings(
         // Genesis network parameters
         Wei genesisNetworkBlockReward,
         Address genesisNetworkBlockRewardPoolAddress,
+        Wei genesisNetworkInitialMintForBlockReward,
         long genesisNetworkTargetMiningTimeMs,
         long genesisNetworkAsertHalfLifeBlocks,
         BigInteger genesisNetworkMinDifficulty,
@@ -71,6 +72,7 @@ public record NetworkSettings(
 
         // Genesis authorities
         List<Address> genesisAuthorityAddresses,
+        Wei genesisNetworkInitialMintForAuthority,
 
         // Genesis block configuration
         long genesisBlockTimestamp,
@@ -187,12 +189,14 @@ public record NetworkSettings(
                 genesis.bipApprovalThresholdBps(),
                 genesis.genesisNetworkBlockReward(),
                 genesis.genesisNetworkBlockRewardPoolAddress(),
+                genesis.genesisNetworkInitialMintForBlockReward(),
                 genesis.genesisNetworkTargetMiningTimeMs(),
                 genesis.genesisNetworkAsertHalfLifeBlocks(),
                 genesis.genesisNetworkMinDifficulty(),
                 genesis.genesisNetworkMinTxBaseFee(),
                 genesis.genesisNetworkMinTxByteFee(),
                 genesis.genesisAuthorityAddresses(),
+                genesis.genesisNetworkInitialMintForAuthority(),
                 genesis.genesisBlockTimestamp(),
                 genesis.genesisBlockDifficulty(),
                 genesis.genesisNativeTokenName(),

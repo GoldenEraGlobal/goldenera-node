@@ -26,7 +26,7 @@ package global.goldenera.node.shared.api.v1.webhook.dtos;
 import static lombok.AccessLevel.PRIVATE;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.core.enums.WebhookEventType;
+import global.goldenera.node.shared.enums.WebhookEventType;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;

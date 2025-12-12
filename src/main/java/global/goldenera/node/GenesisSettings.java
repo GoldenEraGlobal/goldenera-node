@@ -42,42 +42,44 @@ import global.goldenera.cryptoj.datatypes.Address;
  * - genesis-testnet-dev.json (git-ignored, local development)
  */
 public record GenesisSettings(
-                // Size limits
-                long maxHeaderSizeInBytes,
-                long maxTxSizeInBytes,
-                long maxBlockSizeInBytes,
-                long maxTxCountPerBlock,
+        // Size limits
+        long maxHeaderSizeInBytes,
+        long maxTxSizeInBytes,
+        long maxBlockSizeInBytes,
+        long maxTxCountPerBlock,
 
-                // BIP (Blockchain Improvement Proposal) configuration
-                long bipExpirationPeriodMs,
-                long bipApprovalThresholdBps,
+        // BIP (Blockchain Improvement Proposal) configuration
+        long bipExpirationPeriodMs,
+        long bipApprovalThresholdBps,
 
-                // Genesis network parameters
-                Wei genesisNetworkBlockReward,
-                Address genesisNetworkBlockRewardPoolAddress,
-                long genesisNetworkTargetMiningTimeMs,
-                long genesisNetworkAsertHalfLifeBlocks,
-                BigInteger genesisNetworkMinDifficulty,
-                Wei genesisNetworkMinTxBaseFee,
-                Wei genesisNetworkMinTxByteFee,
+        // Genesis network parameters
+        Wei genesisNetworkBlockReward,
+        Address genesisNetworkBlockRewardPoolAddress,
+        Wei genesisNetworkInitialMintForBlockReward,
+        long genesisNetworkTargetMiningTimeMs,
+        long genesisNetworkAsertHalfLifeBlocks,
+        BigInteger genesisNetworkMinDifficulty,
+        Wei genesisNetworkMinTxBaseFee,
+        Wei genesisNetworkMinTxByteFee,
 
-                // Genesis authorities
-                List<Address> genesisAuthorityAddresses,
+        // Genesis authorities
+        List<Address> genesisAuthorityAddresses,
+        Wei genesisNetworkInitialMintForAuthority,
 
-                // Genesis block configuration
-                long genesisBlockTimestamp,
-                BigInteger genesisBlockDifficulty,
+        // Genesis block configuration
+        long genesisBlockTimestamp,
+        BigInteger genesisBlockDifficulty,
 
-                // Native token configuration
-                String genesisNativeTokenName,
-                String genesisNativeTokenTicker,
-                int genesisNativeTokenDecimals,
-                String genesisNativeTokenWebsite,
-                String genesisNativeTokenLogo,
-                boolean genesisNativeTokenUserBurnable,
+        // Native token configuration
+        String genesisNativeTokenName,
+        String genesisNativeTokenTicker,
+        int genesisNativeTokenDecimals,
+        String genesisNativeTokenWebsite,
+        String genesisNativeTokenLogo,
+        boolean genesisNativeTokenUserBurnable,
 
-                // RandomX configuration
-                long randomXEpochLength,
-                String randomXGenesisKey,
-                int randomXBatchSize) {
+        // RandomX configuration
+        long randomXEpochLength,
+        String randomXGenesisKey,
+        int randomXBatchSize) {
 }

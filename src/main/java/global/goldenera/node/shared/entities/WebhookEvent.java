@@ -31,9 +31,9 @@ import java.util.Map;
 import org.hibernate.annotations.Type;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.core.enums.WebhookEventType;
 import global.goldenera.node.shared.converters.AddressConverter;
 import global.goldenera.node.shared.converters.WebhookEventTypeConverter;
+import global.goldenera.node.shared.enums.WebhookEventType;
 import io.hypersistence.utils.hibernate.type.json.JsonType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;

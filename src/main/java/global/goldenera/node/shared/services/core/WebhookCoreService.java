@@ -42,10 +42,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.core.enums.WebhookEventType;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.entities.WebhookEvent;
+import global.goldenera.node.shared.enums.WebhookEventType;
 import global.goldenera.node.shared.events.WebhookEventsUpdateEvent;
 import global.goldenera.node.shared.events.WebhookUpdateEvent;
 import global.goldenera.node.shared.exceptions.GENotFoundException;

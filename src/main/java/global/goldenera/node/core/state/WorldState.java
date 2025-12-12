@@ -35,7 +35,6 @@ import java.util.function.Function;
 import org.apache.tuweni.bytes.Bytes;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.WriteBatch;
-import org.springframework.modulith.NamedInterface;
 
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
@@ -78,7 +77,6 @@ import lombok.experimental.FieldDefaults;
 @Getter
 @RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-@NamedInterface("world-state")
 public class WorldState {
 
 	// MODE FLAG

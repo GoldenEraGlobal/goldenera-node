@@ -41,11 +41,11 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.core.enums.WebhookEventType;
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookEventDtoV1;
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookEventDtoV1_Page;
 import global.goldenera.node.shared.api.v1.webhook.mappers.WebhookEventMapper;
 import global.goldenera.node.shared.entities.ApiKey;
+import global.goldenera.node.shared.enums.WebhookEventType;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.services.webhook.WebhookEventService;

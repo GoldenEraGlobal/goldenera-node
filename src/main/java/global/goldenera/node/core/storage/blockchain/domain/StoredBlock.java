@@ -30,8 +30,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.modulith.NamedInterface;
-
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
@@ -50,7 +48,6 @@ import lombok.experimental.FieldDefaults;
 @Getter
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-@NamedInterface("stored-block")
 public class StoredBlock {
 
 	// Raw consensus data

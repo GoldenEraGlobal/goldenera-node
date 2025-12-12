@@ -23,13 +23,10 @@
  */
 package global.goldenera.node.core.state;
 
-import org.springframework.modulith.NamedInterface;
-
 import global.goldenera.cryptoj.common.state.StateDiff;
 import lombok.Value;
 
 @Value
-@NamedInterface("world-state-diff")
 public class WorldStateDiff<T> implements StateDiff<T> {
 	T oldValue;
 	T newValue;

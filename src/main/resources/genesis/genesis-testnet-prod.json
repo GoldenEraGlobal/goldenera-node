@@ -12,6 +12,8 @@
   "networkParams": {
     "blockReward": "10000000",
     "blockRewardPoolAddress": "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76",
+    "initialMintForBlockReward": "10512000000000",
+    "initialMintForAuthority": "8888878376800000000",
     "targetMiningTimeMs": 30000,
     "asertHalfLifeBlocks": 64,
     "minDifficulty": "1000",
@@ -22,7 +24,7 @@
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
   ],
   "genesisBlock": {
-    "timestamp": 1765488799323,
+    "timestamp": 1765576158657,
     "difficulty": "1000"
   },
   "nativeToken": {
@@ -34,8 +36,8 @@
     "userBurnable": false
   },
   "randomX": {
-    "epochLength": 10240,
-    "genesisKey": "T_GLDNR_RNDX_GENESIS_KEY",
+    "epochLength": 1024,
+    "genesisKey": "T_GLDNR_RNDX_GENESIS_KEY_V1",
     "batchSize": 32768
   }
 }

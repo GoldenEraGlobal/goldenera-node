@@ -41,12 +41,14 @@ import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.Constants;
+import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -193,8 +195,33 @@ public class ExIndexerEventReconstructionService {
                         }
                 }
 
-                // Genesis has no balance changes, nonce changes, bip changes, or aliases
-                Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs = Collections.emptyMap();
+                // 4. Balance Diffs: Create diffs for genesis initial mints
+                Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs = new LinkedHashMap<>();
+                NetworkSettings settings = Constants.getSettings();
+
+                // First authority balance
+                Address firstAuthority = authorityAddresses.get(0);
+                Wei authorityMint = settings.genesisNetworkInitialMintForAuthority();
+                if (authorityMint.compareTo(Wei.ZERO) > 0) {
+                        BalanceKey authorityKey = new BalanceKey(firstAuthority, Address.NATIVE_TOKEN);
+                        AccountBalanceState authorityBalance = genesisState.getBalance(firstAuthority,
+                                        Address.NATIVE_TOKEN);
+                        balanceDiffs.put(authorityKey,
+                                        new WorldStateDiff<>(AccountBalanceStateImpl.ZERO, authorityBalance));
+                }
+
+                // Block reward pool balance
+                Address blockRewardPool = settings.genesisNetworkBlockRewardPoolAddress();
+                Wei blockRewardMint = settings.genesisNetworkInitialMintForBlockReward();
+                if (blockRewardMint.compareTo(Wei.ZERO) > 0) {
+                        BalanceKey rewardPoolKey = new BalanceKey(blockRewardPool, Address.NATIVE_TOKEN);
+                        AccountBalanceState rewardPoolBalance = genesisState.getBalance(blockRewardPool,
+                                        Address.NATIVE_TOKEN);
+                        balanceDiffs.put(rewardPoolKey,
+                                        new WorldStateDiff<>(AccountBalanceStateImpl.ZERO, rewardPoolBalance));
+                }
+
+                // Genesis has no nonce changes, bip changes, or aliases
                 Map<Address, StateDiff<AccountNonceState>> nonceDiffs = Collections.emptyMap();
                 Map<Hash, StateDiff<BipState>> bipDiffs = Collections.emptyMap();
 

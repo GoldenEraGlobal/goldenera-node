@@ -43,6 +43,8 @@ import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.node.Constants;
+import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.explorer.entities.ExNetworkParams;
 import global.goldenera.node.explorer.entities.ExTransfer;
@@ -74,6 +76,12 @@ public class ExIndexerTxToTransferMapper {
 				.blockHash(block.getHash())
 				.blockHeight(block.getHeight())
 				.timestamp(block.getHeader().getTimestamp());
+
+		// 0. GENESIS BLOCK: Special handling for initial token mints
+		if (block.getHeight() == 0) {
+			processGenesisMints(baseBuilder, transfers);
+			return transfers; // Genesis has no other transfers
+		}
 
 		Wei reward = event.getMinerActualRewardPaid();
 		Wei fees = event.getMinerTotalFees();
@@ -134,6 +142,7 @@ public class ExIndexerTxToTransferMapper {
 					.nonce(tx.getNonce())
 					.message(tx.getMessage())
 					.txIndex(txIndex)
+					.timestamp(tx.getTimestamp())
 					.build());
 		}
 	}
@@ -183,6 +192,49 @@ public class ExIndexerTxToTransferMapper {
 		}
 	}
 
+	/**
+	 * Creates MINT transfers for the initial genesis token distribution.
+	 * At genesis, tokens are minted to:
+	 * 1. First authority address (initial operating funds)
+	 * 2. Block reward pool address (block rewards for first year)
+	 */
+	private void processGenesisMints(ExTransfer.ExTransferBuilder baseBuilder, List<ExTransfer> transfers) {
+		NetworkSettings settings = Constants.getSettings();
+
+		Address firstAuthority = settings.genesisAuthorityAddresses().get(0);
+		Address blockRewardPool = settings.genesisNetworkBlockRewardPoolAddress();
+
+		Wei authorityMint = settings.genesisNetworkInitialMintForAuthority();
+		Wei blockRewardMint = settings.genesisNetworkInitialMintForBlockReward();
+
+		log.info("Processing genesis mints: Authority={} ({}), BlockRewardPool={} ({})",
+				firstAuthority, authorityMint, blockRewardPool, blockRewardMint);
+
+		// Mint to first authority
+		if (authorityMint.compareTo(Wei.ZERO) > 0) {
+			transfers.add(baseBuilder.build().toBuilder()
+					.txHash(null)
+					.type(TransferType.MINT)
+					.from(NULL_ADDRESS)
+					.to(firstAuthority)
+					.amount(authorityMint)
+					.tokenAddress(NATIVE_TOKEN_ADDRESS)
+					.build());
+		}
+
+		// Mint to block reward pool
+		if (blockRewardMint.compareTo(Wei.ZERO) > 0) {
+			transfers.add(baseBuilder.build().toBuilder()
+					.txHash(null)
+					.type(TransferType.MINT)
+					.from(NULL_ADDRESS)
+					.to(blockRewardPool)
+					.amount(blockRewardMint)
+					.tokenAddress(NATIVE_TOKEN_ADDRESS)
+					.build());
+		}
+	}
+
 	private Address resolveRewardPoolAddress(BlockConnectedEvent event) {
 		StateDiff<NetworkParamsState> diff = event.getNetworkParamsDiff();
 		if (diff != null) {
@@ -201,9 +253,5 @@ public class ExIndexerTxToTransferMapper {
 					return addr;
 				})
 				.orElse(NULL_ADDRESS);
-	}
-
-	private boolean isUserPaidFee(TxType type) {
-		return type == TxType.TRANSFER;
 	}
 }

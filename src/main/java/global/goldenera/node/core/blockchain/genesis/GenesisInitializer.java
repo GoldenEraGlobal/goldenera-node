@@ -36,6 +36,7 @@ import org.springframework.stereotype.Service;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.BlockImpl;
+import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
@@ -83,7 +84,7 @@ public class GenesisInitializer {
 		List<Address> authorities = settings.genesisAuthorityAddresses();
 
 		if (authorities.isEmpty()) {
-			throw new GEFailedException("Genesis authorities are empty");
+			throw new GEFailedException("Cannot initialize genesis block. Initial genesis authorities are empty");
 		}
 
 		WorldState worldState = worldStateFactory.createForValidation(MerkleTrie.EMPTY_TRIE_NODE_HASH);
@@ -117,6 +118,9 @@ public class GenesisInitializer {
 
 	private void executeGenesisStateExplicitly(WorldState worldState, List<Address> authorities, Instant timestamp) {
 		NetworkSettings settings = Constants.getSettings();
+		Wei totalSupply = settings.genesisNetworkInitialMintForAuthority()
+				.addExact(settings.genesisNetworkInitialMintForBlockReward());
+
 		// 1. Network Params
 		NetworkParamsStateImpl params = NetworkParamsStateImpl.builder()
 				.version(NetworkParamsStateVersion.V1)
@@ -145,7 +149,7 @@ public class GenesisInitializer {
 				.logoUrl(settings.genesisNativeTokenLogo())
 				.userBurnable(settings.genesisNativeTokenUserBurnable())
 				.maxSupply(null) // Native token has no max supply
-				.totalSupply(Wei.ZERO)
+				.totalSupply(totalSupply)
 				.originTxHash(Hash.ZERO)
 				.updatedByTxHash(Hash.ZERO)
 				.updatedAtBlockHeight(GENESIS_HEIGHT)
@@ -163,6 +167,19 @@ public class GenesisInitializer {
 					.build();
 			worldState.addAuthority(authority, authState);
 		}
+
+		Address firstAuthorityAddress = authorities.get(0);
+		Address blockRewardPoolAddress = settings.genesisNetworkBlockRewardPoolAddress();
+
+		AccountBalanceStateImpl firstAuthorityBalance = (AccountBalanceStateImpl) worldState
+				.getBalance(firstAuthorityAddress, Address.NATIVE_TOKEN);
+		firstAuthorityBalance.credit(settings.genesisNetworkInitialMintForAuthority(), GENESIS_HEIGHT, timestamp);
+		worldState.setBalance(firstAuthorityAddress, Address.NATIVE_TOKEN, firstAuthorityBalance);
+
+		AccountBalanceStateImpl blockRewardPoolBalance = (AccountBalanceStateImpl) worldState
+				.getBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN);
+		blockRewardPoolBalance.credit(settings.genesisNetworkInitialMintForBlockReward(), GENESIS_HEIGHT, timestamp);
+		worldState.setBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN, blockRewardPoolBalance);
 	}
 
 	@Data

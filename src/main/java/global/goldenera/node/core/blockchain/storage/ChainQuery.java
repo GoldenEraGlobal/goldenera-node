@@ -32,7 +32,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import org.springframework.modulith.NamedInterface;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Tx;
@@ -69,7 +68,6 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-@NamedInterface("chain-query-service")
 public class ChainQuery {
 
     BlockRepository blockRepository;

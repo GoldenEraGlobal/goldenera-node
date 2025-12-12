@@ -110,6 +110,8 @@ public class GenesisConfigLoader {
         JsonNode networkParams = requireNode(root, "networkParams");
         Wei blockReward = Wei.valueOf(new BigInteger(requireString(networkParams, "blockReward")));
         Address blockRewardPoolAddress = Address.fromHexString(requireString(networkParams, "blockRewardPoolAddress"));
+        Wei initialMintForBlockReward = Wei
+                .valueOf(new BigInteger(requireString(networkParams, "initialMintForBlockReward")));
         long targetMiningTimeMs = requireLong(networkParams, "targetMiningTimeMs");
         long asertHalfLifeBlocks = requireLong(networkParams, "asertHalfLifeBlocks");
         BigInteger minDifficulty = new BigInteger(requireString(networkParams, "minDifficulty"));
@@ -119,6 +121,8 @@ public class GenesisConfigLoader {
         // Authorities
         JsonNode authoritiesNode = requireNode(root, "authorities");
         List<Address> authorities = parseAddressList(authoritiesNode);
+        Wei initialMintForAuthority = Wei
+                .valueOf(new BigInteger(requireString(networkParams, "initialMintForAuthority")));
 
         // Genesis block
         JsonNode genesisBlock = requireNode(root, "genesisBlock");
@@ -149,12 +153,14 @@ public class GenesisConfigLoader {
                 bipApprovalThresholdBps,
                 blockReward,
                 blockRewardPoolAddress,
+                initialMintForBlockReward,
                 targetMiningTimeMs,
                 asertHalfLifeBlocks,
                 minDifficulty,
                 minTxBaseFee,
                 minTxByteFee,
                 authorities,
+                initialMintForAuthority,
                 genesisBlockTimestamp,
                 genesisBlockDifficulty,
                 tokenName,

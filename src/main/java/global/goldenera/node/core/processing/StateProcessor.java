@@ -34,7 +34,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
-import org.springframework.modulith.NamedInterface;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
@@ -68,7 +67,6 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
-@NamedInterface("state-processor")
 public class StateProcessor {
 
 	Map<TxType, TxHandler> handlers = new EnumMap<>(TxType.class);
@@ -258,6 +256,8 @@ public class StateProcessor {
 	private boolean isUserPaidFee(TxType type) {
 		switch (type) {
 			case TRANSFER:
+			case BIP_CREATE:
+			case BIP_VOTE:
 				return true;
 			default:
 				return false;
@@ -269,7 +269,6 @@ public class StateProcessor {
 	@AllArgsConstructor
 	@EqualsAndHashCode(of = "height", callSuper = false)
 	@Builder
-	@NamedInterface("state-processor-simple-block")
 	public static class SimpleBlock {
 		long height;
 		Instant timestamp;
@@ -291,7 +290,6 @@ public class StateProcessor {
 	@Data
 	@AllArgsConstructor
 	@Builder
-	@NamedInterface("state-processor-execution-result")
 	public static class ExecutionResult {
 		List<Tx> validTxs;
 		List<Tx> invalidTxs;

@@ -29,8 +29,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
-import global.goldenera.node.core.enums.WebhookEventType;
-import global.goldenera.node.core.enums.WebhookTxStatus;
+import global.goldenera.node.shared.enums.WebhookEventType;
+import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
 
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.EXISTING_PROPERTY, property = "type", visible = true)
