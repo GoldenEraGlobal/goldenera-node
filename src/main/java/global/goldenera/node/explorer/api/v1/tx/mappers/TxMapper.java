@@ -125,7 +125,7 @@ public class TxMapper {
                 yield d;
             }
             case TxBipValidatorRemovePayload p -> {
-                var d = new TxPayloadDtoV1.AuthorityRemove();
+                var d = new TxPayloadDtoV1.ValidatorRemove();
                 d.setAddress(p.getAddress());
                 yield d;
             }
