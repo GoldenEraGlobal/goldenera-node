@@ -137,7 +137,7 @@ public class WorldStateFactory {
 				mainTrie, KEY_AUTHORITY, nodeLoader, authoritySerializer, authorityDeserializer);
 
 		MerkleTrie<Bytes, ValidatorState> validatorTrie = loadSubTrie(
-				mainTrie, KEY_AUTHORITY, nodeLoader, validatorSerializer, validatorDeserializer);
+				mainTrie, KEY_VALIDATOR, nodeLoader, validatorSerializer, validatorDeserializer);
 
 		MerkleTrie<Bytes, AddressAliasState> addressAliasTrie = loadSubTrie(
 				mainTrie, KEY_ADDRESS_ALIAS, nodeLoader, addressAliasSerializer, addressAliasDeserializer);
