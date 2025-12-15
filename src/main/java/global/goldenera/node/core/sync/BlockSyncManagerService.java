@@ -54,6 +54,7 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.BlockImpl;
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.Constants;
@@ -387,12 +388,21 @@ public class BlockSyncManagerService {
 							.txs(txs)
 							.build();
 
+					Address minerIdentity = block.getHeader().getIdentity();
+					if (minerIdentity == null) {
+						throw new GEValidationException("Critical: Header identity is null for block " + height);
+					}
+					Address peerIdentity = peer.getIdentity();
+					if (peerIdentity == null) {
+						throw new GEValidationException("Critical: Peer identity is null during sync");
+					}
+
 					StoredBlock storedBlock = StoredBlock.builder()
 							.block(block)
 							.cumulativeDifficulty(currentCumulativeDifficulty)
-							.identity(block.getHeader().getIdentity())
+							.identity(minerIdentity)
 							.receivedAt(block.getHeader().getTimestamp())
-							.receivedFrom(peer.getIdentity())
+							.receivedFrom(peerIdentity)
 							.connectedSource(ConnectedSource.REORG)
 							.computeIndexes()
 							.build();
