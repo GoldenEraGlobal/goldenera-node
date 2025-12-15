@@ -39,6 +39,8 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipVotePayload;
 import global.goldenera.node.core.api.v1.blockchain.dtos.TxDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.TxPayloadDtoV1;
@@ -105,6 +107,16 @@ public class TxMapper {
             }
             case TxBipAuthorityRemovePayload p -> {
                 var d = new TxPayloadDtoV1.AuthorityRemove();
+                d.setAddress(p.getAddress());
+                yield d;
+            }
+            case TxBipValidatorAddPayload p -> {
+                var d = new TxPayloadDtoV1.ValidatorAdd();
+                d.setAddress(p.getAddress());
+                yield d;
+            }
+            case TxBipValidatorRemovePayload p -> {
+                var d = new TxPayloadDtoV1.ValidatorRemove();
                 d.setAddress(p.getAddress());
                 yield d;
             }
