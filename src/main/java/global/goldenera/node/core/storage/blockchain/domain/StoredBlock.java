@@ -256,6 +256,7 @@ public class StoredBlock {
 				.isPartial(this.isPartial)
 				.hash(this.hash)
 				.blockSize(this.blockSize)
+				.identity(this.identity)
 				.encodedSize(this.encodedSize)
 				.txIndex(this.txIndex)
 				.events(this.events);

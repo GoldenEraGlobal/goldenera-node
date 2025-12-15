@@ -122,6 +122,7 @@ public class GenesisInitializer {
 		NetworkSettings settings = Constants.getSettings();
 		Wei totalSupply = settings.genesisNetworkInitialMintForAuthority()
 				.addExact(settings.genesisNetworkInitialMintForBlockReward());
+		List<Address> validators = settings.genesisValidatorAddresses();
 
 		// 1. Network Params
 		NetworkParamsStateImpl params = NetworkParamsStateImpl.builder()
@@ -135,6 +136,7 @@ public class GenesisInitializer {
 				.minTxBaseFee(settings.genesisNetworkMinTxBaseFee())
 				.minTxByteFee(settings.genesisNetworkMinTxByteFee())
 				.currentAuthorityCount(authorities.size())
+				.currentValidatorCount(validators.size())
 				.updatedByTxHash(Hash.ZERO)
 				.updatedAtBlockHeight(GENESIS_HEIGHT)
 				.updatedAtTimestamp(timestamp)
@@ -171,7 +173,6 @@ public class GenesisInitializer {
 		}
 
 		// 4. Validators
-		List<Address> validators = settings.genesisValidatorAddresses();
 		for (Address validator : validators) {
 			ValidatorStateImpl validatorState = ValidatorStateImpl.builder()
 					.version(ValidatorStateVersion.V1)
