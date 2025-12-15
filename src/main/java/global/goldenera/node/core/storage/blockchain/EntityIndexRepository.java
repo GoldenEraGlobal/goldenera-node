@@ -127,6 +127,33 @@ public class EntityIndexRepository {
                     batch.delete(rocksDBRepository.getColumnFamilies().authorities(), key);
                 }
 
+                // 3. VALIDATORS
+                for (Map.Entry<Address, ValidatorState> entry : worldState.getDirtyValidators().entrySet()) {
+                    Address address = entry.getKey();
+                    ValidatorState newState = entry.getValue();
+                    byte[] key = address.toArray();
+
+                    byte[] oldValueBytes = rocksDBRepository.get(rocksDBRepository.getColumnFamilies().validators(),
+                            key);
+                    undoLog.add(new UndoAction(UndoType.VALIDATOR, address.toHexString(), oldValueBytes));
+
+                    byte[] newValueBytes = objectMapper.writeValueAsBytes(newState);
+                    batch.put(rocksDBRepository.getColumnFamilies().validators(), key, newValueBytes);
+                }
+
+                // Removed validators - Use cached state
+                for (Map.Entry<Address, ValidatorState> entry : worldState.getValidatorsRemovedWithState()
+                        .entrySet()) {
+                    Address address = entry.getKey();
+                    ValidatorState oldState = entry.getValue();
+                    byte[] key = address.toArray();
+
+                    byte[] oldValueBytes = objectMapper.writeValueAsBytes(oldState);
+                    undoLog.add(new UndoAction(UndoType.VALIDATOR, address.toHexString(), oldValueBytes));
+
+                    batch.delete(rocksDBRepository.getColumnFamilies().validators(), key);
+                }
+
             } else {
                 // --- MINING MODE (No Diffs - Fallback to DB Reads) ---
 

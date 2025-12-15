@@ -25,6 +25,7 @@ package global.goldenera.node.core.blockchain.genesis;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,7 +40,6 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
-import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +56,6 @@ public class GenesisStateService {
 
     ChainQuery chainQuery;
     WorldStateFactory worldStateFactory;
-    EntityIndexRepository entityIndexRepository;
 
     // Cached genesis state (lazily initialized, never changes)
     AtomicReference<WorldState> cachedGenesisState = new AtomicReference<>();
@@ -102,26 +101,35 @@ public class GenesisStateService {
 
     /**
      * Gets all authorities with addresses from genesis.
-     * Uses EntityIndexRepository which has the cached authority list.
+     * Reads authorities directly from genesis WorldState using configured
+     * addresses.
      */
     public Map<Address, AuthorityState> getGenesisAuthoritiesWithAddresses() {
-        // For genesis, we load from WorldState directly since EntityIndexRepository
-        // might have current authorities, not genesis authorities
-        // But genesis authorities are the same as defined in Constants, so we can just
-        // enumerate them from the genesis WorldState
         WorldState genesisState = getGenesisState();
-        // Since there's no getAllAuthorities in WorldState, we use
-        // EntityIndexRepository
-        // which caches them. At genesis time, these are the same authorities.
-        return entityIndexRepository.getAllAuthoritiesWithAddresses();
+        Map<Address, AuthorityState> authorities = new LinkedHashMap<>();
+        for (Address address : global.goldenera.node.Constants.getSettings().genesisAuthorityAddresses()) {
+            AuthorityState state = genesisState.getAuthority(address);
+            if (state.exists()) {
+                authorities.put(address, state);
+            }
+        }
+        return authorities;
     }
 
     /**
      * Gets all validators with addresses from genesis.
-     * Uses EntityIndexRepository which has the cached validator list.
+     * Reads validators directly from genesis WorldState using configured addresses.
      */
     public Map<Address, ValidatorState> getGenesisValidatorsWithAddresses() {
-        return entityIndexRepository.getAllValidatorsWithAddresses();
+        WorldState genesisState = getGenesisState();
+        Map<Address, ValidatorState> validators = new LinkedHashMap<>();
+        for (Address address : global.goldenera.node.Constants.getSettings().genesisValidatorAddresses()) {
+            ValidatorState state = genesisState.getValidator(address);
+            if (state.exists()) {
+                validators.put(address, state);
+            }
+        }
+        return validators;
     }
 
     /**
