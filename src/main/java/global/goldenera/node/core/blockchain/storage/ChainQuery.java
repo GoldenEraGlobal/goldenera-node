@@ -488,7 +488,6 @@ public class ChainQuery {
      */
     public Optional<StoredBlock> findCommonAncestor(LinkedHashSet<Hash> locatorHashes) {
         for (Hash hash : locatorHashes) {
-            // Check if it's canonical using header-only (fast)
             Optional<StoredBlock> storedBlock = getCanonicalStoredBlockHeaderByHash(hash);
             if (storedBlock.isPresent()) {
                 return storedBlock;
