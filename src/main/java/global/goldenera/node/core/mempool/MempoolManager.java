@@ -198,6 +198,7 @@ public class MempoolManager {
 
 	public void addTxs(@NonNull List<Tx> txs, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
 			boolean skipValidation) {
+		log.debug("addTxs called: {} txs, reason={}, skipValidation={}", txs.size(), reason, skipValidation);
 		List<MempoolEntry> validEntries = new java.util.ArrayList<>();
 		java.util.Map<Address, Long> chainNonces = new java.util.HashMap<>();
 
@@ -209,18 +210,24 @@ public class MempoolManager {
 					.validateAgainstChainAndMempool(entry, reason, skipValidation);
 
 			if (validationResult.isValid()) {
+				log.debug("Tx {} passed validation", tx.getHash().toShortLogString());
 				validEntries.add(entry);
 				if (tx.getSender() != null) {
 					chainNonces.put(tx.getSender(), validationResult.getCurrentChainNonce());
 				}
+			} else {
+				log.debug("Tx {} FAILED validation: {} (status={})",
+						tx.getHash().toShortLogString(),
+						validationResult.getErrorMessage(),
+						validationResult.getStatus());
 			}
 		}
 
 		if (!validEntries.isEmpty()) {
 			mempoolStore.addTransactions(validEntries, chainNonces, reason);
-			if (validEntries.size() > 50) {
-				log.debug("Mempool batch added {}/{} tx(s)", validEntries.size(), txs.size());
-			}
+			log.debug("Mempool batch added {}/{} tx(s)", validEntries.size(), txs.size());
+		} else {
+			log.debug("No valid txs to add from batch of {}", txs.size());
 		}
 	}
 

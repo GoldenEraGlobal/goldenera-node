@@ -131,6 +131,7 @@ public class MempoolSyncManagerService {
     @Async(P2P_SEND_EXECUTOR)
     public void onMempoolTxsRequested(P2PMempoolTxsRequestedEvent event) {
         List<Hash> requestedHashes = event.getHashes();
+        log.debug("Peer {} requested {} txs from our mempool", event.getPeer().getIdentity(), requestedHashes.size());
         if (requestedHashes.size() > TX_BATCH_SIZE * 2) {
             requestedHashes = requestedHashes.subList(0, TX_BATCH_SIZE * 2);
         }
@@ -140,6 +141,8 @@ public class MempoolSyncManagerService {
                 foundTxs.add(mempoolTx.getTx());
             });
         }
+        log.debug("Responding with {} txs to peer {} (requested {})", foundTxs.size(), event.getPeer().getIdentity(),
+                requestedHashes.size());
         event.getPeer().sendMempoolTxs(foundTxs, event.getRequestId());
     }
 
@@ -150,9 +153,14 @@ public class MempoolSyncManagerService {
     @Async(CORE_TASK_EXECUTOR)
     public void onMempoolTxsReceived(P2PMempoolTxsReceivedEvent event) {
         List<Tx> txs = event.getTxs();
+        log.debug("Received {} txs from peer {}", txs.size(), event.getPeer().getIdentity());
         if (txs.isEmpty())
             return;
 
+        for (Tx tx : txs) {
+            log.debug("Received tx {} type={} from peer {}", tx.getHash().toShortLogString(), tx.getType(),
+                    event.getPeer().getIdentity());
+        }
         mempoolManager.addTxs(txs, event.getPeer().getIdentity(), MempoolTxAddEvent.AddReason.SYNC, true);
     }
 

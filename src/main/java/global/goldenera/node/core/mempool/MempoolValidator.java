@@ -143,6 +143,8 @@ public class MempoolValidator {
 	 */
 	private MempoolValidationResult validateUserTx(Tx tx, WorldState worldstate) {
 		Address sender = tx.getSender();
+		log.debug("validateUserTx: hash={}, type={}, sender={}",
+				tx.getHash().toShortLogString(), tx.getType(), sender.toChecksumAddress());
 
 		// 4a. Check Nonce (applies to ALL user txs)
 		AccountNonceState confirmedNonceState = worldstate.getNonce(sender);
