@@ -23,9 +23,15 @@
   "authorities": [
     "0x1B4148166C78DBcd66Ffc195ded697dBd681bbD6"
   ],
-  "validators": [],
+  "validators": [
+    "0x7E5D36a8f548B876e78d9e9d5FB888d56f5f93e3",
+    "0xeB73071CeB13D379F5e7CFcda1Feaea15A7B2540",
+    "0x2e0b52FB505D439D94Fe91193Fbeb0f5E6F51792",
+    "0x76b567Eccdf45e5328641197C020Be76E7b00E90",
+    "0x6ab6bb4300C38904A8A2e1832e689308d7EF62e2"
+  ],
   "genesisBlock": {
-    "timestamp": 1765618544588,
+    "timestamp": 1765813444964,
     "difficulty": "10000"
   },
   "nativeToken": {

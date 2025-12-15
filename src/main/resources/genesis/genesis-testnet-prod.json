@@ -23,9 +23,11 @@
   "authorities": [
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
   ],
-  "validators": [],
+  "validators": [
+    "0x42932eBBBd0e9f7Df70313F8b0B7633dc65852a1"
+  ],
   "genesisBlock": {
-    "timestamp": 1765578381366,
+    "timestamp": 1765813444964,
     "difficulty": "2500"
   },
   "nativeToken": {
