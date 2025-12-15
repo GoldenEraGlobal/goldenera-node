@@ -126,6 +126,7 @@ public class StateMapper {
                 .minTxBaseFee(in.getMinTxBaseFee())
                 .minTxByteFee(in.getMinTxByteFee())
                 .currentAuthorityCount(in.getCurrentAuthorityCount())
+                .currentValidatorCount(in.getCurrentValidatorCount())
                 .updatedByTxHash(in.getUpdatedByTxHash())
                 .updatedAtBlockHeight(in.getUpdatedAtBlockHeight())
                 .updatedAtTimestamp(in.getUpdatedAtTimestamp())
