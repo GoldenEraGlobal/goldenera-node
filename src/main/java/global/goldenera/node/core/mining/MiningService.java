@@ -247,8 +247,16 @@ public class MiningService {
 				}
 
 				// 2. Assemble Block Candidate
-				MiningBlockAssemblerService.AssembledBlock assembledBlock = miningBlockAssemblerService
-						.createBlockTemplate(parentBlock);
+				var assembledBlockOpt = miningBlockAssemblerService.createBlockTemplate(parentBlock);
+
+				// Skip if not a validator
+				if (assembledBlockOpt.isEmpty()) {
+					// Not a validator - sleep and retry later
+					Thread.sleep(10000); // Check again in 10 seconds
+					continue;
+				}
+
+				MiningBlockAssemblerService.AssembledBlock assembledBlock = assembledBlockOpt.get();
 
 				// Cleanup invalid TXs from mempool if assembler found them
 				if (assembledBlock.getInvalidTxs() != null && !assembledBlock.getInvalidTxs().isEmpty()) {

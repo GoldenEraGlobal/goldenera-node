@@ -43,13 +43,13 @@ import global.goldenera.node.explorer.api.v1.blockheader.dtos.BlockHeaderDtoV1_P
 import global.goldenera.node.explorer.api.v1.blockheader.mappers.BlockHeaderMapper;
 import global.goldenera.node.explorer.services.core.ExBlockHeaderCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
+@ExplorerApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
 @RequestMapping(value = "api/explorer/v1/block-header")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
@@ -76,6 +76,7 @@ public class BlockHeaderApiV1 {
                         @RequestParam int pageSize,
                         @RequestParam(required = false) Sort.Direction direction,
                         @RequestParam(required = false) Address coinbase,
+                        @RequestParam(required = false) Address identity,
                         @RequestParam(required = false) Instant timestampFrom,
                         @RequestParam(required = false) Instant timestampTo,
                         @RequestParam(required = false) Integer minNumberOfTxs) {
@@ -85,6 +86,7 @@ public class BlockHeaderApiV1 {
                                                 pageSize,
                                                 direction,
                                                 coinbase,
+                                                identity,
                                                 timestampFrom,
                                                 timestampTo,
                                                 minNumberOfTxs));
@@ -95,12 +97,14 @@ public class BlockHeaderApiV1 {
                         @RequestParam long fromHeight,
                         @RequestParam long toHeight,
                         @RequestParam(required = false) Address coinbase,
+                        @RequestParam(required = false) Address identity,
                         @RequestParam(required = false) Integer minNumberOfTransactions) {
                 return blockMapper.map(
                                 exBlockHeaderCoreService.findByHeightRange(
                                                 fromHeight,
                                                 toHeight,
                                                 coinbase,
+                                                identity,
                                                 minNumberOfTransactions));
         }
 

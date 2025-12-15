@@ -134,6 +134,7 @@ public class ExBlockHeaderCoreService {
             int pageSize,
             Sort.Direction direction,
             Address coinbase,
+            Address identity,
             Instant timestampFrom,
             Instant timestampTo,
             Integer minNumberOfTxs) {
@@ -142,6 +143,9 @@ public class ExBlockHeaderCoreService {
             List<Predicate> predicates = new ArrayList<>();
             if (coinbase != null) {
                 predicates.add(cb.equal(root.get("coinbase"), coinbase.toArray()));
+            }
+            if (identity != null) {
+                predicates.add(cb.equal(root.get("identity"), identity.toArray()));
             }
             if (timestampFrom != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("timestamp"), timestampFrom));
@@ -186,6 +190,7 @@ public class ExBlockHeaderCoreService {
             long fromHeight,
             long toHeight,
             Address coinbase,
+            Address identity,
             Integer minNumberOfTxs) {
         PaginationUtil.validateRangeRequest(fromHeight, toHeight, MAX_BLOCK_HEADER_RANGE);
 
@@ -195,6 +200,9 @@ public class ExBlockHeaderCoreService {
 
             if (coinbase != null) {
                 predicates.add(cb.equal(root.get("coinbase"), coinbase.toArray()));
+            }
+            if (identity != null) {
+                predicates.add(cb.equal(root.get("identity"), identity.toArray()));
             }
             if (minNumberOfTxs != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("numberOfTxs"), minNumberOfTxs));

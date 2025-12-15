@@ -41,10 +41,12 @@ import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
+import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.Constants;
@@ -134,6 +136,9 @@ public class ExIndexerEventReconstructionService {
                                 worldState.getDirtyAuthorities(),
                                 worldState.getAuthoritiesRemovedWithState(),
 
+                                worldState.getDirtyValidators(),
+                                worldState.getValidatorsRemovedWithState(),
+
                                 worldState.getDirtyAddressAliases(),
                                 worldState.getAliasesRemovedWithState(),
 
@@ -195,6 +200,16 @@ public class ExIndexerEventReconstructionService {
                         }
                 }
 
+                // 3b. Validators: Read from Constants (addresses only) and get state from trie
+                List<Address> validatorAddresses = Constants.getSettings().genesisValidatorAddresses();
+                Map<Address, ValidatorState> validatorsToAdd = new LinkedHashMap<>();
+                for (Address validator : validatorAddresses) {
+                        ValidatorState validatorState = genesisState.getValidator(validator);
+                        if (!ValidatorStateImpl.ZERO.equals(validatorState)) {
+                                validatorsToAdd.put(validator, validatorState);
+                        }
+                }
+
                 // 4. Balance Diffs: Create diffs for genesis initial mints
                 Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs = new LinkedHashMap<>();
                 NetworkSettings settings = Constants.getSettings();
@@ -238,6 +253,9 @@ public class ExIndexerEventReconstructionService {
 
                                 authoritiesToAdd,
                                 Collections.emptyMap(), // No authorities removed in genesis
+
+                                validatorsToAdd,
+                                Collections.emptyMap(), // No validators removed in genesis
 
                                 Collections.emptyMap(), // No aliases added in genesis
                                 Collections.emptyMap(), // No aliases removed in genesis

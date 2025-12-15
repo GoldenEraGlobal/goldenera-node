@@ -42,6 +42,8 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipVotePayload;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
@@ -50,6 +52,7 @@ import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
+import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
@@ -57,6 +60,7 @@ import global.goldenera.cryptoj.enums.state.AddressAliasStateVersion;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.processing.TxExecutionContext;
 import global.goldenera.node.core.state.WorldState;
@@ -138,6 +142,9 @@ public class BipVoteHandler implements TxHandler {
 					actualBurnAmounts);
 			case BIP_AUTHORITY_ADD -> processAuthorityAdd(state, (TxBipAuthorityAddPayload) payload, block, bipHash);
 			case BIP_AUTHORITY_REMOVE -> processAuthorityRemove(state, (TxBipAuthorityRemovePayload) payload, block,
+					bipHash);
+			case BIP_VALIDATOR_ADD -> processValidatorAdd(state, (TxBipValidatorAddPayload) payload, block, bipHash);
+			case BIP_VALIDATOR_REMOVE -> processValidatorRemove(state, (TxBipValidatorRemovePayload) payload, block,
 					bipHash);
 			case BIP_NETWORK_PARAMS_SET -> processParamsSet(state, (TxBipNetworkParamsSetPayload) payload, block,
 					bipHash);
@@ -263,6 +270,29 @@ public class BipVoteHandler implements TxHandler {
 
 		NetworkParamsStateImpl oldParams = (NetworkParamsStateImpl) state.getParams();
 		state.setParams(oldParams.decrementAuthorityCount(bipHash, block.getHeight(), block.getTimestamp()));
+	}
+
+	private void processValidatorAdd(WorldState state, TxBipValidatorAddPayload p, SimpleBlock block, Hash bipHash) {
+		checkArgument(!state.getValidator(p.getAddress()).exists(), "Validator exists");
+
+		state.addValidator(p.getAddress(), ValidatorStateImpl.builder()
+				.version(ValidatorStateVersion.V1)
+				.originTxHash(bipHash)
+				.createdAtBlockHeight(block.getHeight())
+				.createdAtTimestamp(block.getTimestamp())
+				.build());
+
+		NetworkParamsStateImpl oldParams = (NetworkParamsStateImpl) state.getParams();
+		state.setParams(oldParams.incrementValidatorCount(bipHash, block.getHeight(), block.getTimestamp()));
+	}
+
+	private void processValidatorRemove(WorldState state, TxBipValidatorRemovePayload p, SimpleBlock block,
+			Hash bipHash) {
+		checkArgument(state.getValidator(p.getAddress()).exists(), "Validator missing");
+		state.removeValidator(p.getAddress());
+
+		NetworkParamsStateImpl oldParams = (NetworkParamsStateImpl) state.getParams();
+		state.setParams(oldParams.decrementValidatorCount(bipHash, block.getHeight(), block.getTimestamp()));
 	}
 
 	private void processParamsSet(WorldState state, TxBipNetworkParamsSetPayload p, SimpleBlock block, Hash bipHash) {

@@ -35,6 +35,7 @@ import global.goldenera.node.core.storage.blockchain.serialization.events.BlockE
 import global.goldenera.node.core.storage.blockchain.serialization.events.BlockRewardCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.FeesCollectedCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.GenericPayloadEventCodec;
+import global.goldenera.node.core.storage.blockchain.serialization.events.NetworkParamsUpdatedCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.TokenBurnedCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.TokenCreatedCodec;
 import global.goldenera.node.core.storage.blockchain.serialization.events.TokenSupplyUpdatedCodec;
@@ -68,6 +69,10 @@ public class BlockEventDecoder {
 				BlockEvent.AuthorityAdded::payload, BlockEvent.AuthorityAdded::txVersion));
 		codecs.put(BlockEventType.AUTHORITY_REMOVED, new GenericPayloadEventCodec<>(BlockEvent.AuthorityRemoved::new,
 				BlockEvent.AuthorityRemoved::payload, BlockEvent.AuthorityRemoved::txVersion));
+		codecs.put(BlockEventType.VALIDATOR_ADDED, new GenericPayloadEventCodec<>(BlockEvent.ValidatorAdded::new,
+				BlockEvent.ValidatorAdded::payload, BlockEvent.ValidatorAdded::txVersion));
+		codecs.put(BlockEventType.VALIDATOR_REMOVED, new GenericPayloadEventCodec<>(BlockEvent.ValidatorRemoved::new,
+				BlockEvent.ValidatorRemoved::payload, BlockEvent.ValidatorRemoved::txVersion));
 		codecs.put(BlockEventType.NETWORK_PARAMS_CHANGED,
 				new GenericPayloadEventCodec<>(BlockEvent.NetworkParamsChanged::new,
 						BlockEvent.NetworkParamsChanged::payload, BlockEvent.NetworkParamsChanged::txVersion));
@@ -78,6 +83,7 @@ public class BlockEventDecoder {
 						BlockEvent.AddressAliasRemoved::payload, BlockEvent.AddressAliasRemoved::txVersion));
 		codecs.put(BlockEventType.BIP_STATE_CREATED, BipStateCodec.CREATED_INSTANCE);
 		codecs.put(BlockEventType.BIP_STATE_UPDATED, BipStateCodec.UPDATED_INSTANCE);
+		codecs.put(BlockEventType.NETWORK_PARAMS_UPDATED, NetworkParamsUpdatedCodec.INSTANCE);
 	}
 
 	/**

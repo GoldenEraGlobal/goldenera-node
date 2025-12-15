@@ -40,6 +40,7 @@ import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
+import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
@@ -47,6 +48,7 @@ import global.goldenera.cryptoj.enums.BlockVersion;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.node.Constants;
 import global.goldenera.node.NetworkSettings;
@@ -168,6 +170,18 @@ public class GenesisInitializer {
 			worldState.addAuthority(authority, authState);
 		}
 
+		// 4. Validators
+		List<Address> validators = settings.genesisValidatorAddresses();
+		for (Address validator : validators) {
+			ValidatorStateImpl validatorState = ValidatorStateImpl.builder()
+					.version(ValidatorStateVersion.V1)
+					.originTxHash(Hash.ZERO)
+					.createdAtBlockHeight(GENESIS_HEIGHT)
+					.createdAtTimestamp(timestamp)
+					.build();
+			worldState.addValidator(validator, validatorState);
+		}
+
 		Address firstAuthorityAddress = authorities.get(0);
 		Address blockRewardPoolAddress = settings.genesisNetworkBlockRewardPoolAddress();
 
@@ -219,6 +233,10 @@ public class GenesisInitializer {
 		@Override
 		public Signature getSignature() {
 			return Signature.ZERO;
+		}
+
+		public Address getIdentity() {
+			return Address.ZERO;
 		}
 	}
 }

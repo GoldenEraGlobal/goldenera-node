@@ -43,14 +43,14 @@ import global.goldenera.node.explorer.api.v1.addressalias.dtos.AddressAliasDtoV1
 import global.goldenera.node.explorer.api.v1.addressalias.mappers.AddressAliasMapper;
 import global.goldenera.node.explorer.services.core.ExAddressAliasCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
 @RequestMapping(value = "api/explorer/v1/address-alias")
-@GeneralApiSecurity(ApiKeyPermission.READ_ADDRESS_ALIAS)
+@ExplorerApiSecurity(ApiKeyPermission.READ_ADDRESS_ALIAS)
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 public class AddressAliasApiV1 {

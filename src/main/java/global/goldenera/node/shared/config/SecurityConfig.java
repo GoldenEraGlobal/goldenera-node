@@ -65,8 +65,6 @@ public class SecurityConfig {
 
         GeneralProperties generalProperties;
 
-        // generalProperties.isExplorerEnable() <----
-
         /**
          * Filter chain for the "master password" admin area.
          * This uses HTTP Basic Auth.
@@ -86,31 +84,59 @@ public class SecurityConfig {
         }
 
         /**
-         * Filter chain for the explorer and shared API, protected by API Keys.
+         * Filter chain for the shared API, always protected by API Keys.
          * <p>
-         * If Explorer is disabled via properties, access to /api/explorer/** is
-         * strictly denied.
+         * Unlike explorer API, shared API always requires authentication.
          */
         @Bean
         @Order(2)
-        public SecurityFilterChain explorerAndSharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+        public SecurityFilterChain sharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
                 http
-                                .securityMatcher("/api/explorer/**", "/api/shared/**")
+                                .securityMatcher("/api/shared/**")
                                 .cors(Customizer.withDefaults())
                                 .csrf(csrf -> csrf.disable())
                                 .httpBasic(basic -> basic.disable())
                                 .formLogin(login -> login.disable());
 
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                                .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+                                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
+                return http.build();
+        }
+
+        /**
+         * Filter chain for the Explorer API.
+         * <p>
+         * If Explorer is disabled via properties, access to /api/explorer/** is
+         * strictly denied.
+         * <p>
+         * Security check is handled by ExplorerApiSecurityAspect based on
+         * explorerApiEnabled property.
+         */
+        @Bean
+        @Order(3)
+        public SecurityFilterChain explorerApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        ThrottlingFilter throttlingFilter)
+                        throws Exception {
+                http
+                                .securityMatcher("/api/explorer/**")
+                                .cors(Customizer.withDefaults())
                                 .authorizeHttpRequests(auth -> {
                                         if (!generalProperties.isExplorerEnable()) {
                                                 log.debug("Explorer API is disabled in properties. Blocking access to /api/explorer/**");
                                                 auth.requestMatchers("/api/explorer/**").denyAll();
+                                        } else {
+                                                auth.anyRequest().permitAll();
                                         }
-                                        auth.anyRequest().authenticated();
                                 })
+                                .csrf(csrf -> csrf.disable())
+                                .formLogin(login -> login.disable())
+                                .httpBasic(basic -> basic.disable());
+
+                http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
@@ -120,7 +146,7 @@ public class SecurityConfig {
          * Filter chain for the CORE API
          */
         @Bean
-        @Order(3)
+        @Order(4)
         public SecurityFilterChain coreApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
                         ThrottlingFilter throttlingFilter) throws Exception {
                 http

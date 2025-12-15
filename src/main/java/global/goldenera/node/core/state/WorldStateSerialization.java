@@ -36,6 +36,7 @@ import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.serialization.state.accountbalance.AccountBalanceStateDecoder;
 import global.goldenera.cryptoj.serialization.state.accountbalance.AccountBalanceStateEncoder;
 import global.goldenera.cryptoj.serialization.state.accountnonce.AccountNonceStateDecoder;
@@ -50,6 +51,8 @@ import global.goldenera.cryptoj.serialization.state.networkparams.NetworkParamsS
 import global.goldenera.cryptoj.serialization.state.networkparams.NetworkParamsStateEncoder;
 import global.goldenera.cryptoj.serialization.state.token.TokenStateDecoder;
 import global.goldenera.cryptoj.serialization.state.token.TokenStateEncoder;
+import global.goldenera.cryptoj.serialization.state.validator.ValidatorStateDecoder;
+import global.goldenera.cryptoj.serialization.state.validator.ValidatorStateEncoder;
 
 @Configuration
 public class WorldStateSerialization {
@@ -102,6 +105,16 @@ public class WorldStateSerialization {
 	@Bean
 	public Function<Bytes, AuthorityState> authorityDeserializer() {
 		return AuthorityStateDecoder.INSTANCE::decode;
+	}
+
+	@Bean
+	public Function<ValidatorState, Bytes> validatorSerializer() {
+		return ValidatorStateEncoder.INSTANCE::encode;
+	}
+
+	@Bean
+	public Function<Bytes, ValidatorState> validatorDeserializer() {
+		return ValidatorStateDecoder.INSTANCE::decode;
 	}
 
 	@Bean

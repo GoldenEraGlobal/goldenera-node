@@ -58,6 +58,8 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePaylo
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -141,6 +143,16 @@ public class MempoolStore {
 	 * Tracks addresses of Authorities that are PENDING on remove.
 	 */
 	Set<Address> pendingAuthorityRemoves = ConcurrentHashMap.newKeySet();
+
+	/**
+	 * Tracks addresses of Validators that are PENDING on add.
+	 */
+	Set<Address> pendingValidatorAdds = ConcurrentHashMap.newKeySet();
+
+	/**
+	 * Tracks addresses of Validators that are PENDING on remove.
+	 */
+	Set<Address> pendingValidatorRemoves = ConcurrentHashMap.newKeySet();
 
 	/**
 	 * Tracks aliases of Address Aliases that are PENDING on add.
@@ -517,6 +529,14 @@ public class MempoolStore {
 		return pendingAuthorityRemoves.contains(address);
 	}
 
+	public boolean isValidatorAddPending(Address address) {
+		return pendingValidatorAdds.contains(address);
+	}
+
+	public boolean isValidatorRemovePending(Address address) {
+		return pendingValidatorRemoves.contains(address);
+	}
+
 	public boolean isAddressAliasAddPending(String alias) {
 		return pendingAddressAliasAdds.contains(alias);
 	}
@@ -815,6 +835,8 @@ public class MempoolStore {
 			// Clear governance sets as well
 			pendingAuthorityAdds.clear();
 			pendingAuthorityRemoves.clear();
+			pendingValidatorAdds.clear();
+			pendingValidatorRemoves.clear();
 			pendingAddressAliasAdds.clear();
 			pendingAddressAliasRemoves.clear();
 			authoritiesWithPendingParamChange.clear();
@@ -991,6 +1013,20 @@ public class MempoolStore {
 					pendingAuthorityRemoves.add(addr);
 				} else {
 					pendingAuthorityRemoves.remove(addr);
+				}
+			} else if (payload instanceof TxBipValidatorAddPayload) {
+				Address addr = ((TxBipValidatorAddPayload) payload).getAddress();
+				if (isAdding) {
+					pendingValidatorAdds.add(addr);
+				} else {
+					pendingValidatorAdds.remove(addr);
+				}
+			} else if (payload instanceof TxBipValidatorRemovePayload) {
+				Address addr = ((TxBipValidatorRemovePayload) payload).getAddress();
+				if (isAdding) {
+					pendingValidatorRemoves.add(addr);
+				} else {
+					pendingValidatorRemoves.remove(addr);
 				}
 			} else if (payload instanceof TxBipNetworkParamsSetPayload) {
 				Address sender = tx.getTx().getSender();

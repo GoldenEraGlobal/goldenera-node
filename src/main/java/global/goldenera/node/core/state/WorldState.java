@@ -44,6 +44,7 @@ import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AccountNonceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AddressAliasStateImpl;
@@ -51,6 +52,7 @@ import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
+import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.merkletrie.MerkleTrie;
@@ -91,6 +93,7 @@ public class WorldState {
 	MerkleTrie<Bytes, AccountBalanceState> balanceTrie;
 	MerkleTrie<Bytes, AccountNonceState> nonceTrie;
 	MerkleTrie<Bytes, AuthorityState> authorityTrie;
+	MerkleTrie<Bytes, ValidatorState> validatorTrie;
 	MerkleTrie<Bytes, AddressAliasState> addressAliasTrie;
 	MerkleTrie<Bytes, BipState> bipStateTrie;
 	MerkleTrie<Bytes, NetworkParamsState> networkParamsTrie;
@@ -100,6 +103,7 @@ public class WorldState {
 	Map<BalanceKey, AccountBalanceState> dirtyBalances = new LinkedHashMap<>();
 	Map<Address, AccountNonceState> dirtyNonces = new LinkedHashMap<>();
 	Map<Address, AuthorityState> dirtyAuthorities = new LinkedHashMap<>();
+	Map<Address, ValidatorState> dirtyValidators = new LinkedHashMap<>();
 	Map<String, AddressAliasState> dirtyAddressAliases = new LinkedHashMap<>();
 	Map<Hash, BipState> dirtyBipStates = new LinkedHashMap<>();
 	Map<Address, TokenState> dirtyTokens = new LinkedHashMap<>();
@@ -108,6 +112,7 @@ public class WorldState {
 	Map<BalanceKey, AccountBalanceState> initialBalances = new LinkedHashMap<>();
 	Map<Address, AccountNonceState> initialNonces = new LinkedHashMap<>();
 	Map<Address, AuthorityState> initialAuthorities = new LinkedHashMap<>();
+	Map<Address, ValidatorState> initialValidators = new LinkedHashMap<>();
 	Map<String, AddressAliasState> initialAddressAliases = new LinkedHashMap<>();
 	Map<Hash, BipState> initialBipStates = new LinkedHashMap<>();
 	Map<Address, TokenState> initialTokens = new LinkedHashMap<>();
@@ -116,6 +121,7 @@ public class WorldState {
 	// Set of changes for validation logic & deletions
 	Set<Address> tokensCreatedThisBlock = new LinkedHashSet<>();
 	Set<Address> authoritiesRemoved = new LinkedHashSet<>();
+	Set<Address> validatorsRemoved = new LinkedHashSet<>();
 	Set<String> aliasesRemoved = new LinkedHashSet<>();
 
 	// Dirty Cache for Singleton (Params)
@@ -246,7 +252,6 @@ public class WorldState {
 		}
 	}
 
-	// ... (computeDiff method remains the same) ...
 	private <K, V> Map<K, StateDiff<V>> computeDiff(Map<K, V> dirtyMap, Map<K, V> initialMap, V zeroValue) {
 		// Safety check: Diffs are only available in Validation Mode
 		if (isMining)
@@ -317,6 +322,32 @@ public class WorldState {
 
 		recordSetChange(authoritiesRemoved, address);
 		authoritiesRemoved.add(address);
+	}
+
+	public ValidatorState getValidator(Address address) {
+		if (dirtyValidators.containsKey(address))
+			return dirtyValidators.get(address);
+		if (validatorsRemoved.contains(address))
+			return ValidatorStateImpl.ZERO;
+		return validatorTrie.get(address).orElse(ValidatorStateImpl.ZERO);
+	}
+
+	public void addValidator(Address address, ValidatorState state) {
+		captureInitialState(initialValidators, dirtyValidators, address, this::getValidator);
+		recordMapChange(dirtyValidators, address);
+		dirtyValidators.put(address, state);
+
+		recordSetChange(validatorsRemoved, address);
+		validatorsRemoved.remove(address);
+	}
+
+	public void removeValidator(Address address) {
+		captureInitialState(initialValidators, dirtyValidators, address, this::getValidator);
+		recordMapChange(dirtyValidators, address);
+		dirtyValidators.remove(address);
+
+		recordSetChange(validatorsRemoved, address);
+		validatorsRemoved.add(address);
 	}
 
 	public TokenState getToken(Address address) {
@@ -425,6 +456,8 @@ public class WorldState {
 		dirtyNonces.forEach(nonceTrie::put);
 		authoritiesRemoved.forEach(authorityTrie::remove);
 		dirtyAuthorities.forEach(authorityTrie::put);
+		validatorsRemoved.forEach(validatorTrie::remove);
+		dirtyValidators.forEach(validatorTrie::put);
 		aliasesRemoved.forEach(alias -> addressAliasTrie.remove(Bytes.wrap(alias.getBytes(StandardCharsets.UTF_8))));
 		dirtyAddressAliases.forEach(
 				(alias, state) -> addressAliasTrie.put(Bytes.wrap(alias.getBytes(StandardCharsets.UTF_8)), state));
@@ -445,6 +478,7 @@ public class WorldState {
 		balanceTrie.commit(nodeUpdater);
 		nonceTrie.commit(nodeUpdater);
 		authorityTrie.commit(nodeUpdater);
+		validatorTrie.commit(nodeUpdater);
 		addressAliasTrie.commit(nodeUpdater);
 		bipStateTrie.commit(nodeUpdater);
 		networkParamsTrie.commit(nodeUpdater);
@@ -453,6 +487,7 @@ public class WorldState {
 		mainTrie.put(WorldStateFactory.KEY_BALANCE, balanceTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_NONCE, nonceTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_AUTHORITY, authorityTrie.getRootHash());
+		mainTrie.put(WorldStateFactory.KEY_VALIDATOR, validatorTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_ADDRESS_ALIAS, addressAliasTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_BIP_STATE, bipStateTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_NETWORK_PARAMS, networkParamsTrie.getRootHash());
@@ -471,6 +506,7 @@ public class WorldState {
 		dirtyBalances.clear();
 		dirtyNonces.clear();
 		dirtyAuthorities.clear();
+		dirtyValidators.clear();
 		dirtyAddressAliases.clear();
 		dirtyBipStates.clear();
 		dirtyTokens.clear();
@@ -478,6 +514,7 @@ public class WorldState {
 		initialBalances.clear();
 		initialNonces.clear();
 		initialAuthorities.clear();
+		initialValidators.clear();
 		initialAddressAliases.clear();
 		initialBipStates.clear();
 		initialTokens.clear();
@@ -488,6 +525,7 @@ public class WorldState {
 
 		tokensCreatedThisBlock.clear();
 		authoritiesRemoved.clear();
+		validatorsRemoved.clear();
 		aliasesRemoved.clear();
 
 		journal.clear();
@@ -503,6 +541,7 @@ public class WorldState {
 		dirtyBalances.clear();
 		dirtyNonces.clear();
 		dirtyAuthorities.clear();
+		dirtyValidators.clear();
 		dirtyAddressAliases.clear();
 		dirtyBipStates.clear();
 		dirtyTokens.clear();
@@ -510,6 +549,7 @@ public class WorldState {
 		initialBalances.clear();
 		initialNonces.clear();
 		initialAuthorities.clear();
+		initialValidators.clear();
 		initialAddressAliases.clear();
 		initialBipStates.clear();
 		initialTokens.clear();
@@ -520,6 +560,7 @@ public class WorldState {
 
 		tokensCreatedThisBlock.clear();
 		authoritiesRemoved.clear();
+		validatorsRemoved.clear();
 		aliasesRemoved.clear();
 
 		journal.clear();
@@ -587,6 +628,19 @@ public class WorldState {
 		Map<Address, AuthorityState> result = new LinkedHashMap<>();
 		for (Address addr : authoritiesRemoved) {
 			AuthorityState oldState = initialAuthorities.get(addr);
+			if (oldState != null) {
+				result.put(addr, oldState);
+			}
+		}
+		return result;
+	}
+
+	public Map<Address, ValidatorState> getValidatorsRemovedWithState() {
+		if (isMining)
+			return new LinkedHashMap<>();
+		Map<Address, ValidatorState> result = new LinkedHashMap<>();
+		for (Address addr : validatorsRemoved) {
+			ValidatorState oldState = initialValidators.get(addr);
 			if (oldState != null) {
 				result.put(addr, oldState);
 			}

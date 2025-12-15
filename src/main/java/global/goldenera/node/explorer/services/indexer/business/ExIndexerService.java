@@ -132,6 +132,8 @@ public class ExIndexerService {
 					event.getAddressAliasesToRemove());
 			exConsensusService.processAuthorities(block, event.getAuthoritiesToAdd(),
 					event.getAuthoritiesToRemove());
+			exConsensusService.processValidators(block, event.getValidatorsToAdd(),
+					event.getValidatorsToRemove());
 
 			exBlockDataCoreService.insertBlockHeader(block, event.getCumulativeDifficulty(),
 					event.getMinerTotalFees().toBigInteger(), event.getMinerActualRewardPaid().toBigInteger());

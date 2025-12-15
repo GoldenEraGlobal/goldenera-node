@@ -52,6 +52,8 @@ import lombok.NoArgsConstructor;
         @JsonSubTypes.Type(value = TxPayloadDtoV1.AddressAliasRemove.class, name = "BIP_ADDRESS_ALIAS_REMOVE"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityAdd.class, name = "BIP_AUTHORITY_ADD"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityRemove.class, name = "BIP_AUTHORITY_REMOVE"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.ValidatorAdd.class, name = "BIP_VALIDATOR_ADD"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.ValidatorRemove.class, name = "BIP_VALIDATOR_REMOVE"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.NetworkParamsSet.class, name = "BIP_NETWORK_PARAMS_SET"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenBurn.class, name = "BIP_TOKEN_BURN"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenCreate.class, name = "BIP_TOKEN_CREATE"),
@@ -64,6 +66,8 @@ import lombok.NoArgsConstructor;
         @DiscriminatorMapping(value = "BIP_ADDRESS_ALIAS_REMOVE", schema = TxPayloadDtoV1.AddressAliasRemove.class),
         @DiscriminatorMapping(value = "BIP_AUTHORITY_ADD", schema = TxPayloadDtoV1.AuthorityAdd.class),
         @DiscriminatorMapping(value = "BIP_AUTHORITY_REMOVE", schema = TxPayloadDtoV1.AuthorityRemove.class),
+        @DiscriminatorMapping(value = "BIP_VALIDATOR_ADD", schema = TxPayloadDtoV1.ValidatorAdd.class),
+        @DiscriminatorMapping(value = "BIP_VALIDATOR_REMOVE", schema = TxPayloadDtoV1.ValidatorRemove.class),
         @DiscriminatorMapping(value = "BIP_NETWORK_PARAMS_SET", schema = TxPayloadDtoV1.NetworkParamsSet.class),
         @DiscriminatorMapping(value = "BIP_TOKEN_BURN", schema = TxPayloadDtoV1.TokenBurn.class),
         @DiscriminatorMapping(value = "BIP_TOKEN_CREATE", schema = TxPayloadDtoV1.TokenCreate.class),
@@ -76,6 +80,8 @@ public abstract sealed class TxPayloadDtoV1 permits
         TxPayloadDtoV1.AddressAliasRemove,
         TxPayloadDtoV1.AuthorityAdd,
         TxPayloadDtoV1.AuthorityRemove,
+        TxPayloadDtoV1.ValidatorAdd,
+        TxPayloadDtoV1.ValidatorRemove,
         TxPayloadDtoV1.NetworkParamsSet,
         TxPayloadDtoV1.TokenBurn,
         TxPayloadDtoV1.TokenCreate,
@@ -146,6 +152,36 @@ public abstract sealed class TxPayloadDtoV1 permits
         @JsonProperty("payloadType")
         public TxPayloadType getPayloadType() {
             return TxPayloadType.BIP_AUTHORITY_REMOVE;
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @EqualsAndHashCode(callSuper = false)
+    @Schema(name = "ValidatorAdd", description = "Add validator payload")
+    public static final class ValidatorAdd extends TxPayloadDtoV1 {
+        Address address;
+
+        @Override
+        @JsonProperty("payloadType")
+        public TxPayloadType getPayloadType() {
+            return TxPayloadType.BIP_VALIDATOR_ADD;
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @EqualsAndHashCode(callSuper = false)
+    @Schema(name = "ValidatorRemove", description = "Remove validator payload")
+    public static final class ValidatorRemove extends TxPayloadDtoV1 {
+        Address address;
+
+        @Override
+        @JsonProperty("payloadType")
+        public TxPayloadType getPayloadType() {
+            return TxPayloadType.BIP_VALIDATOR_REMOVE;
         }
     }
 

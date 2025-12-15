@@ -23,6 +23,7 @@
   "authorities": [
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"
   ],
+  "validators": [],
   "genesisBlock": {
     "timestamp": 1765578381366,
     "difficulty": "2500"

@@ -127,7 +127,8 @@ public class BlockStateTransitions {
 						worldState.getParams().getBlockRewardPoolAddress(),
 						worldState.getBipDiffs(),
 						worldState.getTokenDiffs(),
-						executionResult.getActualBurnAmounts());
+						executionResult.getActualBurnAmounts(),
+						worldState.getParamsDiff());
 			}
 
 			StoredBlock storedBlockToSave = StoredBlock.builder()
@@ -135,6 +136,7 @@ public class BlockStateTransitions {
 					.cumulativeDifficulty(cumulativeDifficulty)
 					.receivedFrom(receivedFrom)
 					.receivedAt(receivedAt)
+					.identity(block.getHeader().getIdentity())
 					.connectedSource(source)
 					.computeIndexes()
 					.events(blockEvents)
@@ -244,6 +246,8 @@ public class BlockStateTransitions {
 						worldState.getParamsDiff(),
 						worldState.getDirtyAuthorities(),
 						worldState.getAuthoritiesRemovedWithState(),
+						worldState.getDirtyValidators(),
+						worldState.getValidatorsRemovedWithState(),
 						worldState.getDirtyAddressAliases(),
 						worldState.getAliasesRemovedWithState(),
 						totalFees,

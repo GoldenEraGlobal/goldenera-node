@@ -52,11 +52,14 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateU
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.FeesCollected;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsChanged;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenBurned;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenCreated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenMinted;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenSupplyUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenUpdated;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorAdded;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorRemoved;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -70,6 +73,7 @@ import lombok.experimental.FieldDefaults;
 public class BlockEventMapper {
 
         TxMapper txMapper;
+        StateMapper stateMapper;
 
         public List<BlockEventDtoV1> map(List<BlockEvent> events) {
                 if (events == null || events.isEmpty()) {
@@ -129,10 +133,24 @@ public class BlockEventMapper {
                                         e.txVersion(),
                                         (TxPayloadDtoV1.AuthorityRemove) txMapper.mapPayload(e.payload()));
 
+                        case ValidatorAdded e -> new BlockEventDtoV1.ValidatorAddedDto(
+                                        e.bipHash(),
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.ValidatorAdd) txMapper.mapPayload(e.payload()));
+
+                        case ValidatorRemoved e -> new BlockEventDtoV1.ValidatorRemovedDto(
+                                        e.bipHash(),
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.ValidatorRemove) txMapper.mapPayload(e.payload()));
+
                         case NetworkParamsChanged e -> new NetworkParamsChangedDto(
                                         e.bipHash(),
                                         e.txVersion(),
                                         (TxPayloadDtoV1.NetworkParamsSet) txMapper.mapPayload(e.payload()));
+
+                        case NetworkParamsUpdated e -> new BlockEventDtoV1.NetworkParamsUpdatedDto(
+                                        stateMapper.map(e.oldState()),
+                                        stateMapper.map(e.newState()));
 
                         case AddressAliasAdded e -> new AddressAliasAddedDto(
                                         e.bipHash(),

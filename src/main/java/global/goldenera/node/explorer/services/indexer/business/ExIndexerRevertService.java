@@ -61,6 +61,7 @@ public class ExIndexerRevertService {
 		revertTokens(blockHashBytes);
 		revertAliases(blockHashBytes);
 		revertAuthorities(blockHashBytes);
+		revertValidators(blockHashBytes);
 		revertBips(blockHashBytes);
 		revertNetworkParams(blockHashBytes);
 
@@ -232,6 +233,35 @@ public class ExIndexerRevertService {
 				      AND l.operation_type = ?
 				""";
 		jdbcTemplate.update(sqlRestore, blockHash, EntityType.AUTHORITY.getCode(), OperationType.DELETE.getCode());
+	}
+
+	private void revertValidators(byte[] blockHash) {
+		// 1. Revert Add (INSERT) -> DELETE
+		jdbcTemplate.update("""
+				    DELETE FROM explorer_validator v
+				    USING explorer_revert_log l
+				    WHERE l.block_hash = ?
+				      AND l.entity_type = ?
+				      AND l.operation_type = ?
+				      AND v.address = l.ref_key_1
+				""", blockHash, EntityType.VALIDATOR.getCode(), OperationType.INSERT.getCode());
+
+		// 2. Revert Remove (DELETE) -> INSERT
+		String sqlRestore = """
+				    INSERT INTO explorer_validator
+				    (address, origin_tx_hash, created_at_block_height, created_at_timestamp, validator_version)
+				    SELECT
+				        l.ref_key_1, -- Address PK
+				        decode(l.old_value->>'tx', 'hex'),
+				        (l.old_value->>'ch')::bigint,
+				        (l.old_value->>'ct')::timestamp,
+				        (l.old_value->>'ver')::integer
+				    FROM explorer_revert_log l
+				    WHERE l.block_hash = ?
+				      AND l.entity_type = ?
+				      AND l.operation_type = ?
+				""";
+		jdbcTemplate.update(sqlRestore, blockHash, EntityType.VALIDATOR.getCode(), OperationType.DELETE.getCode());
 	}
 
 	private void revertBips(byte[] blockHash) {

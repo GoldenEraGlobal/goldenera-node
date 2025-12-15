@@ -41,6 +41,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.Constants;
@@ -48,6 +49,7 @@ import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
+import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.randomx.RandomXVM;
 import lombok.AllArgsConstructor;
@@ -79,6 +81,10 @@ public class BlockValidator {
 
 	public void validateHeader(@NonNull BlockHeader header, @NonNull Map<Long, Hash> batchContext) {
 		try {
+			if (header.getHeight() == 0) {
+				throw new GEValidationException("Consensus violation: Genesis block cannot be validated.");
+			}
+
 			// 1. Header Size sanity check
 			checkArgument(header.getSize() <= Constants.getSettings().getMaxHeaderSizeInBytes(header.getHeight()),
 					"Header size exceeded: %s", header.getSize());
@@ -92,6 +98,13 @@ public class BlockValidator {
 				throw new GEValidationException("Consensus violation: Miner coinbase cannot be the zero address.");
 			}
 
+			if (header.getSignature() == null || header.getSignature().equals(Signature.ZERO)) {
+				throw new GEValidationException("Consensus violation: Miner signature cannot be the zero signature.");
+			}
+
+			if (header.getIdentity() == null || header.getIdentity().equals(Address.ZERO)) {
+				throw new GEValidationException("Consensus violation: Miner identity cannot be the zero address.");
+			}
 			// 3. RandomX PoW Calculation
 			validateRandomXPoWInternal(header, batchContext);
 		} catch (Exception e) {
@@ -106,9 +119,10 @@ public class BlockValidator {
 	public void validateHeaderContext(
 			@NonNull BlockHeader child,
 			@NonNull BlockHeader parent,
-			@NonNull NetworkParamsState params) {
+			@NonNull WorldState worldState) {
 
 		try {
+			NetworkParamsState params = worldState.getParams();
 			// 1. Linkage
 			checkArgument(child.getPreviousHash().equals(parent.getHash()),
 					"Broken Linkage: PrevHash %s != ParentHash %s",
@@ -139,6 +153,14 @@ public class BlockValidator {
 					"Invalid Difficulty. Expected %s, got %s",
 					expectedDifficulty, child.getDifficulty());
 
+			// 6. Validator Check - miner must be a registered validator (skip if no
+			// validators registered)
+			if (params.getCurrentValidatorCount() > 0) {
+				Address minerIdentity = child.getIdentity();
+				checkArgument(worldState.getValidator(minerIdentity).exists(),
+						"Consensus violation: Miner %s is not a registered validator",
+						minerIdentity.toChecksumAddress());
+			}
 		} catch (IllegalArgumentException e) {
 			throw new GEValidationException("Contextual Header Validation failed: " + e.getMessage(), e);
 		}

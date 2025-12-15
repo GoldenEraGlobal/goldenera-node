@@ -115,6 +115,10 @@ public class ExBlockHeader implements BlockHeader {
         @Convert(converter = SignatureConverter.class)
         Signature signature;
 
+        @Column(name = "identity", length = 20, nullable = true, updatable = false, columnDefinition = "BYTEA")
+        @Convert(converter = AddressConverter.class)
+        Address identity;
+
         // --- Explorer Calculated Data ---
 
         @Column(name = "block_size", nullable = false, updatable = false)

@@ -40,7 +40,10 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
@@ -56,11 +59,14 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BipStateU
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.FeesCollected;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsChanged;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.NetworkParamsUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenBurned;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenCreated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenMinted;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenSupplyUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenUpdated;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorAdded;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorRemoved;
 
 /**
  * Extracts BlockEvents from WorldState diffs.
@@ -97,7 +103,8 @@ public class BlockEventExtractor {
                         Address rewardPoolAddress,
                         Map<Hash, StateDiff<BipState>> bipDiffs,
                         Map<Address, StateDiff<TokenState>> tokenDiffs,
-                        Map<Hash, Wei> actualBurnAmounts) {
+                        Map<Hash, Wei> actualBurnAmounts,
+                        StateDiff<NetworkParamsState> networkParamsDiff) {
 
                 List<BlockEvent> events = new ArrayList<>();
 
@@ -123,7 +130,14 @@ public class BlockEventExtractor {
                         });
                 }
 
-                // 4. BIP state events
+                // 4. Network params updated event (captures ALL changes, including automatic)
+                if (networkParamsDiff != null) {
+                        events.add(new NetworkParamsUpdated(
+                                        networkParamsDiff.getOldValue(),
+                                        networkParamsDiff.getNewValue()));
+                }
+
+                // 5. BIP state events
                 if (bipDiffs != null && !bipDiffs.isEmpty()) {
                         bipDiffs.forEach((bipHash, diff) -> {
                                 BipState oldState = diff.getOldValue();
@@ -211,6 +225,16 @@ public class BlockEventExtractor {
                                         p);
 
                         case TxBipAuthorityRemovePayload p -> new AuthorityRemoved(
+                                        bipHash,
+                                        txVersion,
+                                        p);
+
+                        case TxBipValidatorAddPayload p -> new ValidatorAdded(
+                                        bipHash,
+                                        txVersion,
+                                        p);
+
+                        case TxBipValidatorRemovePayload p -> new ValidatorRemoved(
                                         bipHash,
                                         txVersion,
                                         p);

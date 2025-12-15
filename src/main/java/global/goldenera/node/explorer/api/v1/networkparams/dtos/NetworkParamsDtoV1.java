@@ -58,6 +58,7 @@ public class NetworkParamsDtoV1 {
     Wei minTxByteFee;
     Hash updatedByTxHash;
     long currentAuthorityCount;
+    long currentValidatorCount;
     long updatedAtBlockHeight;
     Instant updatedAtTimestamp;
 }

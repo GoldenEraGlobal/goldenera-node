@@ -42,6 +42,7 @@ import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
@@ -71,6 +72,9 @@ public class BlockConnectedEvent extends ApplicationEvent {
 	final Map<Address, AuthorityState> authoritiesToAdd;
 	final Map<Address, AuthorityState> authoritiesToRemove;
 
+	final Map<Address, ValidatorState> validatorsToAdd;
+	final Map<Address, ValidatorState> validatorsToRemove;
+
 	final Map<String, AddressAliasState> addressAliasesToAdd;
 	final Map<String, AddressAliasState> addressAliasesToRemove;
 
@@ -97,6 +101,8 @@ public class BlockConnectedEvent extends ApplicationEvent {
 			StateDiff<NetworkParamsState> networkParamsDiff,
 			Map<Address, AuthorityState> authoritiesToAdd,
 			Map<Address, AuthorityState> authoritiesToRemove,
+			Map<Address, ValidatorState> validatorsToAdd,
+			Map<Address, ValidatorState> validatorsToRemove,
 			Map<String, AddressAliasState> addressAliasesToAdd,
 			Map<String, AddressAliasState> addressAliasesToRemove,
 			Wei totalFees,
@@ -116,6 +122,8 @@ public class BlockConnectedEvent extends ApplicationEvent {
 		this.networkParamsDiff = networkParamsDiff;
 		this.authoritiesToAdd = authoritiesToAdd;
 		this.authoritiesToRemove = authoritiesToRemove;
+		this.validatorsToAdd = validatorsToAdd;
+		this.validatorsToRemove = validatorsToRemove;
 		this.addressAliasesToAdd = addressAliasesToAdd;
 		this.addressAliasesToRemove = addressAliasesToRemove;
 		this.minerTotalFees = totalFees;

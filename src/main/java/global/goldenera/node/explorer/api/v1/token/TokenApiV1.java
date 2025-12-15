@@ -42,13 +42,13 @@ import global.goldenera.node.explorer.api.v1.token.dtos.TokenDtoV1_Page;
 import global.goldenera.node.explorer.api.v1.token.mappers.TokenMapper;
 import global.goldenera.node.explorer.services.core.ExTokenCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_TOKEN)
+@ExplorerApiSecurity(ApiKeyPermission.READ_TOKEN)
 @RequestMapping(value = "api/explorer/v1/token")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)

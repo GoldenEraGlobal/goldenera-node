@@ -74,6 +74,9 @@ public record NetworkSettings(
         List<Address> genesisAuthorityAddresses,
         Wei genesisNetworkInitialMintForAuthority,
 
+        // Genesis validators
+        List<Address> genesisValidatorAddresses,
+
         // Genesis block configuration
         long genesisBlockTimestamp,
         BigInteger genesisBlockDifficulty,
@@ -197,6 +200,7 @@ public record NetworkSettings(
                 genesis.genesisNetworkMinTxByteFee(),
                 genesis.genesisAuthorityAddresses(),
                 genesis.genesisNetworkInitialMintForAuthority(),
+                genesis.genesisValidatorAddresses(),
                 genesis.genesisBlockTimestamp(),
                 genesis.genesisBlockDifficulty(),
                 genesis.genesisNativeTokenName(),

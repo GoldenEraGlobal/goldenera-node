@@ -63,6 +63,7 @@ public class StoredBlock {
 	// Pre-computed block metadata (stored in DB)
 	Hash hash;
 	int blockSize;
+	Address identity;
 	int encodedSize; // Size of serialized StoredBlock in bytes
 
 	// Pre-computed transaction metadata (stored in DB)
@@ -273,6 +274,7 @@ public class StoredBlock {
 		int encodedSize;
 		TxIndex txIndex;
 		List<BlockEvent> events;
+		Address identity;
 
 		public Builder block(Block block) {
 			this.block = block;
@@ -329,6 +331,11 @@ public class StoredBlock {
 			return this;
 		}
 
+		public Builder identity(Address val) {
+			this.identity = val;
+			return this;
+		}
+
 		/**
 		 * Computes hash, blockSize, and txIndex from block data.
 		 * Call this before build() when creating new StoredBlock from Block.
@@ -358,6 +365,7 @@ public class StoredBlock {
 					isPartial,
 					hash,
 					blockSize,
+					identity,
 					encodedSize,
 					txIndex,
 					events != null ? events : List.of());

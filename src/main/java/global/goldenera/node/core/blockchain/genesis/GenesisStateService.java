@@ -33,6 +33,7 @@ import org.springframework.stereotype.Service;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -113,6 +114,14 @@ public class GenesisStateService {
         // EntityIndexRepository
         // which caches them. At genesis time, these are the same authorities.
         return entityIndexRepository.getAllAuthoritiesWithAddresses();
+    }
+
+    /**
+     * Gets all validators with addresses from genesis.
+     * Uses EntityIndexRepository which has the cached validator list.
+     */
+    public Map<Address, ValidatorState> getGenesisValidatorsWithAddresses() {
+        return entityIndexRepository.getAllValidatorsWithAddresses();
     }
 
     /**

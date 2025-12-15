@@ -164,7 +164,7 @@ public class ChainSwitchService {
 
                         try {
                             blockValidationService.validateHeaderContext(
-                                    blockToConnect.getHeader(), previousBlock.getHeader(), params);
+                                    blockToConnect.getHeader(), previousBlock.getHeader(), worldState);
                         } catch (Exception e) {
                             throw new GEFailedException(
                                     "Reorg failed: Block " + blockToConnect.getHeight() + " invalid: " + e.getMessage(),
@@ -197,7 +197,8 @@ public class ChainSwitchService {
                                 params.getBlockRewardPoolAddress(),
                                 worldState.getBipDiffs(),
                                 worldState.getTokenDiffs(),
-                                result.getActualBurnAmounts());
+                                result.getActualBurnAmounts(),
+                                worldState.getParamsDiff());
 
                         // Update StoredBlock with extracted events
                         StoredBlock storedBlockWithEvents = storedBlockToConnect.toBuilder()
@@ -234,6 +235,8 @@ public class ChainSwitchService {
                                 worldState.getParamsDiff(),
                                 worldState.getDirtyAuthorities(),
                                 worldState.getAuthoritiesRemovedWithState(),
+                                worldState.getDirtyValidators(),
+                                worldState.getValidatorsRemovedWithState(),
                                 worldState.getDirtyAddressAliases(),
                                 worldState.getAliasesRemovedWithState(),
                                 result.getMinerTotalFees(),

@@ -34,7 +34,8 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @Getter
 public enum EntityType {
-	ACCOUNT_BALANCE(0), ACCOUNT_NONCE(1), ADDRESS_ALIAS(2), AUTHORITY(3), BIP(4), NETWORK_PARAMS(5), TOKEN(6);
+	ACCOUNT_BALANCE(0), ACCOUNT_NONCE(1), ADDRESS_ALIAS(2), AUTHORITY(3), BIP(4), NETWORK_PARAMS(5), TOKEN(
+			6), VALIDATOR(7);
 
 	int code;
 

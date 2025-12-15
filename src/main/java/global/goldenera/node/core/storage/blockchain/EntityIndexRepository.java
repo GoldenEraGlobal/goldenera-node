@@ -42,8 +42,10 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
+import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.state.WorldState;
 import lombok.Getter;
@@ -62,8 +64,10 @@ public class EntityIndexRepository {
     ObjectMapper objectMapper;
     Cache<String, List<TokenState>> tokensCache;
     Cache<String, List<AuthorityState>> authoritiesCache;
+    Cache<String, List<ValidatorState>> validatorsCache;
     Cache<String, Map<Address, TokenState>> tokensMapCache;
     Cache<String, Map<Address, AuthorityState>> authoritiesMapCache;
+    Cache<String, Map<Address, ValidatorState>> validatorsMapCache;
 
     // --- SAVE / UPDATE ---
 
@@ -167,6 +171,31 @@ public class EntityIndexRepository {
 
                     batch.delete(rocksDBRepository.getColumnFamilies().authorities(), key);
                 }
+
+                // 3. VALIDATORS
+                // Dirty validators (added/updated)
+                for (Map.Entry<Address, ValidatorState> entry : worldState.getDirtyValidators().entrySet()) {
+                    Address address = entry.getKey();
+                    ValidatorState newState = entry.getValue();
+                    byte[] key = address.toArray();
+
+                    byte[] oldValueBytes = rocksDBRepository.get(rocksDBRepository.getColumnFamilies().validators(),
+                            key);
+                    undoLog.add(new UndoAction(UndoType.VALIDATOR, address.toHexString(), oldValueBytes));
+
+                    byte[] newValueBytes = objectMapper.writeValueAsBytes(newState);
+                    batch.put(rocksDBRepository.getColumnFamilies().validators(), key, newValueBytes);
+                }
+
+                // Removed validators
+                for (Address address : worldState.getValidatorsRemoved()) {
+                    byte[] key = address.toArray();
+                    byte[] oldValueBytes = rocksDBRepository.get(rocksDBRepository.getColumnFamilies().validators(),
+                            key);
+                    undoLog.add(new UndoAction(UndoType.VALIDATOR, address.toHexString(), oldValueBytes));
+
+                    batch.delete(rocksDBRepository.getColumnFamilies().validators(), key);
+                }
             }
 
             // Save Undo Log
@@ -206,6 +235,13 @@ public class EntityIndexRepository {
                         batch.delete(rocksDBRepository.getColumnFamilies().authorities(), address.toArray());
                     } else {
                         batch.put(rocksDBRepository.getColumnFamilies().authorities(), address.toArray(),
+                                action.oldValue);
+                    }
+                } else if (action.type == UndoType.VALIDATOR) {
+                    if (action.oldValue == null) {
+                        batch.delete(rocksDBRepository.getColumnFamilies().validators(), address.toArray());
+                    } else {
+                        batch.put(rocksDBRepository.getColumnFamilies().validators(), address.toArray(),
                                 action.oldValue);
                     }
                 }
@@ -301,17 +337,59 @@ public class EntityIndexRepository {
         return authorities;
     }
 
+    public List<ValidatorState> getAllValidators() {
+        List<ValidatorState> cached = validatorsCache.getIfPresent("ALL");
+        if (cached != null) {
+            return cached;
+        }
+
+        List<ValidatorState> validators = new ArrayList<>();
+        try (RocksIterator it = rocksDBRepository.newIterator(rocksDBRepository.getColumnFamilies().validators())) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                validators.add(objectMapper.readValue(it.value(), ValidatorStateImpl.class));
+            }
+        } catch (IOException e) {
+            log.error("Failed to read validator", e);
+        }
+
+        validatorsCache.put("ALL", validators);
+        return validators;
+    }
+
+    public Map<Address, ValidatorState> getAllValidatorsWithAddresses() {
+        Map<Address, ValidatorState> cached = validatorsMapCache.getIfPresent("ALL");
+        if (cached != null) {
+            return cached;
+        }
+
+        Map<Address, ValidatorState> validators = new LinkedHashMap<>();
+        try (RocksIterator it = rocksDBRepository.newIterator(rocksDBRepository.getColumnFamilies().validators())) {
+            for (it.seekToFirst(); it.isValid(); it.next()) {
+                Address address = Address.wrap(it.key());
+                ValidatorState state = objectMapper.readValue(it.value(), ValidatorStateImpl.class);
+                validators.put(address, state);
+            }
+        } catch (IOException e) {
+            log.error("Failed to read validators with addresses", e);
+        }
+
+        validatorsMapCache.put("ALL", validators);
+        return validators;
+    }
+
     public void invalidateCaches() {
         tokensCache.invalidateAll();
         authoritiesCache.invalidateAll();
+        validatorsCache.invalidateAll();
         tokensMapCache.invalidateAll();
         authoritiesMapCache.invalidateAll();
+        validatorsMapCache.invalidateAll();
     }
 
     // --- INNER CLASSES ---
 
     public enum UndoType {
-        TOKEN, AUTHORITY
+        TOKEN, AUTHORITY, VALIDATOR
     }
 
     public static class UndoAction {

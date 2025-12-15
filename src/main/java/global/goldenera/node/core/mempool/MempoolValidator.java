@@ -41,6 +41,8 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.BipState;
@@ -246,6 +248,26 @@ public class MempoolValidator {
 				// Check mempool
 				if (mempoolStorage.isAuthorityRemovePending(addr)) {
 					return MempoolValidationResult.invalid("AuthorityRemove is already pending in mempool.");
+				}
+			} else if (payload instanceof TxBipValidatorAddPayload) {
+				Address addr = ((TxBipValidatorAddPayload) payload).getAddress();
+				// Check chain
+				if (worldstate.getValidator(addr).exists()) {
+					return MempoolValidationResult.invalid("Validator already exists on-chain.");
+				}
+				// Check mempool
+				if (mempoolStorage.isValidatorAddPending(addr)) {
+					return MempoolValidationResult.invalid("ValidatorAdd is already pending in mempool.");
+				}
+			} else if (payload instanceof TxBipValidatorRemovePayload) {
+				Address addr = ((TxBipValidatorRemovePayload) payload).getAddress();
+				// Check chain
+				if (!worldstate.getValidator(addr).exists()) {
+					return MempoolValidationResult.invalid("Validator does not exist on-chain.");
+				}
+				// Check mempool
+				if (mempoolStorage.isValidatorRemovePending(addr)) {
+					return MempoolValidationResult.invalid("ValidatorRemove is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipAddressAliasAddPayload) {
 				String alias = ((TxBipAddressAliasAddPayload) payload).getAlias();

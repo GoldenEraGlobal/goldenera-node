@@ -61,6 +61,7 @@ public class BlockchainBlockHeaderMapper {
         BlockchainBlockHeaderMetadataDtoV1 metadata = new BlockchainBlockHeaderMetadataDtoV1(
                 in.getHash(),
                 in.getBlockSize(),
+                in.getIdentity(),
                 in.getTxCount());
 
         List<BlockEventDtoV1> eventDtos = new ArrayList<>();
@@ -101,6 +102,7 @@ public class BlockchainBlockHeaderMapper {
                 new BlockchainBlockHeaderMetadataDtoV1(
                         in.getHash(),
                         in.getSize(),
+                        in.getHeader().getIdentity(),
                         in.getTxs().size()));
     }
 
@@ -121,6 +123,7 @@ public class BlockchainBlockHeaderMapper {
                 new BlockchainBlockHeaderMetadataDtoV1(
                         in.getHash(),
                         in.getSize(),
+                        in.getHeader().getIdentity(),
                         in.getTxs().size()),
                 blockEventMapper.map(events));
     }

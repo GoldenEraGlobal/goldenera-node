@@ -39,6 +39,7 @@ import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.explorer.converters.AddressSetConverter;
@@ -50,6 +51,7 @@ import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevert
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.AuthorityRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BipRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.NetworkParamsRevertDto;
+import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.ValidatorRevertDto;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -175,6 +177,37 @@ public class ExIndexerConsensusHelperService {
 		}
 		if (!authoritiesToRemove.isEmpty()) {
 			consensusCoreService.bulkDeleteAuthorities(authoritiesToRemove.keySet());
+		}
+	}
+
+	public void processValidators(
+			Block block,
+			Map<Address, ValidatorState> validatorsToAdd,
+			Map<Address, ValidatorState> validatorsToRemove) {
+		List<Object[]> logBatch = new ArrayList<>();
+		validatorsToRemove.forEach((address, oldState) -> {
+			ValidatorRevertDto dto = ValidatorRevertDto.from(
+					oldState.getOriginTxHash(),
+					oldState.getCreatedAtBlockHeight(),
+					oldState.getCreatedAtTimestamp(),
+					oldState.getVersion());
+
+			revertLogCoreService.addLogToBatch(logBatch, block, EntityType.VALIDATOR, OperationType.DELETE,
+					address.toArray(), null, dto);
+		});
+
+		validatorsToAdd.forEach((address, newState) -> {
+			revertLogCoreService.addLogToBatch(logBatch, block, EntityType.VALIDATOR, OperationType.INSERT,
+					address.toArray(), null, null);
+		});
+
+		revertLogCoreService.insertLogBatch(logBatch);
+
+		if (!validatorsToAdd.isEmpty()) {
+			consensusCoreService.bulkUpsertValidators(validatorsToAdd);
+		}
+		if (!validatorsToRemove.isEmpty()) {
+			consensusCoreService.bulkDeleteValidators(validatorsToRemove.keySet());
 		}
 	}
 }

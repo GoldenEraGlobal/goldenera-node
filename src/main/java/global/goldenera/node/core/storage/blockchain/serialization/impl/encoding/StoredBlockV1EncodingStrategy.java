@@ -45,6 +45,7 @@ public class StoredBlockV1EncodingStrategy implements StoredBlockEncodingStrateg
 		out.writeIntScalar(storedBlock.getConnectedSource().getCode());
 
 		out.writeIntScalar(storedBlock.getBlockSize());
+		out.writeBytes(storedBlock.getIdentity());
 		out.writeBytes32(storedBlock.getHash());
 
 		Hash[] txHashes = storedBlock.getTransactionHashes();

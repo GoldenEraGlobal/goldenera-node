@@ -46,13 +46,13 @@ import global.goldenera.node.explorer.api.v1.transfer.mappers.TransferMapper;
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.explorer.services.core.ExTransferCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_TX)
+@ExplorerApiSecurity(ApiKeyPermission.READ_TX)
 @RequestMapping(value = "api/explorer/v1/transfer")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)

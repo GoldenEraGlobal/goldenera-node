@@ -164,9 +164,7 @@ public class BlockIngestionService {
 			throws Exception {
 		WorldState worldState = worldStateFactory.createForValidation(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
-
-		blockValidationService.validateHeaderContext(childBlock.getHeader(), parentBlock.getHeader(),
-				params);
+		blockValidationService.validateHeaderContext(childBlock.getHeader(), parentBlock.getHeader(), worldState);
 
 		// Skip TX validation if already done in validateFullBlock()
 		if (!skipTxValidation) {

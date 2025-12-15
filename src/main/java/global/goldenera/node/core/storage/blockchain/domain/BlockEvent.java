@@ -37,6 +37,9 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxVersion;
@@ -245,6 +248,34 @@ public sealed interface BlockEvent {
     }
 
     /**
+     * New validator was added to the governance system via approved BIP.
+     */
+    record ValidatorAdded(
+            Hash bipHash,
+            TxVersion txVersion,
+            TxBipValidatorAddPayload payload) implements BlockEvent {
+
+        @Override
+        public BlockEventType type() {
+            return BlockEventType.VALIDATOR_ADDED;
+        }
+    }
+
+    /**
+     * Validator was removed from governance system via approved BIP.
+     */
+    record ValidatorRemoved(
+            Hash bipHash,
+            TxVersion txVersion,
+            TxBipValidatorRemovePayload payload) implements BlockEvent {
+
+        @Override
+        public BlockEventType type() {
+            return BlockEventType.VALIDATOR_REMOVED;
+        }
+    }
+
+    /**
      * Network parameters were changed via approved BIP.
      * Only non-null fields were changed.
      */
@@ -256,6 +287,32 @@ public sealed interface BlockEvent {
         @Override
         public BlockEventType type() {
             return BlockEventType.NETWORK_PARAMS_CHANGED;
+        }
+    }
+
+    /**
+     * Network parameters were updated (any change, including automatic
+     * adjustments).
+     * This captures ALL network params changes, not just BIP-initiated ones.
+     * Useful for tracking hidden changes like ASERT anchor updates.
+     * 
+     * @param oldState
+     *            the previous network params state
+     * @param newState
+     *            the new network params state
+     */
+    record NetworkParamsUpdated(
+            NetworkParamsState oldState,
+            NetworkParamsState newState) implements BlockEvent {
+
+        @Override
+        public BlockEventType type() {
+            return BlockEventType.NETWORK_PARAMS_UPDATED;
+        }
+
+        @Override
+        public Hash bipHash() {
+            return null; // May or may not be BIP-related
         }
     }
 

@@ -54,6 +54,7 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 		ConnectedSource connectedSource = ConnectedSource.fromCode(connectedSourceCode);
 
 		int blockSize = input.readIntScalar();
+		Address identity = Address.wrap(input.readBytes());
 
 		Hash hash = Hash.wrap(input.readBytes32());
 
@@ -98,6 +99,7 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 				.blockSize(blockSize)
 				.txIndex(txIndex)
 				.events(events)
+				.identity(identity)
 				.build();
 	}
 

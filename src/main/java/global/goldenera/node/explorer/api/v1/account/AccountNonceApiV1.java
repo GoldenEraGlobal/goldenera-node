@@ -41,13 +41,13 @@ import global.goldenera.node.explorer.api.v1.account.dtos.AccountNonceDtoV1_Page
 import global.goldenera.node.explorer.api.v1.account.mappers.AccountNonceMapper;
 import global.goldenera.node.explorer.services.core.ExAccountNonceCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_ACCOUNT)
+@ExplorerApiSecurity(ApiKeyPermission.READ_ACCOUNT)
 @RequestMapping(value = "api/explorer/v1/account/nonce")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)

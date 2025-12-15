@@ -63,7 +63,10 @@ import lombok.experimental.FieldDefaults;
         @JsonSubTypes.Type(value = BlockEventDtoV1.TokenSupplyUpdatedDto.class, name = "TOKEN_SUPPLY_UPDATED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AuthorityAddedDto.class, name = "AUTHORITY_ADDED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AuthorityRemovedDto.class, name = "AUTHORITY_REMOVED"),
+        @JsonSubTypes.Type(value = BlockEventDtoV1.ValidatorAddedDto.class, name = "VALIDATOR_ADDED"),
+        @JsonSubTypes.Type(value = BlockEventDtoV1.ValidatorRemovedDto.class, name = "VALIDATOR_REMOVED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.NetworkParamsChangedDto.class, name = "NETWORK_PARAMS_CHANGED"),
+        @JsonSubTypes.Type(value = BlockEventDtoV1.NetworkParamsUpdatedDto.class, name = "NETWORK_PARAMS_UPDATED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasAddedDto.class, name = "ADDRESS_ALIAS_ADDED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasRemovedDto.class, name = "ADDRESS_ALIAS_REMOVED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.BipStateCreatedDto.class, name = "BIP_STATE_CREATED"),
@@ -79,7 +82,10 @@ import lombok.experimental.FieldDefaults;
         @DiscriminatorMapping(value = "TOKEN_SUPPLY_UPDATED", schema = BlockEventDtoV1.TokenSupplyUpdatedDto.class),
         @DiscriminatorMapping(value = "AUTHORITY_ADDED", schema = BlockEventDtoV1.AuthorityAddedDto.class),
         @DiscriminatorMapping(value = "AUTHORITY_REMOVED", schema = BlockEventDtoV1.AuthorityRemovedDto.class),
+        @DiscriminatorMapping(value = "VALIDATOR_ADDED", schema = BlockEventDtoV1.ValidatorAddedDto.class),
+        @DiscriminatorMapping(value = "VALIDATOR_REMOVED", schema = BlockEventDtoV1.ValidatorRemovedDto.class),
         @DiscriminatorMapping(value = "NETWORK_PARAMS_CHANGED", schema = BlockEventDtoV1.NetworkParamsChangedDto.class),
+        @DiscriminatorMapping(value = "NETWORK_PARAMS_UPDATED", schema = BlockEventDtoV1.NetworkParamsUpdatedDto.class),
         @DiscriminatorMapping(value = "ADDRESS_ALIAS_ADDED", schema = BlockEventDtoV1.AddressAliasAddedDto.class),
         @DiscriminatorMapping(value = "ADDRESS_ALIAS_REMOVED", schema = BlockEventDtoV1.AddressAliasRemovedDto.class),
         @DiscriminatorMapping(value = "BIP_STATE_CREATED", schema = BlockEventDtoV1.BipStateCreatedDto.class),
@@ -95,7 +101,10 @@ public abstract sealed class BlockEventDtoV1 permits
         BlockEventDtoV1.TokenSupplyUpdatedDto,
         BlockEventDtoV1.AuthorityAddedDto,
         BlockEventDtoV1.AuthorityRemovedDto,
+        BlockEventDtoV1.ValidatorAddedDto,
+        BlockEventDtoV1.ValidatorRemovedDto,
         BlockEventDtoV1.NetworkParamsChangedDto,
+        BlockEventDtoV1.NetworkParamsUpdatedDto,
         BlockEventDtoV1.AddressAliasAddedDto,
         BlockEventDtoV1.AddressAliasRemovedDto,
         BlockEventDtoV1.BipStateCreatedDto,
@@ -301,6 +310,46 @@ public abstract sealed class BlockEventDtoV1 permits
     @AllArgsConstructor
     @NoArgsConstructor
     @FieldDefaults(level = AccessLevel.PRIVATE)
+    public static final class ValidatorAddedDto extends BlockEventDtoV1 {
+        @Schema(description = "BIP hash that added the validator")
+        Hash bipHash;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.ValidatorAdd payload;
+
+        @Override
+        @JsonProperty("type")
+        public BlockEventType getType() {
+            return BlockEventType.VALIDATOR_ADDED;
+        }
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @FieldDefaults(level = AccessLevel.PRIVATE)
+    public static final class ValidatorRemovedDto extends BlockEventDtoV1 {
+        @Schema(description = "BIP hash that removed the validator")
+        Hash bipHash;
+        @Schema(description = "Transaction version")
+        TxVersion txVersion;
+        @Schema(description = "Payload details")
+        TxPayloadDtoV1.ValidatorRemove payload;
+
+        @Override
+        @JsonProperty("type")
+        public BlockEventType getType() {
+            return BlockEventType.VALIDATOR_REMOVED;
+        }
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @FieldDefaults(level = AccessLevel.PRIVATE)
     public static final class NetworkParamsChangedDto extends BlockEventDtoV1 {
         @Schema(description = "BIP hash that changed params")
         Hash bipHash;
@@ -313,6 +362,24 @@ public abstract sealed class BlockEventDtoV1 permits
         @JsonProperty("type")
         public BlockEventType getType() {
             return BlockEventType.NETWORK_PARAMS_CHANGED;
+        }
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @FieldDefaults(level = AccessLevel.PRIVATE)
+    public static final class NetworkParamsUpdatedDto extends BlockEventDtoV1 {
+        @Schema(description = "Previous network params state")
+        NetworkParamsStateDtoV1 oldState;
+        @Schema(description = "New network params state")
+        NetworkParamsStateDtoV1 newState;
+
+        @Override
+        @JsonProperty("type")
+        public BlockEventType getType() {
+            return BlockEventType.NETWORK_PARAMS_UPDATED;
         }
     }
 

@@ -51,6 +51,7 @@ public class NetworkParamsMapper {
                 in.getMinTxByteFee(),
                 in.getUpdatedByTxHash(),
                 in.getCurrentAuthorityCount(),
+                in.getCurrentValidatorCount(),
                 in.getUpdatedAtBlockHeight(),
                 in.getUpdatedAtTimestamp());
     }

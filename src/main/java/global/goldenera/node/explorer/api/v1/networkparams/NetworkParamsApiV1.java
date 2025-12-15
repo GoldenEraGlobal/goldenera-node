@@ -34,13 +34,13 @@ import global.goldenera.node.explorer.api.v1.networkparams.dtos.NetworkParamsDto
 import global.goldenera.node.explorer.api.v1.networkparams.mappers.NetworkParamsMapper;
 import global.goldenera.node.explorer.services.core.ExNetworkParamsCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_NETWORK_PARAMS)
+@ExplorerApiSecurity(ApiKeyPermission.READ_NETWORK_PARAMS)
 @RequestMapping(value = "api/explorer/v1/network-params")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)

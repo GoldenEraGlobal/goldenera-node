@@ -124,6 +124,10 @@ public class GenesisConfigLoader {
         Wei initialMintForAuthority = Wei
                 .valueOf(new BigInteger(requireString(networkParams, "initialMintForAuthority")));
 
+        // Validators
+        JsonNode validatorsNode = requireNode(root, "validators");
+        List<Address> validators = parseAddressList(validatorsNode);
+
         // Genesis block
         JsonNode genesisBlock = requireNode(root, "genesisBlock");
         long genesisBlockTimestamp = requireLong(genesisBlock, "timestamp");
@@ -161,6 +165,7 @@ public class GenesisConfigLoader {
                 minTxByteFee,
                 authorities,
                 initialMintForAuthority,
+                validators,
                 genesisBlockTimestamp,
                 genesisBlockDifficulty,
                 tokenName,

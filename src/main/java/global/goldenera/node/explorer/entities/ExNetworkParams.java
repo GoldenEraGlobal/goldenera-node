@@ -104,6 +104,9 @@ public class ExNetworkParams implements NetworkParamsState {
 	@Column(name = "current_authority_count", updatable = true, nullable = false)
 	long currentAuthorityCount;
 
+	@Column(name = "current_validator_count", updatable = true, nullable = false)
+	long currentValidatorCount;
+
 	@Column(name = "updated_at_block_height", updatable = true, nullable = false)
 	long updatedAtBlockHeight;
 

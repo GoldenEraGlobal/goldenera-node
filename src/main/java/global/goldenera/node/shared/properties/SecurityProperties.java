@@ -46,6 +46,8 @@ public class SecurityProperties {
 
 	boolean coreApiEnabled;
 
+	boolean explorerApiEnabled;
+
 	@PostConstruct
 	public void validate() {
 		ValidatorUtil.validateSecuritySecret(hmacSecret, "SECURITY_HMAC_SECRET");

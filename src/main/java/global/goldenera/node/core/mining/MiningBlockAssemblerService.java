@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.stereotype.Service;
@@ -50,6 +51,7 @@ import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
+import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.properties.MempoolProperties;
@@ -85,6 +87,7 @@ public class MiningBlockAssemblerService {
 	GeneralProperties generalConfig;
 	StateProcessor stateProcessor;
 	DifficultyCalculator difficultyService;
+	IdentityService identityService;
 
 	/**
 	 * Creates a new, mineable block template.
@@ -94,12 +97,31 @@ public class MiningBlockAssemblerService {
 	 * @throws Exception
 	 *             if assembly fails
 	 */
-	public AssembledBlock createBlockTemplate(Block parentBlock) throws Exception {
+	public Optional<AssembledBlock> createBlockTemplate(Block parentBlock) throws Exception {
 		log.debug("Creating block template | Parent: {}", parentBlock.getHeight());
 		BlockVersion blockVersion = BlockVersion.V1;
 
 		WorldState worldState = worldStateFactory.createForMining(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
+
+		// Check if miner identity is a valid validator (skip if no validators
+		// registered - open mining)
+		Address minerIdentity = identityService.getNodeIdentityAddress();
+
+		if (minerIdentity.equals(Address.ZERO)) {
+			log.error("Mining skipped: Miner identity cannot be zero!");
+			return Optional.empty();
+		}
+
+		if (params.getCurrentValidatorCount() > 0 && !worldState.getValidator(minerIdentity).exists()) {
+			log.debug("Mining skipped: Miner identity {} is not a registered validator",
+					minerIdentity.toChecksumAddress());
+			return Optional.empty();
+		}
+
+		// Beneficiary address is where mining rewards go (may differ from miner
+		// identity)
+		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
 
 		long nextHeight = parentBlock.getHeight() + 1;
 
@@ -115,8 +137,6 @@ public class MiningBlockAssemblerService {
 		long endSelect = System.currentTimeMillis();
 		log.debug("Selected {} tx(s) for block size {} | Time: {}s", txs.size(), maxBlockSize,
 				String.format("%.2f", (endSelect - startSelect) / 1000.0));
-
-		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
 
 		long startExec = System.currentTimeMillis();
 		StateProcessor.ExecutionResult result = stateProcessor.executeMiningBatch(
@@ -149,11 +169,11 @@ public class MiningBlockAssemblerService {
 		log.info("Block template created for height {} with {} txs, stateRoot: {}, difficulty: {}",
 				template.getHeight(), validTxs.size(), stateRootHash.toShortLogString(), difficulty);
 
-		return AssembledBlock.builder()
+		return Optional.of(AssembledBlock.builder()
 				.blockTemplate(template)
 				.txs(validTxs)
 				.invalidTxs(result.getInvalidTxs())
-				.build();
+				.build());
 	}
 
 	/**
@@ -264,6 +284,10 @@ public class MiningBlockAssemblerService {
 		@Override
 		public int getSize() {
 			return BlockHeaderUtil.size(this);
+		}
+
+		public Address getIdentity() {
+			return Address.ZERO;
 		}
 	}
 

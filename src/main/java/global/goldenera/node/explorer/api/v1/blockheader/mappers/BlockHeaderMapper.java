@@ -59,7 +59,8 @@ public class BlockHeaderMapper {
                                 in.getCumulativeDifficulty(),
                                 in.getNumberOfTxs(),
                                 in.getTotalFees(),
-                                in.getBlockReward());
+                                in.getBlockReward(),
+                                in.getIdentity());
         }
 
         public List<BlockHeaderDtoV1> map(@NonNull List<ExBlockHeader> in) {

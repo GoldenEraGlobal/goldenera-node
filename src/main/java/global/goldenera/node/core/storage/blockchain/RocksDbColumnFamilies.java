@@ -58,6 +58,7 @@ public class RocksDbColumnFamilies {
 	// Entity Indexes
 	public static final String CF_TOKENS = "tokens";
 	public static final String CF_AUTHORITIES = "authorities";
+	public static final String CF_VALIDATORS = "validators";
 	public static final String CF_ENTITY_UNDO_LOG = "entity_undo_log";
 
 	Map<String, ColumnFamilyHandle> handles = new HashMap<>();
@@ -92,6 +93,10 @@ public class RocksDbColumnFamilies {
 
 	public ColumnFamilyHandle authorities() {
 		return handles.get(CF_AUTHORITIES);
+	}
+
+	public ColumnFamilyHandle validators() {
+		return handles.get(CF_VALIDATORS);
 	}
 
 	public ColumnFamilyHandle entityUndoLog() {

@@ -107,10 +107,30 @@ public enum BlockEventType {
     AUTHORITY_REMOVED(21),
 
     /**
+     * New validator was added to the governance system via approved BIP.
+     * Affects: validator address
+     */
+    VALIDATOR_ADDED(22),
+
+    /**
+     * Validator was removed from the governance system via approved BIP.
+     * Affects: validator address
+     */
+    VALIDATOR_REMOVED(23),
+
+    /**
      * Network parameters were changed via approved BIP.
      * Global event affecting all network participants.
      */
-    NETWORK_PARAMS_CHANGED(22),
+    NETWORK_PARAMS_CHANGED(24),
+
+    /**
+     * Network parameters were updated (any change, including automatic
+     * adjustments).
+     * This captures ALL network params changes, not just BIP-initiated ones.
+     * Useful for tracking hidden changes like ASERT anchor updates.
+     */
+    NETWORK_PARAMS_UPDATED(25),
 
     // === ADDRESS ALIAS EVENTS (BIP execution results) ===
 

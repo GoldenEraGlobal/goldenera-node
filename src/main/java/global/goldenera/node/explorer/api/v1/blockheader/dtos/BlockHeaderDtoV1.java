@@ -65,5 +65,5 @@ public class BlockHeaderDtoV1 {
     int numberOfTxs;
     Wei totalFees;
     Wei blockReward;
-
+    Address identity;
 }

@@ -44,14 +44,14 @@ import global.goldenera.node.explorer.api.v1.authority.mappers.AuthorityMapper;
 import global.goldenera.node.explorer.api.v1.common.BulkAuthorityPageRequestV1;
 import global.goldenera.node.explorer.services.core.ExAuthorityCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
 @RequestMapping(value = "api/explorer/v1/authority")
-@GeneralApiSecurity(ApiKeyPermission.READ_AUTHORITY)
+@ExplorerApiSecurity(ApiKeyPermission.READ_AUTHORITY)
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 public class AuthorityApiV1 {

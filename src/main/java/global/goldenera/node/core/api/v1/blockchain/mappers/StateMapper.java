@@ -44,6 +44,7 @@ import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.BipStateMetadata;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AccountBalanceStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AccountNonceStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AddressAliasStateDtoV1;
@@ -53,6 +54,7 @@ import global.goldenera.node.core.api.v1.blockchain.dtos.BipStateMetadataDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.NetworkParamsStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.TokenStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.TxPayloadDtoV1;
+import global.goldenera.node.core.api.v1.blockchain.dtos.ValidatorStateDtoV1;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -96,6 +98,15 @@ public class StateMapper {
 
     public AuthorityStateDtoV1 map(@NonNull AuthorityState in) {
         return AuthorityStateDtoV1.builder()
+                .version(in.getVersion())
+                .originTxHash(in.getOriginTxHash())
+                .createdAtBlockHeight(in.getCreatedAtBlockHeight())
+                .createdAtTimestamp(in.getCreatedAtTimestamp())
+                .build();
+    }
+
+    public ValidatorStateDtoV1 map(@NonNull ValidatorState in) {
+        return ValidatorStateDtoV1.builder()
                 .version(in.getVersion())
                 .originTxHash(in.getOriginTxHash())
                 .createdAtBlockHeight(in.getCreatedAtBlockHeight())

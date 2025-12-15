@@ -41,6 +41,7 @@ import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 
 public class ExIndexerRevertDtos {
 
@@ -111,6 +112,16 @@ public class ExIndexerRevertDtos {
 		}
 	}
 
+	public static record ValidatorRevertDto(
+			@JsonProperty("tx") String originTxHex,
+			@JsonProperty("ch") long createdAtBlockHeight,
+			@JsonProperty("ct") Instant createdAtTimestamp,
+			@JsonProperty("ver") int version) {
+		public static ValidatorRevertDto from(Hash originTx, long ch, Instant ct, ValidatorStateVersion v) {
+			return new ValidatorRevertDto(originTx.toHexString(), ch, ct, v.getCode());
+		}
+	}
+
 	public record NetworkParamsRevertDto(
 			@JsonProperty("ver") int version,
 			@JsonProperty("br") BigDecimal blockReward,
@@ -122,6 +133,7 @@ public class ExIndexerRevertDtos {
 			@JsonProperty("base") BigDecimal minTxBaseFee,
 			@JsonProperty("byte") BigDecimal minTxByteFee,
 			@JsonProperty("auth_cnt") long currentAuthorityCount,
+			@JsonProperty("val_cnt") long currentValidatorCount,
 			@JsonProperty("utx") String updatedByTxHashHex,
 			@JsonProperty("uh") long updatedAtBlockHeight,
 			@JsonProperty("ut") Instant updatedAtTimestamp) {
@@ -137,6 +149,7 @@ public class ExIndexerRevertDtos {
 					new BigDecimal(state.getMinTxBaseFee().toBigInteger()),
 					new BigDecimal(state.getMinTxByteFee().toBigInteger()),
 					state.getCurrentAuthorityCount(),
+					state.getCurrentValidatorCount(),
 					state.getUpdatedByTxHash().toHexString(),
 					state.getUpdatedAtBlockHeight(),
 					state.getUpdatedAtTimestamp());

@@ -47,13 +47,13 @@ import global.goldenera.node.explorer.api.v1.memtransfer.mappers.MemTransferMapp
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.explorer.services.core.ExMemTransferCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
+@ExplorerApiSecurity(ApiKeyPermission.READ_MEMPOOL_TX)
 @RequestMapping(value = "api/explorer/v1/mem-transfer")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)

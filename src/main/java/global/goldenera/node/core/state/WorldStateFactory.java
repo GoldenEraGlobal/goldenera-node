@@ -39,6 +39,7 @@ import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.merkletrie.NodeLoader;
@@ -60,6 +61,7 @@ public class WorldStateFactory {
 	public static final Bytes KEY_BALANCE = Bytes.wrap("balance".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_NONCE = Bytes.wrap("nonce".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_AUTHORITY = Bytes.wrap("authority".getBytes(StandardCharsets.UTF_8));
+	public static final Bytes KEY_VALIDATOR = Bytes.wrap("validator".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_ADDRESS_ALIAS = Bytes.wrap("address_alias".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_BIP_STATE = Bytes.wrap("bipstate".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_NETWORK_PARAMS = Bytes.wrap("network_params".getBytes(StandardCharsets.UTF_8));
@@ -79,6 +81,9 @@ public class WorldStateFactory {
 
 	Function<AuthorityState, Bytes> authoritySerializer;
 	Function<Bytes, AuthorityState> authorityDeserializer;
+
+	Function<ValidatorState, Bytes> validatorSerializer;
+	Function<Bytes, ValidatorState> validatorDeserializer;
 
 	Function<BipState, Bytes> bipStateSerializer;
 	Function<Bytes, BipState> bipStateDeserializer;
@@ -131,6 +136,9 @@ public class WorldStateFactory {
 		MerkleTrie<Bytes, AuthorityState> authorityTrie = loadSubTrie(
 				mainTrie, KEY_AUTHORITY, nodeLoader, authoritySerializer, authorityDeserializer);
 
+		MerkleTrie<Bytes, ValidatorState> validatorTrie = loadSubTrie(
+				mainTrie, KEY_AUTHORITY, nodeLoader, validatorSerializer, validatorDeserializer);
+
 		MerkleTrie<Bytes, AddressAliasState> addressAliasTrie = loadSubTrie(
 				mainTrie, KEY_ADDRESS_ALIAS, nodeLoader, addressAliasSerializer, addressAliasDeserializer);
 
@@ -144,12 +152,13 @@ public class WorldStateFactory {
 				mainTrie, KEY_TOKEN, nodeLoader, tokenSerializer, tokenDeserializer);
 
 		return new WorldState(
-				isMining, // <--- New Flag passed here
+				isMining,
 				rocksDBMerkleStorage,
 				mainTrie,
 				balanceTrie,
 				nonceTrie,
 				authorityTrie,
+				validatorTrie,
 				addressAliasTrie,
 				bipStateTrie,
 				networkParamsTrie,

@@ -43,6 +43,7 @@ import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.serialization.tx.payload.TxPayloadEncoder;
@@ -162,9 +163,10 @@ public class ExIndexerConsensusCoreService {
 				        min_tx_byte_fee,
 				        updated_by_tx_hash,
 				        current_authority_count,
+				        current_validator_count,
 				        updated_at_block_height,
 				        updated_at_timestamp
-				    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				    ON CONFLICT (id) DO UPDATE SET
 				        network_params_version = EXCLUDED.network_params_version,
 				        block_reward = EXCLUDED.block_reward,
@@ -177,6 +179,7 @@ public class ExIndexerConsensusCoreService {
 				        min_tx_byte_fee = EXCLUDED.min_tx_byte_fee,
 				        updated_by_tx_hash = EXCLUDED.updated_by_tx_hash,
 				        current_authority_count = EXCLUDED.current_authority_count,
+				        current_validator_count = EXCLUDED.current_validator_count,
 				        updated_at_block_height = EXCLUDED.updated_at_block_height,
 				        updated_at_timestamp = EXCLUDED.updated_at_timestamp
 				""";
@@ -215,10 +218,13 @@ public class ExIndexerConsensusCoreService {
 				// 11. Authority Count
 				state.getCurrentAuthorityCount(),
 
-				// 12. Updated Height
+				// 12. Validator Count
+				state.getCurrentValidatorCount(),
+
+				// 13. Updated Height
 				state.getUpdatedAtBlockHeight(),
 
-				// 13. Updated Time
+				// 14. Updated Time
 				Timestamp.from(state.getUpdatedAtTimestamp()));
 	}
 
@@ -282,6 +288,42 @@ public class ExIndexerConsensusCoreService {
 			public void setValues(PreparedStatement ps, int i) throws SQLException {
 				Map.Entry<Address, AuthorityState> entry = list.get(i);
 				AuthorityState s = entry.getValue();
+				ps.setBytes(1, entry.getKey().toArray());
+				ps.setBytes(2, s.getOriginTxHash().toArray());
+				ps.setLong(3, s.getCreatedAtBlockHeight());
+				ps.setTimestamp(4, Timestamp.from(s.getCreatedAtTimestamp()));
+				ps.setInt(5, s.getVersion().getCode());
+			}
+
+			public int getBatchSize() {
+				return list.size();
+			}
+		});
+	}
+
+	public void bulkDeleteValidators(Set<Address> addresses) {
+		if (addresses.isEmpty())
+			return;
+		String sql = "DELETE FROM explorer_validator WHERE address = ?";
+		List<Address> list = new ArrayList<>(addresses);
+		jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+			public void setValues(PreparedStatement ps, int i) throws SQLException {
+				ps.setBytes(1, list.get(i).toArray());
+			}
+
+			public int getBatchSize() {
+				return list.size();
+			}
+		});
+	}
+
+	public void bulkUpsertValidators(Map<Address, ValidatorState> adds) {
+		String sql = "INSERT INTO explorer_validator (address, origin_tx_hash, created_at_block_height, created_at_timestamp, validator_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT (address) DO NOTHING";
+		List<Map.Entry<Address, ValidatorState>> list = new ArrayList<>(adds.entrySet());
+		jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
+			public void setValues(PreparedStatement ps, int i) throws SQLException {
+				Map.Entry<Address, ValidatorState> entry = list.get(i);
+				ValidatorState s = entry.getValue();
 				ps.setBytes(1, entry.getKey().toArray());
 				ps.setBytes(2, s.getOriginTxHash().toArray());
 				ps.setLong(3, s.getCreatedAtBlockHeight());

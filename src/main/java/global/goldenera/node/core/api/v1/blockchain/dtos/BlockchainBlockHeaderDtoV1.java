@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
 
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
@@ -75,6 +76,9 @@ public class BlockchainBlockHeaderDtoV1 {
 
         @Schema(description = "Block size in bytes")
         int size;
+
+        @Schema(description = "Block identity (miner address)")
+        Address identity;
 
         @Schema(description = "Number of transactions in the block")
         int numOfTxs;

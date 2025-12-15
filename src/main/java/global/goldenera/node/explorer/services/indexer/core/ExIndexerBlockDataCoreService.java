@@ -64,9 +64,9 @@ public class ExIndexerBlockDataCoreService {
 		String sql = """
 				    INSERT INTO explorer_block_header (
 				        hash, height, block_version, timestamp, previous_hash,
-				        tx_root_hash, state_root_hash, difficulty, coinbase, nonce, signature,
+				        tx_root_hash, state_root_hash, difficulty, coinbase, nonce, signature, identity,
 				        block_size, cumulative_difficulty, number_of_txs, total_fees, block_reward
-				    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""";
 
 		jdbcTemplate.update(sql,
@@ -81,6 +81,7 @@ public class ExIndexerBlockDataCoreService {
 				header.getCoinbase().toArray(),
 				header.getNonce(),
 				header.getSignature() != null ? header.getSignature().toArray() : null,
+				header.getIdentity() != null ? header.getIdentity().toArray() : null,
 				header.getSize(),
 				new BigDecimal(cumulativeDifficulty),
 				block.getTxs().size(),

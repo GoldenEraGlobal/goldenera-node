@@ -373,6 +373,7 @@ public class BlockSyncManagerService {
 					StoredBlock storedBlock = StoredBlock.builder()
 							.block(block)
 							.cumulativeDifficulty(currentCumulativeDifficulty)
+							.identity(block.getHeader().getIdentity())
 							.receivedAt(block.getHeader().getTimestamp())
 							.receivedFrom(peer.getIdentity())
 							.connectedSource(ConnectedSource.REORG)
@@ -522,6 +523,7 @@ public class BlockSyncManagerService {
 		headers.parallelStream().forEach(h -> {
 			h.getHash(); // Warm up hash cache
 			h.getSize(); // Warm up size cache
+			h.getIdentity(); // Warm up identity cache
 			contextMap.put(h.getHeight(), h.getHash()); // Now cached, O(1)
 			blockValidationService.validateHeader(h, contextMap);
 		});

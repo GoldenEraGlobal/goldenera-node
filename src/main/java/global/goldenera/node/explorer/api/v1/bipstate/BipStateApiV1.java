@@ -47,13 +47,13 @@ import global.goldenera.node.explorer.api.v1.bipstate.mappers.BipStateMapper;
 import global.goldenera.node.explorer.api.v1.common.BulkBipStateRequestV1;
 import global.goldenera.node.explorer.services.core.ExBipStateCoreService;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
-import global.goldenera.node.shared.security.GeneralApiSecurity;
+import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 @RestController
 @AllArgsConstructor
-@GeneralApiSecurity(ApiKeyPermission.READ_BIP_STATE)
+@ExplorerApiSecurity(ApiKeyPermission.READ_BIP_STATE)
 @RequestMapping(value = "api/explorer/v1/bip-state")
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
