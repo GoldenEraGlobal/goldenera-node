@@ -182,6 +182,11 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					reputationService.recordFailure(peer.getIdentity());
 				}
 			}
+
+			if (e.getMessage().toUpperCase().contains("BANNED")) {
+				logAsError = false;
+			}
+
 			if (logAsError) {
 				log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
 			} else {
@@ -295,9 +300,23 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 			log.error("Payload type mismatch for message {}: {}", envelope.getMessageType(), cce.getMessage());
 			reputationService.recordFailure(peer.getIdentity());
 		} catch (Exception e) {
-			log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
+			boolean logAsError = true;
 			if (peer.getIdentity() != null) {
-				reputationService.recordFailure(peer.getIdentity());
+				if (reputationService.isBanned(peer.getIdentity())) {
+					logAsError = false;
+				} else {
+					reputationService.recordFailure(peer.getIdentity());
+				}
+			}
+
+			if (e.getMessage().toUpperCase().contains("BANNED")) {
+				logAsError = false;
+			}
+
+			if (logAsError) {
+				log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
+			} else {
+				log.debug("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
 			}
 			ctx.close();
 		}
