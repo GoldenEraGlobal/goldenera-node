@@ -39,6 +39,7 @@ import com.github.benmanes.caffeine.cache.Caffeine;
 
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.properties.BlockchainDbProperties;
@@ -161,6 +162,17 @@ public class CacheConfig {
 	}
 
 	/**
+	 * Cache for validators list (global, rarely changes).
+	 */
+	@Bean("validatorsCache")
+	public Cache<String, List<ValidatorState>> validatorsCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(1)
+				.expireAfterWrite(props.getCacheExpireMinutes(), TimeUnit.MINUTES)
+				.build();
+	}
+
+	/**
 	 * Cache for token map (address -> TokenState).
 	 */
 	@Bean("tokensMapCache")
@@ -176,6 +188,17 @@ public class CacheConfig {
 	 */
 	@Bean("authoritiesMapCache")
 	public Cache<String, Map<Address, AuthorityState>> authoritiesMapCache() {
+		return Caffeine.newBuilder()
+				.maximumSize(1)
+				.expireAfterWrite(props.getCacheExpireMinutes(), TimeUnit.MINUTES)
+				.build();
+	}
+
+	/**
+	 * Cache for validators map (address -> ValidatorState).
+	 */
+	@Bean("validatorsMapCache")
+	public Cache<String, Map<Address, ValidatorState>> validatorsMapCache() {
 		return Caffeine.newBuilder()
 				.maximumSize(1)
 				.expireAfterWrite(props.getCacheExpireMinutes(), TimeUnit.MINUTES)
