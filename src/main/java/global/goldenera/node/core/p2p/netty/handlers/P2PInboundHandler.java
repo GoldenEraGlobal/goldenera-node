@@ -129,7 +129,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 
 	@Override
 	public void channelActive(ChannelHandlerContext ctx) {
-		log.info("New Peer Connected: {}", ctx.channel().remoteAddress());
+		log.debug("[RAW] New Peer Connected: {}", ctx.channel().remoteAddress());
 		peer = new RemotePeer(ctx.channel(), registry);
 		peerRegistry.register(peer);
 		// Send Handshake immediately on connect
