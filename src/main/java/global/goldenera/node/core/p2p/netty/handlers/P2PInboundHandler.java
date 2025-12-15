@@ -314,6 +314,9 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		if (status.getProtocolVersion() < MIN_SUPPORTED_PROTOCOL_VERSION) {
 			throw new GEFailedException("Incompatible Protocol Version (Too Old)");
 		}
+		if (reputationService.isBanned(status.getNodeIdentity())) {
+			throw new GEFailedException("Peer is BANNED locally");
+		}
 		log.info("Handshake Success with {}: Identity={}", peer.getChannel().remoteAddress(), status.getNodeIdentity());
 		reputationService.recordSuccess(status.getNodeIdentity());
 		updatePeerState(status);

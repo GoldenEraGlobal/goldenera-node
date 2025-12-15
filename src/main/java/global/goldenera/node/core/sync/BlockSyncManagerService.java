@@ -74,6 +74,7 @@ import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.exceptions.IncompatibleChainException;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PreDestroy;
@@ -258,6 +259,15 @@ public class BlockSyncManagerService {
 			long headerTime = System.currentTimeMillis() - headerStart;
 
 			if (headersToSync.isEmpty()) {
+				// If peer has much higher height but sends nothing, they found no common
+				// ancestor
+				// This implies an incompatible chain (different genesis or hard fork)
+				if (peer.getHeadHeight() > localBest.getHeight()) {
+					throw new IncompatibleChainException("Peer claimed height " + peer.getHeadHeight()
+							+ " (local: " + localBest.getHeight()
+							+ ") but sent no headers. Likely no common ancestor found.");
+				}
+
 				log.debug("No new headers found from peer");
 				return true;
 			}
@@ -283,6 +293,13 @@ public class BlockSyncManagerService {
 			peerReputationService.recordSuccess(peer.getIdentity());
 			registry.counter("blockchain.sync.blocks_downloaded").increment(totalBlocksProcessed);
 			return true;
+		} catch (IncompatibleChainException e) {
+			// Peer is on a fundamentally different chain (different genesis or hard fork)
+			// Ban them permanently as they'll never be useful to us
+			log.warn("INCOMPATIBLE CHAIN: Banning peer {} - {}", peer.getIdentity(), e.getMessage());
+			peer.disconnect("Incompatible chain: " + e.getMessage());
+			peerReputationService.ban(peer.getIdentity());
+			return false;
 		} catch (Exception e) {
 			String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
 			log.warn("Sync failed with peer {}: {}", peer.getIdentity(), errorMsg);
@@ -476,6 +493,18 @@ public class BlockSyncManagerService {
 				if (allHeaders.isEmpty() && !batch.isEmpty()) {
 					Hash firstParent = batch.get(0).getPreviousHash();
 					if (!chainQueryService.hasBlockData(firstParent)) {
+						// Check if this is an incompatible chain (different genesis/hard fork)
+						// If we have a genesis (height >= 0) but don't have their parent,
+						// they must be on a completely different chain
+						long localHeight = chainQueryService.getLatestBlockHeight().orElse(-1L);
+						if (localHeight >= 0) {
+							// We have a genesis, but their chain doesn't connect to ours
+							// This is a fundamentally incompatible chain - ban them
+							throw new IncompatibleChainException(
+									"Peer chain does not connect to our chain. Their header at height "
+											+ batch.get(0).getHeight() + " has parent " + firstParent
+											+ " which is not in our chain (local height: " + localHeight + ")");
+						}
 						throw new GEValidationException("Peer sent header at height " + batch.get(0).getHeight()
 								+ " whose parent " + firstParent + " is missing from our DB");
 					}
