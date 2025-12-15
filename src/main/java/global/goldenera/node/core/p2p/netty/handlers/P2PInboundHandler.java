@@ -29,6 +29,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -170,12 +171,21 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					sample.stop(registry.timer("p2p.message.process_time", "type", envelope.getMessageType().name()));
 				}
 			});
-		} catch (java.util.concurrent.RejectedExecutionException re) {
+		} catch (RejectedExecutionException re) {
 			log.warn("Node Overloaded: Dropping message from {} (Queue full)", getPeerLogInfo());
 		} catch (Exception e) {
-			log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
+			boolean logAsError = true;
 			if (peer.getIdentity() != null) {
-				reputationService.recordFailure(peer.getIdentity());
+				if (reputationService.isBanned(peer.getIdentity())) {
+					logAsError = false;
+				} else {
+					reputationService.recordFailure(peer.getIdentity());
+				}
+			}
+			if (logAsError) {
+				log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
+			} else {
+				log.debug("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
 			}
 			ctx.close();
 		}
