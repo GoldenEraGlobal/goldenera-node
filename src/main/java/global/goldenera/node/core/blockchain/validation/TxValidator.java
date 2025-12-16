@@ -40,9 +40,12 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.Constants;
 import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.utils.ValidatorUtil;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -53,12 +56,18 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class TxValidator {
 
+	private final GeneralProperties generalProperties;
+
 	/**
 	 * Stateless validation: Checks internal consistency of the transaction.
 	 * Does not require DB access.
 	 */
 	public void validateStateless(@NonNull Tx tx) {
 		try {
+			if (tx.getNetwork() != generalProperties.getNetwork()) {
+				throw new GEValidationException("Tx network does not match node network");
+			}
+
 			// 1. Basic Size & Limits (Cheap)
 			if (tx.getSize() > Constants.getSettings().maxTxSizeInBytes()) {
 				throw new GEValidationException("Tx too large: " + tx.getSize());
@@ -174,6 +183,26 @@ public class TxValidator {
 					}
 					if (p.getAddress().equals(Address.ZERO)) {
 						throw new GEValidationException("Authority address cannot be the zero address");
+					}
+				}
+				break;
+			case BIP_VALIDATOR_ADD:
+				if (tx.getPayload() instanceof TxBipValidatorAddPayload p) {
+					if (p.getAddress() == null) {
+						throw new GEValidationException("Validator address cannot be null");
+					}
+					if (p.getAddress().equals(Address.ZERO)) {
+						throw new GEValidationException("Validator address cannot be the zero address");
+					}
+				}
+				break;
+			case BIP_VALIDATOR_REMOVE:
+				if (tx.getPayload() instanceof TxBipValidatorRemovePayload p) {
+					if (p.getAddress() == null) {
+						throw new GEValidationException("Validator address cannot be null");
+					}
+					if (p.getAddress().equals(Address.ZERO)) {
+						throw new GEValidationException("Validator address cannot be the zero address");
 					}
 				}
 				break;
