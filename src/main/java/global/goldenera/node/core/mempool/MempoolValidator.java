@@ -307,9 +307,11 @@ public class MempoolValidator {
 							.add(mintPayload.getAmount().toBigInteger());
 					if (newTotalSupply.compareTo(tokenState.getMaxSupply()) > 0) {
 						return MempoolValidationResult.invalid(
-								"Minting would exceed maxSupply. Current: " + tokenState.getTotalSupply()
-										+ ", Minting: " + mintPayload.getAmount() + ", MaxSupply: "
-										+ tokenState.getMaxSupply());
+								"Minting would exceed maxSupply. Current: "
+										+ tokenState.getTotalSupply().toBigInteger().toString()
+										+ ", Minting: " + mintPayload.getAmount().toBigInteger().toString()
+										+ ", MaxSupply: "
+										+ tokenState.getMaxSupply().toString());
 					}
 				}
 			} else if (payload instanceof TxBipTokenBurnPayload burnPayload) {

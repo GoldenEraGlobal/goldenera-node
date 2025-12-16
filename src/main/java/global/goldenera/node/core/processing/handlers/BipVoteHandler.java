@@ -198,7 +198,8 @@ public class BipVoteHandler implements TxHandler {
 			BigInteger newTotalSupply = token.getTotalSupply().toBigInteger().add(p.getAmount().toBigInteger());
 			checkArgument(newTotalSupply.compareTo(token.getMaxSupply()) <= 0,
 					"Minting would exceed maxSupply. Current: %s, Minting: %s, MaxSupply: %s",
-					token.getTotalSupply(), p.getAmount(), token.getMaxSupply());
+					token.getTotalSupply().toBigInteger().toString(), p.getAmount().toBigInteger().toString(),
+					token.getMaxSupply().toString());
 		}
 
 		state.setToken(p.getTokenAddress(),
