@@ -28,11 +28,14 @@ import static lombok.AccessLevel.PRIVATE;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 
 import org.springframework.stereotype.Service;
 
@@ -133,7 +136,7 @@ public class MiningBlockAssemblerService {
 		timestamp = Math.max(timestamp, parentBlock.getHeader().getTimestamp().toEpochMilli() + 1);
 
 		long startSelect = System.currentTimeMillis();
-		List<Tx> txs = getExecutableTransactions(maxBlockSize - 512);
+		List<Tx> txs = getExecutableTransactions(maxBlockSize - 512, worldState);
 		long endSelect = System.currentTimeMillis();
 		log.debug("Selected {} tx(s) for block size {} | Time: {}s", txs.size(), maxBlockSize,
 				String.format("%.2f", (endSelect - startSelect) / 1000.0));
@@ -182,26 +185,104 @@ public class MiningBlockAssemblerService {
 	 *
 	 * @param maxBlockSizeBytes
 	 *            The maximum size the transactions can fill.
+	 * @param worldState
+	 *            The world state to check nonces against.
 	 * @return A list of transactions, sorted by fee, ready for inclusion.
 	 */
-	public List<Tx> getExecutableTransactions(long maxBlockSizeBytes) {
+	public List<Tx> getExecutableTransactions(long maxBlockSizeBytes, WorldState worldState) {
+		log.debug("[MINING-DEBUG] getExecutableTransactions START, maxBlockSize={}", maxBlockSizeBytes);
 		Iterator<MempoolEntry> candidates = mempoolService.getTxIterator();
 		List<Tx> blockTxs = new ArrayList<>();
 		Set<Hash> seenHashes = new HashSet<>();
+		Map<Address, Long> senderNextNonce = new HashMap<>();
+		// Buffer for "future" transactions encountered early (due to high fee)
+		Map<Address, TreeMap<Long, Tx>> deferredTxs = new HashMap<>();
+
 		long currentSize = 0;
+		int skippedDuplicates = 0;
+		int skippedSize = 0;
+		int skippedOutOfOrder = 0;
 
 		while (candidates.hasNext()) {
 			MempoolEntry entry = candidates.next();
 			Tx tx = entry.getTx();
+			Address sender = tx.getSender();
+
+			// 1. Check Nonce Sequence
+			if (sender != null) {
+				long expectedNonce = senderNextNonce.computeIfAbsent(sender,
+						k -> worldState.getNonce(k).getNonce() + 1);
+
+				if (tx.getNonce() > expectedNonce) {
+					// Park future transaction (maybe parent hasn't been seen yet due to lower fee)
+					deferredTxs.computeIfAbsent(sender, k -> new java.util.TreeMap<>()).put(tx.getNonce(), tx);
+					log.trace("[MINING-DEBUG] Deferred future tx: hash={}, sender={}, nonce={}, expected={}",
+							tx.getHash().toShortLogString(), sender.toChecksumAddress(), tx.getNonce(), expectedNonce);
+					continue;
+				} else if (tx.getNonce() < expectedNonce) {
+					// Stale/Old
+					skippedOutOfOrder++;
+					continue;
+				}
+				// tx.getNonce() == expectedNonce -> PROCEED
+			}
+
 			if (seenHashes.add(tx.getHash())) {
 				if (currentSize + tx.getSize() <= maxBlockSizeBytes) {
 					blockTxs.add(tx);
 					currentSize += tx.getSize();
+
+					log.debug("[MINING-DEBUG] Selected tx: hash={}, sender={}, nonce={}, fee={}, size={}",
+							tx.getHash().toShortLogString(),
+							tx.getSender() != null ? tx.getSender().toChecksumAddress() : "null",
+							tx.getNonce(), tx.getFee().toBigInteger(), tx.getSize());
+
+					// Update expected nonce AND check deferred buffer
+					if (sender != null) {
+						long nextNonce = tx.getNonce() + 1;
+						senderNextNonce.put(sender, nextNonce);
+
+						// Try to pull children from deferred buffer (CPFP)
+						java.util.TreeMap<Long, Tx> pending = deferredTxs.get(sender);
+						if (pending != null) {
+							while (pending.containsKey(nextNonce)) {
+								Tx childTx = pending.remove(nextNonce);
+
+								// Must also check duplicate hash/size for child
+								if (seenHashes.add(childTx.getHash())) {
+									if (currentSize + childTx.getSize() <= maxBlockSizeBytes) {
+										blockTxs.add(childTx);
+										currentSize += childTx.getSize();
+										log.debug("[MINING-DEBUG] Selected DEFERRED tx: hash={}, nonce={}",
+												childTx.getHash().toShortLogString(), childTx.getNonce());
+
+										nextNonce++;
+										senderNextNonce.put(sender, nextNonce);
+									} else {
+										// Block full, stop draining
+										pending.put(nextNonce, childTx); // Return to buffer
+										break;
+									}
+								} else {
+									nextNonce++; // Duplicate? Should not happen in local buffer logic but safe skip
+									senderNextNonce.put(sender, nextNonce);
+								}
+							}
+						}
+					}
 				} else {
+					skippedSize++;
+					log.debug("[MINING-DEBUG] Skipped (size limit): hash={}, txSize={}, currentSize={}",
+							tx.getHash().toShortLogString(), tx.getSize(), currentSize);
 					break;
 				}
+			} else {
+				skippedDuplicates++;
 			}
 		}
+		log.info(
+				"[MINING-DEBUG] getExecutableTransactions END: selected={}, totalSize={}, skippedDuplicates={}, skippedSize={}, deferredRemaining={}",
+				blockTxs.size(), currentSize, skippedDuplicates, skippedSize, deferredTxs.size());
 		return blockTxs;
 	}
 

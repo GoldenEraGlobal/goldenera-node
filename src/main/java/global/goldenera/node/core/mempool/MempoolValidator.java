@@ -143,13 +143,16 @@ public class MempoolValidator {
 	 */
 	private MempoolValidationResult validateUserTx(Tx tx, WorldState worldstate) {
 		Address sender = tx.getSender();
-		log.debug("validateUserTx: hash={}, type={}, sender={}",
-				tx.getHash().toShortLogString(), tx.getType(), sender.toChecksumAddress());
+		log.debug("[VALIDATOR-DEBUG] validateUserTx: hash={}, type={}, sender={}, txNonce={}",
+				tx.getHash().toShortLogString(), tx.getType(), sender.toChecksumAddress(), tx.getNonce());
 
 		// 4a. Check Nonce (applies to ALL user txs)
 		AccountNonceState confirmedNonceState = worldstate.getNonce(sender);
 		long currentChainNonce = confirmedNonceState.getNonce();
+		log.debug("[VALIDATOR-DEBUG] Nonce check: txNonce={}, chainNonce={}, expectedMin={}",
+				tx.getNonce(), currentChainNonce, currentChainNonce + 1);
 		if (tx.getNonce() < currentChainNonce + 1) {
+			log.debug("[VALIDATOR-DEBUG] STALE: txNonce {} < expectedMin {}", tx.getNonce(), currentChainNonce + 1);
 			return MempoolValidationResult.stale(currentChainNonce, "Nonce is too low.");
 		}
 
@@ -220,6 +223,8 @@ public class MempoolValidator {
 		}
 
 		// All checks passed for this user tx
+		log.debug("[VALIDATOR-DEBUG] VALID: tx {} passed all checks, chainNonce={}",
+				tx.getHash().toShortLogString(), currentChainNonce);
 		return MempoolValidationResult.valid(currentChainNonce);
 	}
 

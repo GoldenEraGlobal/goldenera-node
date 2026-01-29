@@ -340,6 +340,21 @@ public class MempoolStore {
 	public Iterator<MempoolEntry> getExecutableTransactionsIterator() {
 		Iterator<MempoolEntry> userTxs = executableTxsByFee.iterator();
 
+		log.debug(
+				"[MEMPOOL-DEBUG] getExecutableTransactionsIterator: executableTxsByFee.size={}, systemTxs.size={}, allTxsByHash.size={}",
+				executableTxsByFee.size(), systemTxs.size(), allTxsByHash.size());
+
+		// Log first 5 executable transactions for debugging
+		int count = 0;
+		for (MempoolEntry entry : executableTxsByFee) {
+			if (count++ >= 5)
+				break;
+			log.debug("[MEMPOOL-DEBUG] Executable tx #{}: hash={}, sender={}, nonce={}, fee={}",
+					count, entry.getHash().toShortLogString(),
+					entry.getTx().getSender() != null ? entry.getTx().getSender().toChecksumAddress() : "null",
+					entry.getNonce(), entry.getTx().getFee().toBigInteger());
+		}
+
 		// System txs have priority, so put them at the beginning
 		return Iterators.concat(systemTxs.iterator(), userTxs);
 	}
@@ -1126,10 +1141,15 @@ public class MempoolStore {
 				List<MempoolEntry> outTxsToAdd,
 				List<MempoolEntry> outTxsToRemove) {
 
+			log.debug(
+					"[POOL-DEBUG] addTransaction START: sender={}, txHash={}, txNonce={}, currentChainNonce={}, poolChainNonce={}, executableTxs.size={}, futureTxs.size={}",
+					senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), tx.getNonce(),
+					currentChainNonce, this.chainNonce, executableTxs.size(), futureTxs.size());
+
 			// 0. Lazy Sync: If the external world says chainNonce is higher, believe it.
 			// This fixes de-sync issues if processNewBlock was delayed/missed.
 			if (currentChainNonce > this.chainNonce) {
-				log.debug("Sender {}: Lazy sync chainNonce from {} to {}.",
+				log.debug("[POOL-DEBUG] Sender {}: Lazy sync chainNonce from {} to {}.",
 						senderAddress.toChecksumAddress(), this.chainNonce, currentChainNonce);
 				List<MempoolEntry> evicted = updateChainNonceAndPromote(currentChainNonce, outTxsToAdd);
 				outTxsToRemove.addAll(evicted);
@@ -1138,8 +1158,8 @@ public class MempoolStore {
 
 			// 1. Check for stale nonce
 			if (txNonce <= this.chainNonce) {
-				log.debug("Sender {}: Stale tx {} (nonce {} <= chainNonce {})",
-						senderAddress.toChecksumAddress(), tx.getHash().toHexString(), txNonce, this.chainNonce);
+				log.debug("[POOL-DEBUG] Sender {}: STALE tx {} (nonce {} <= chainNonce {})",
+						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce, this.chainNonce);
 				return StorageAddResult.STALE;
 			}
 
@@ -1178,10 +1198,15 @@ public class MempoolStore {
 			// 3. Decide where to place it: executable or future?
 			long nextExecutableNonce = getNextExecutableNonce();
 
+			log.debug("[POOL-DEBUG] Sender {}: txNonce={}, nextExecutableNonce={}, chainNonce={}",
+					senderAddress.toChecksumAddress(), txNonce, nextExecutableNonce, this.chainNonce);
+
 			if (txNonce == nextExecutableNonce) {
 				// This is the next tx in sequence
 				executableTxs.put(txNonce, tx);
 				outTxsToAdd.add(tx);
+				log.debug("[POOL-DEBUG] Sender {}: tx {} added as EXECUTABLE (nonce={})",
+						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce);
 				// 4. CRITICAL: Promote txs from 'future'
 				promoteExecutableTxs(outTxsToAdd);
 				return StorageAddResult.ADDED_EXECUTABLE;
@@ -1191,18 +1216,24 @@ public class MempoolStore {
 
 				// Check the gap against the *last confirmed chain nonce*
 				if (txNonce > this.chainNonce + MAX_NONCE_GAP) {
-					log.warn("Sender {}: Tx nonce {} is too far in the future (max allowed: {}). Rejecting tx {}.",
+					log.warn(
+							"[POOL-DEBUG] Sender {}: Tx nonce {} is too far in the future (max allowed: {}). Rejecting tx {}.",
 							senderAddress.toChecksumAddress(), txNonce, this.chainNonce + MAX_NONCE_GAP,
 							tx.getHash().toShortLogString());
 					return StorageAddResult.NONCE_TOO_FAR_FUTURE;
 				}
-				// --- ADD THIS CHECK (END) ---
 				// This tx has a gap, put it in the 'future' queue
 				futureTxs.put(txNonce, tx);
+				log.warn("[POOL-DEBUG] Sender {}: tx {} added as FUTURE (nonce={}, gap from nextExecutable={})",
+						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce,
+						txNonce - nextExecutableNonce);
 				return StorageAddResult.ADDED_FUTURE;
 			} else {
 				// txNonce < nextExecutableNonce
 				// This means it's stale (e.g., chainNonce=5, executable=7, new=6)
+				log.debug("[POOL-DEBUG] Sender {}: tx {} is STALE (nonce={} < nextExecutable={})",
+						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce,
+						nextExecutableNonce);
 				return StorageAddResult.STALE;
 			}
 		}
@@ -1213,11 +1244,21 @@ public class MempoolStore {
 		 */
 		private void promoteExecutableTxs(List<MempoolEntry> outTxsToAdd) {
 			long nextNonce = getNextExecutableNonce();
+			int promotedCount = 0;
+			log.debug("[POOL-DEBUG] Sender {}: promoteExecutableTxs START, nextNonce={}, futureTxs.size={}",
+					senderAddress.toChecksumAddress(), nextNonce, futureTxs.size());
 			while (futureTxs.containsKey(nextNonce)) {
 				MempoolEntry txToPromote = futureTxs.remove(nextNonce);
 				executableTxs.put(nextNonce, txToPromote);
 				outTxsToAdd.add(txToPromote);
+				log.debug("[POOL-DEBUG] Sender {}: PROMOTED tx {} from FUTURE to EXECUTABLE (nonce={})",
+						senderAddress.toChecksumAddress(), txToPromote.getHash().toShortLogString(), nextNonce);
+				promotedCount++;
 				nextNonce++;
+			}
+			if (promotedCount > 0) {
+				log.info("[POOL-DEBUG] Sender {}: Promoted {} tx(s) from FUTURE to EXECUTABLE",
+						senderAddress.toChecksumAddress(), promotedCount);
 			}
 		}
 

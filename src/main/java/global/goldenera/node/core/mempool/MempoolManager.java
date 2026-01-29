@@ -123,6 +123,11 @@ public class MempoolManager {
 	 */
 	public MempoolResult addTx(@NonNull Tx tx, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
 			boolean skipValidation) {
+		log.debug("[MANAGER-DEBUG] addTx START: hash={}, sender={}, nonce={}, fee={}, reason={}",
+				tx.getHash().toShortLogString(),
+				tx.getSender() != null ? tx.getSender().toChecksumAddress() : "null",
+				tx.getNonce(), tx.getFee().toBigInteger(), reason);
+
 		// 1. Validate the tx against the *confirmed state* AND *mempool state*
 		MempoolEntry entry = new MempoolEntry(tx);
 		entry.setReceivedFrom(receivedFrom);
@@ -131,17 +136,21 @@ public class MempoolManager {
 				.validateAgainstChainAndMempool(entry, reason, skipValidation);
 
 		if (!validationResult.isValid()) {
-			log.warn("Mempool: Rejecting tx {}: {}", txHash.toShortLogString(),
-					validationResult.getErrorMessage());
+			log.warn("[MANAGER-DEBUG] Mempool: Rejecting tx {}: {} (status={})", txHash.toShortLogString(),
+					validationResult.getErrorMessage(), validationResult.getStatus());
 			return new MempoolResult(MempoolAddResult.fromValidation(validationResult.getStatus()),
 					validationResult.getErrorMessage());
 		}
+
+		log.debug("[MANAGER-DEBUG] Validation passed, chainNonce={}", validationResult.getCurrentChainNonce());
 
 		// 2. Add the tx to the internal storage
 		MempoolStore.StorageAddResult storageResult = mempoolStore.addTransaction(
 				entry,
 				validationResult.getCurrentChainNonce(),
 				reason);
+
+		log.debug("[MANAGER-DEBUG] Storage result: {} for tx {}", storageResult, txHash.toShortLogString());
 
 		// 3. Translate storage result to API result
 		MempoolAddResult result;
