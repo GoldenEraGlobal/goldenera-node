@@ -130,7 +130,7 @@ public class MempoolValidator {
 			// 4. Route validation based on sender
 			if (tx.getSender() != null) {
 				// --- User Tx (TRANSFER, BIP_CREATE, BIP_VOTE, TOKEN_BURN) ---
-				return validateUserTx(tx, worldstate);
+				return validateUserTx(tx, worldstate, injectData);
 			} else {
 				// --- System Tx (TOKEN_MINT) ---
 				return MempoolValidationResult.invalid("System tx not supported.");
@@ -148,7 +148,7 @@ public class MempoolValidator {
 	 * Validates transactions that HAVE a sender and nonce.
 	 * (TRANSFER, BIP_CREATE, BIP_VOTE, TOKEN_BURN)
 	 */
-	private MempoolValidationResult validateUserTx(Tx tx, WorldState worldstate) {
+	private MempoolValidationResult validateUserTx(Tx tx, WorldState worldstate, boolean injectData) {
 		Address sender = tx.getSender();
 		log.debug("[VALIDATOR-DEBUG] validateUserTx: hash={}, type={}, sender={}, txNonce={}",
 				tx.getHash().toShortLogString(), tx.getType(), sender.toChecksumAddress(), tx.getNonce());
@@ -220,7 +220,8 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Sender is not an authority.");
 				}
 				// Check for L4+ governance duplicates
-				MempoolValidationResult governanceResult = validateGovernanceTx(tx, worldstate);
+				// If injecting data (revalidation), we effectively skip mempool self-check
+				MempoolValidationResult governanceResult = validateGovernanceTx(tx, worldstate, !injectData);
 				if (!governanceResult.isValid()) {
 					return governanceResult;
 				}
@@ -238,8 +239,12 @@ public class MempoolValidator {
 	/**
 	 * Helper to check L4+ (Mempool) state for governance duplicates.
 	 * (BIP_CREATE, BIP_VOTE)
+	 * 
+	 * @param checkMempoolDuplicates
+	 *            If true, checks if operation is already pending in mempool.
+	 *            Should be FALSE during re-validation to avoid self-collision.
 	 */
-	private MempoolValidationResult validateGovernanceTx(Tx tx, WorldState worldstate) {
+	private MempoolValidationResult validateGovernanceTx(Tx tx, WorldState worldstate, boolean checkMempoolDuplicates) {
 		if (tx.getType() == TxType.BIP_CREATE) {
 			TxPayload payload = tx.getPayload();
 
@@ -250,7 +255,7 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Authority already exists on-chain.");
 				}
 				// Check mempool
-				if (mempoolStorage.isAuthorityAddPending(addr)) {
+				if (checkMempoolDuplicates && mempoolStorage.isAuthorityAddPending(addr)) {
 					return MempoolValidationResult.invalid("AuthorityAdd is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipAuthorityRemovePayload) {
@@ -260,7 +265,7 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Authority does not exist on-chain.");
 				}
 				// Check mempool
-				if (mempoolStorage.isAuthorityRemovePending(addr)) {
+				if (checkMempoolDuplicates && mempoolStorage.isAuthorityRemovePending(addr)) {
 					return MempoolValidationResult.invalid("AuthorityRemove is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipValidatorAddPayload) {
@@ -270,7 +275,7 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Validator already exists on-chain.");
 				}
 				// Check mempool
-				if (mempoolStorage.isValidatorAddPending(addr)) {
+				if (checkMempoolDuplicates && mempoolStorage.isValidatorAddPending(addr)) {
 					return MempoolValidationResult.invalid("ValidatorAdd is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipValidatorRemovePayload) {
@@ -280,7 +285,7 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Validator does not exist on-chain.");
 				}
 				// Check mempool
-				if (mempoolStorage.isValidatorRemovePending(addr)) {
+				if (checkMempoolDuplicates && mempoolStorage.isValidatorRemovePending(addr)) {
 					return MempoolValidationResult.invalid("ValidatorRemove is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipAddressAliasAddPayload) {
@@ -290,7 +295,7 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Address alias already exists on-chain.");
 				}
 				// Check mempool
-				if (mempoolStorage.isAddressAliasAddPending(alias)) {
+				if (checkMempoolDuplicates && mempoolStorage.isAddressAliasAddPending(alias)) {
 					return MempoolValidationResult.invalid("AddressAliasAdd is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipAddressAliasRemovePayload) {
@@ -300,12 +305,12 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Address alias does not exist on-chain.");
 				}
 				// Check mempool
-				if (mempoolStorage.isAddressAliasRemovePending(alias)) {
+				if (checkMempoolDuplicates && mempoolStorage.isAddressAliasRemovePending(alias)) {
 					return MempoolValidationResult.invalid("AddressAliasRemove is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipNetworkParamsSetPayload) {
 				// Check mempool
-				if (mempoolStorage.hasAuthorityPendingParamChange(tx.getSender())) {
+				if (checkMempoolDuplicates && mempoolStorage.hasAuthorityPendingParamChange(tx.getSender())) {
 					return MempoolValidationResult.invalid("ConsensusParamsSet is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipTokenMintPayload mintPayload) {
@@ -358,7 +363,7 @@ public class MempoolValidator {
 				return MempoolValidationResult.invalid("Authority has already voted on-chain.");
 			}
 			// Check L4+ state (from mempool)
-			if (mempoolStorage.isBipVotePending(bipHash, sender)) {
+			if (checkMempoolDuplicates && mempoolStorage.isBipVotePending(bipHash, sender)) {
 				return MempoolValidationResult
 						.invalid("Authority already has a vote pending in the mempool for this BIP.");
 			}
