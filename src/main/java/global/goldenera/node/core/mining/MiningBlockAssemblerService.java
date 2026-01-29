@@ -172,6 +172,12 @@ public class MiningBlockAssemblerService {
 		log.info("Block template created for height {} with {} txs, stateRoot: {}, difficulty: {}",
 				template.getHeight(), validTxs.size(), stateRootHash.toShortLogString(), difficulty);
 
+		if (result.getInvalidTxs() != null && !result.getInvalidTxs().isEmpty()) {
+			log.warn("Mining assembler selected {} txs, but {} failed execution. Invalid: {}",
+					txs.size(), result.getInvalidTxs().size(),
+					result.getInvalidTxs().stream().map(tx -> tx.getHash().toShortLogString()).toList());
+		}
+
 		return Optional.of(AssembledBlock.builder()
 				.blockTemplate(template)
 				.txs(validTxs)
@@ -264,9 +270,14 @@ public class MiningBlockAssemblerService {
 										break;
 									}
 								} else {
+									log.warn("[MINING-DEBUG] Deferred duplicate tx found: hash={}",
+											childTx.getHash().toShortLogString());
 									nextNonce++; // Duplicate? Should not happen in local buffer logic but safe skip
 									senderNextNonce.put(sender, nextNonce);
 								}
+							}
+							if (pending.isEmpty()) {
+								deferredTxs.remove(sender);
 							}
 						}
 					}

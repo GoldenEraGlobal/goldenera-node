@@ -64,7 +64,8 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MempoolManager {
 
-	static final long MEMPOOL_PRUNE_INTERVAL_MS = 20 * 60 * 1000; // 20 minutes
+	static final long MEMPOOL_PRUNE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+	static final long MEMPOOL_REVALIDATE_INTERVAL_MS = 30 * 1000; // 30 seconds
 
 	MeterRegistry registry;
 	MempoolStore mempoolStore;
@@ -84,8 +85,9 @@ public class MempoolManager {
 	@PostConstruct
 	public void init() {
 		coreScheduler.scheduleAtFixedRate(this::pruneExpired, Duration.ofMillis(MEMPOOL_PRUNE_INTERVAL_MS));
-		log.info("MempoolManager: Scheduled pruneExpired every {}ms (txExpireTime={}min)",
-				MEMPOOL_PRUNE_INTERVAL_MS, mempoolProperties.getTxExpireTimeInMinutes());
+		coreScheduler.scheduleAtFixedRate(this::revalidateMempool, Duration.ofMillis(MEMPOOL_REVALIDATE_INTERVAL_MS));
+		log.info("MempoolManager: Scheduled pruneExpired every {}ms and revalidateMempool every {}ms",
+				MEMPOOL_PRUNE_INTERVAL_MS, MEMPOOL_REVALIDATE_INTERVAL_MS);
 	}
 
 	/**
@@ -268,6 +270,48 @@ public class MempoolManager {
 			return;
 		log.debug("Evicting {} tx(s) from mempool", txHashes.size());
 		mempoolStore.removeTransactions(txHashes);
+	}
+
+	/**
+	 * Maintenance task: Periodically re-validates ALL transactions in the mempool
+	 * against the current Chain Head.
+	 * This catches transactions that became invalid (e.g., insufficient funds)
+	 * due to other transactions being mined, which might be missed by simple event
+	 * processing (especially on non-mining nodes).
+	 */
+	@Async(CORE_TASK_EXECUTOR)
+	public void revalidateMempool() {
+		if (mempoolStore.getCount() == 0) {
+			return;
+		}
+
+		log.debug("Revalidating mempool ({} txs)...", mempoolStore.getCount());
+		List<Hash> toRemove = new java.util.ArrayList<>();
+
+		// Iterate over all transactions (snapshot iterator)
+		Iterator<MempoolEntry> it = mempoolStore.getAllTxs().iterator();
+		while (it.hasNext()) {
+			MempoolEntry entry = it.next();
+			try {
+				// Validate against CURRENT head state
+				MempoolValidator.MempoolValidationResult result = mempoolValidator.validateAgainstChainAndMempool(
+						entry, MempoolTxAddEvent.AddReason.NEW, false, false);
+
+				if (!result.isValid()) {
+					log.debug("Found invalid tx during revalidation: {} (Reason: {})",
+							entry.getHash().toShortLogString(), result.getErrorMessage());
+					toRemove.add(entry.getHash());
+				}
+			} catch (Exception e) {
+				log.warn("Error revalidating tx {}: {}", entry.getHash(), e.getMessage());
+				toRemove.add(entry.getHash());
+			}
+		}
+
+		if (!toRemove.isEmpty()) {
+			log.info("Mempool revalidation: Evicting {} invalid transactions.", toRemove.size());
+			mempoolStore.removeTransactions(toRemove);
+		}
 	}
 
 	// =================================================================================

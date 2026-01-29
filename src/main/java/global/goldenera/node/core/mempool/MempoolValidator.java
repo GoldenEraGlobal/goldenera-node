@@ -84,6 +84,11 @@ public class MempoolValidator {
 	MempoolStore mempoolStorage;
 	TxValidator txValidator;
 
+	public MempoolValidationResult validateAgainstChainAndMempool(@NonNull MempoolEntry entry,
+			@NonNull MempoolTxAddEvent.AddReason reason, boolean skipValidation) {
+		return validateAgainstChainAndMempool(entry, reason, skipValidation, true);
+	}
+
 	/**
 	 * Main validation entry point.
 	 * Validates a transaction against the *current confirmed blockchain state*
@@ -96,7 +101,7 @@ public class MempoolValidator {
 	 * @return A validation result object.
 	 */
 	public MempoolValidationResult validateAgainstChainAndMempool(@NonNull MempoolEntry entry,
-			@NonNull MempoolTxAddEvent.AddReason reason, boolean skipValidation) {
+			@NonNull MempoolTxAddEvent.AddReason reason, boolean skipValidation, boolean injectData) {
 		Timer.Sample sample = Timer.start(registry);
 		try {
 			Tx tx = entry.getTx();
@@ -114,8 +119,10 @@ public class MempoolValidator {
 			}
 
 			// Inject chain tip data into the tx
-			entry.setFirstSeenHeight(chainTip.getHeight());
-			entry.setFirstSeenTime(Instant.now());
+			if (injectData) {
+				entry.setFirstSeenHeight(chainTip.getHeight());
+				entry.setFirstSeenTime(Instant.now());
+			}
 
 			// 3. Get current world state
 			WorldState worldstate = chainHeadStateService.getHeadState();
