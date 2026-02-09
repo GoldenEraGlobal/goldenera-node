@@ -24,6 +24,7 @@
 package global.goldenera.node.explorer.repositories;
 
 import java.math.BigInteger;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
@@ -52,6 +53,9 @@ public interface ExAccountBalanceRepository
 	Optional<BigInteger> findBalanceByAddressAndToken(
 			@Param("address") byte[] address,
 			@Param("tokenAddress") byte[] tokenAddress);
+
+	@Query(value = "SELECT * FROM explorer_account_balance WHERE address = :address", nativeQuery = true)
+	List<ExAccountBalance> findByAddress(@Param("address") byte[] address);
 
 	long countByAddress(Address address);
 }

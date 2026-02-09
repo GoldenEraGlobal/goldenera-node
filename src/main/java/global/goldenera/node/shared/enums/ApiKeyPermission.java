@@ -40,7 +40,8 @@ public enum ApiKeyPermission implements GrantedAuthority {
 			2), READ_BIP_STATE(3), READ_BLOCK_HEADER(4), READ_NETWORK_PARAMS(
 					5), READ_MEMPOOL_TX(6), READ_TOKEN(
 							7), READ_TX(8), READ_WRITE_WEBHOOK(
-									9), READ_NODE_METRICS(10), SUBMIT_MEMPOOL_TX(11), READ_VALIDATOR(12);
+									9), READ_NODE_METRICS(
+											10), SUBMIT_MEMPOOL_TX(11), READ_VALIDATOR(12), READ_SEARCH(13);
 
 	int code;
 

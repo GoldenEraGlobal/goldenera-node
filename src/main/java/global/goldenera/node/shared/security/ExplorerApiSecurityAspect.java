@@ -25,11 +25,14 @@ package global.goldenera.node.shared.security;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.lang.reflect.Method;
 import java.util.Collection;
 
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Before;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -50,9 +53,14 @@ public class ExplorerApiSecurityAspect {
 
     SecurityProperties securityProperties;
 
-    @Before("@annotation(explorerApiSecurity)")
-    public void checkSecurity(JoinPoint joinPoint, ExplorerApiSecurity explorerApiSecurity) {
+    @Before("@within(global.goldenera.node.shared.security.ExplorerApiSecurity) || @annotation(global.goldenera.node.shared.security.ExplorerApiSecurity)")
+    public void checkSecurity(JoinPoint joinPoint) {
         if (!securityProperties.isExplorerApiEnabled()) {
+            return;
+        }
+
+        ExplorerApiSecurity explorerApiSecurity = getAnnotation(joinPoint);
+        if (explorerApiSecurity == null) {
             return;
         }
 
@@ -80,5 +88,16 @@ public class ExplorerApiSecurityAspect {
             throw new GEAuthenticationException(
                     "Explorer API Access Denied: Missing required permission " + requiredPermission);
         }
+    }
+
+    private ExplorerApiSecurity getAnnotation(JoinPoint joinPoint) {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        Method method = signature.getMethod();
+
+        ExplorerApiSecurity annotation = AnnotationUtils.findAnnotation(method, ExplorerApiSecurity.class);
+        if (annotation == null) {
+            annotation = AnnotationUtils.findAnnotation(method.getDeclaringClass(), ExplorerApiSecurity.class);
+        }
+        return annotation;
     }
 }

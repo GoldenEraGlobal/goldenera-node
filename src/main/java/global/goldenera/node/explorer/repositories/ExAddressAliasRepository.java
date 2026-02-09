@@ -24,10 +24,12 @@
 package global.goldenera.node.explorer.repositories;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.ListPagingAndSortingRepository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import global.goldenera.cryptoj.datatypes.Address;
@@ -47,5 +49,8 @@ public interface ExAddressAliasRepository
                             WHERE d.address = :address
                         """)
         List<ExAddressAlias> findByAddress(@NonNull Address address);
+
+        @Query(value = "SELECT * FROM explorer_address_alias WHERE alias ILIKE :alias LIMIT 1", nativeQuery = true)
+        Optional<ExAddressAlias> findByAliasIgnoreCase(@Param("alias") String alias);
 
 }

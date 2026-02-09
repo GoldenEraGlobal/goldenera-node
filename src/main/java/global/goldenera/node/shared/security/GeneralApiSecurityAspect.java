@@ -25,11 +25,14 @@ package global.goldenera.node.shared.security;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.lang.reflect.Method;
 import java.util.Collection;
 
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Before;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -47,8 +50,13 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 public class GeneralApiSecurityAspect {
 
-    @Before("@annotation(generalApiSecurity)")
-    public void enforceSecurity(JoinPoint joinPoint, GeneralApiSecurity generalApiSecurity) {
+    @Before("@within(global.goldenera.node.shared.security.GeneralApiSecurity) || @annotation(global.goldenera.node.shared.security.GeneralApiSecurity)")
+    public void enforceSecurity(JoinPoint joinPoint) {
+        GeneralApiSecurity generalApiSecurity = getAnnotation(joinPoint);
+        if (generalApiSecurity == null) {
+            return;
+        }
+
         ApiKeyPermission requiredPermission = generalApiSecurity.value();
         String requiredAuthorityString = requiredPermission.getAuthority();
 
@@ -72,5 +80,16 @@ public class GeneralApiSecurityAspect {
         if (!hasAuthority) {
             throw new GEAuthenticationException("Access Denied: Missing required permission " + requiredPermission);
         }
+    }
+
+    private GeneralApiSecurity getAnnotation(JoinPoint joinPoint) {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        Method method = signature.getMethod();
+
+        GeneralApiSecurity annotation = AnnotationUtils.findAnnotation(method, GeneralApiSecurity.class);
+        if (annotation == null) {
+            annotation = AnnotationUtils.findAnnotation(method.getDeclaringClass(), GeneralApiSecurity.class);
+        }
+        return annotation;
     }
 }

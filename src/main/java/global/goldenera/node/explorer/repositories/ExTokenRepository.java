@@ -1,3 +1,4 @@
+
 /*
  * The MIT License (MIT)
  *
@@ -23,8 +24,12 @@
  */
 package global.goldenera.node.explorer.repositories;
 
+import java.util.List;
+
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.ListPagingAndSortingRepository;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import global.goldenera.node.explorer.entities.ExToken;
@@ -35,5 +40,8 @@ public interface ExTokenRepository
 		extends BaseJpaRepository<ExToken, ExToken.ExTokenPK>,
 		ListPagingAndSortingRepository<ExToken, ExToken.ExTokenPK>,
 		JpaSpecificationExecutor<ExToken> {
+
+	@Query(value = "SELECT * FROM explorer_token WHERE name ILIKE '%' || :query || '%' OR smallest_unit_name ILIKE '%' || :query || '%'", nativeQuery = true)
+	List<ExToken> searchTokens(@Param("query") String query);
 
 }

@@ -25,11 +25,14 @@ package global.goldenera.node.shared.security;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.lang.reflect.Method;
 import java.util.Collection;
 
 import org.aspectj.lang.JoinPoint;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Before;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -50,9 +53,14 @@ public class CoreApiSecurityAspect {
 
     SecurityProperties securityProperties;
 
-    @Before("@annotation(coreApiSecurity)")
-    public void checkSecurity(JoinPoint joinPoint, CoreApiSecurity coreApiSecurity) {
+    @Before("@within(global.goldenera.node.shared.security.CoreApiSecurity) || @annotation(global.goldenera.node.shared.security.CoreApiSecurity)")
+    public void checkSecurity(JoinPoint joinPoint) {
         if (!securityProperties.isCoreApiEnabled()) {
+            return;
+        }
+
+        CoreApiSecurity coreApiSecurity = getAnnotation(joinPoint);
+        if (coreApiSecurity == null) {
             return;
         }
 
@@ -80,5 +88,16 @@ public class CoreApiSecurityAspect {
             throw new GEAuthenticationException(
                     "Core API Access Denied: Missing required permission " + requiredPermission);
         }
+    }
+
+    private CoreApiSecurity getAnnotation(JoinPoint joinPoint) {
+        MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+        Method method = signature.getMethod();
+
+        CoreApiSecurity annotation = AnnotationUtils.findAnnotation(method, CoreApiSecurity.class);
+        if (annotation == null) {
+            annotation = AnnotationUtils.findAnnotation(method.getDeclaringClass(), CoreApiSecurity.class);
+        }
+        return annotation;
     }
 }
