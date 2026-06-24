@@ -1,7 +1,9 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
+<?xml version="1.0" encoding="UTF-8" ?>
+<project
+    xmlns="http://maven.apache.org/POM/4.0.0"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd"
+>
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
@@ -13,7 +15,7 @@
 
     <groupId>global.goldenera.node</groupId>
     <artifactId>goldenera-node</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <name>goldenera-node</name>
 
     <properties>
@@ -78,15 +80,18 @@
         <repository>
             <id>github</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/GoldenEraGlobal/goldenera-node</url>
+            <url
+            >https://maven.pkg.github.com/GoldenEraGlobal/goldenera-node</url>
         </repository>
     </distributionManagement>
 
     <scm>
         <tag>master</tag>
         <url>git@github.com:GoldenEraGlobal/goldenera-node.git</url>
-        <connection>scm:git:git@github.com:GoldenEraGlobal/goldenera-node.git</connection>
-        <developerConnection>scm:git:git@github.com:GoldenEraGlobal/goldenera-node.git</developerConnection>
+        <connection
+        >scm:git:git@github.com:GoldenEraGlobal/goldenera-node.git</connection>
+        <developerConnection
+        >scm:git:git@github.com:GoldenEraGlobal/goldenera-node.git</developerConnection>
     </scm>
 
     <issueManagement>
@@ -98,7 +103,8 @@
         <repository>
             <id>github-merkletrie</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/goldeneraglobal/goldenera-merkletrie</url>
+            <url
+            >https://maven.pkg.github.com/goldeneraglobal/goldenera-merkletrie</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -109,7 +115,8 @@
         <repository>
             <id>github-rlp</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/goldeneraglobal/goldenera-rlp</url>
+            <url
+            >https://maven.pkg.github.com/goldeneraglobal/goldenera-rlp</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -120,7 +127,8 @@
         <repository>
             <id>github-cryptoj</id>
             <name>GitHub Packages</name>
-            <url>https://maven.pkg.github.com/goldeneraglobal/goldenera-cryptoj</url>
+            <url
+            >https://maven.pkg.github.com/goldeneraglobal/goldenera-cryptoj</url>
             <releases>
                 <enabled>true</enabled>
             </releases>
@@ -339,7 +347,8 @@
                 <version>${liquibase.version}</version>
                 <configuration>
                     <author>goldenera</author>
-                    <changeLogFile>src/main/resources/db/changelog/db.changelog-master.yaml</changeLogFile>
+                    <changeLogFile
+                    >src/main/resources/db/changelog/db.changelog-master.yaml</changeLogFile>
                     <diffChangeLogFile>
                         src/main/resources/db/changelog/changesets/001-initial-schema.yaml</diffChangeLogFile>
                     <driver>org.h2.Driver</driver>
@@ -347,7 +356,7 @@
                     <url>
                         jdbc:h2:mem:mydb;DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;DEFAULT_NULL_ORDERING=HIGH</url>
                     <username>sa</username>
-                    <password></password>
+                    <password />
 
                     <referenceUrl>
                         hibernate:spring:global.goldenera.node.explorer.entities,global.goldenera.node.explorer.converters,global.goldenera.node.explorer.converters.state,global.goldenera.node.shared.converters,global.goldenera.node.shared.entities,global.goldenera.node.core.webhook.entities,global.goldenera.node.core.webhook.converters?dialect=org.hibernate.dialect.PostgreSQLDialect&amp;physicalNamingStrategy=org.springframework.boot.orm.jpa.hibernate.SpringPhysicalNamingStrategy</referenceUrl>
