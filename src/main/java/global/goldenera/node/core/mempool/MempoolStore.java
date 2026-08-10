@@ -33,17 +33,19 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
@@ -60,7 +62,6 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
-import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
@@ -80,14 +81,8 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Thread-safe, high-performance in-memory storage for pending transactions.
- * This class implements a hybrid model based on user requirements:
- * 1. "User Txs": (sender != null) are managed in a nonce-ordered pool
- * (SenderAccountPool).
- * 2. "System Txs": (sender == null) are managed in a simple FIFO queue
- * (systemTxs).
- * 3. Governance Sets: Tracks pending governance operations to prevent
- * duplicates.
+ * Atomic in-memory transaction store. Every mutation updates the hash, fee,
+ * sender, executable and governance indexes in one write-locked operation.
  */
 @Service
 @Slf4j
@@ -106,82 +101,22 @@ public class MempoolStore {
 	ApplicationEventPublisher applicationEventPublisher;
 
 	ConcurrentSkipListSet<MempoolEntry> executableTxsByFee = new ConcurrentSkipListSet<>(TX_FEE_COMPARATOR);
-
-	/**
-	 * Global set of all transactions (executable + future) sorted by fee.
-	 * Used for eviction when mempool is full.
-	 */
 	ConcurrentSkipListSet<MempoolEntry> allTxsByFee = new ConcurrentSkipListSet<>(TX_FEE_COMPARATOR);
-
-	/**
-	 * 1. Global lookup for all txs by hash (prevents duplicates).
-	 * Key: Tx Hash
-	 * Value: The transaction model
-	 */
 	ConcurrentHashMap<Hash, MempoolEntry> allTxsByHash = new ConcurrentHashMap<>();
-
-	/**
-	 * 2. "User Txs" (sender != null): Managed by Sender and Nonce.
-	 * For: TRANSFER, BIP_CREATE, BIP_VOTE, TOKEN_BURN
-	 * Key: Sender Address
-	 * Value: The sender's personal transaction pool
-	 */
 	ConcurrentHashMap<Address, SenderAccountPool> userTxsBySender = new ConcurrentHashMap<>();
-
-	/**
-	 * 3. "System Txs" (sender == null): Simple FIFO queue.
-	 * For: TOKEN_MINT
-	 */
 	ConcurrentLinkedQueue<MempoolEntry> systemTxs = new ConcurrentLinkedQueue<>();
 
-	/**
-	 * Tracks addresses of Authorities that are PENDING on add.
-	 */
-	Set<Address> pendingAuthorityAdds = ConcurrentHashMap.newKeySet();
+	/* Values identify the owning transaction, so removing one duplicate cannot
+	 * accidentally clear another transaction's reservation. */
+	ConcurrentHashMap<Address, Hash> pendingAuthorityAdds = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, Hash> pendingAuthorityRemoves = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, Hash> pendingValidatorAdds = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, Hash> pendingValidatorRemoves = new ConcurrentHashMap<>();
+	ConcurrentHashMap<String, Hash> pendingAddressAliasAdds = new ConcurrentHashMap<>();
+	ConcurrentHashMap<String, Hash> pendingAddressAliasRemoves = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, Hash> authoritiesWithPendingParamChange = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Hash, ConcurrentHashMap<Address, Hash>> pendingBipVotes = new ConcurrentHashMap<>();
 
-	/**
-	 * Tracks addresses of Authorities that are PENDING on remove.
-	 */
-	Set<Address> pendingAuthorityRemoves = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Tracks addresses of Validators that are PENDING on add.
-	 */
-	Set<Address> pendingValidatorAdds = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Tracks addresses of Validators that are PENDING on remove.
-	 */
-	Set<Address> pendingValidatorRemoves = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Tracks aliases of Address Aliases that are PENDING on add.
-	 */
-	Set<String> pendingAddressAliasAdds = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Tracks aliases of Address Aliases that are PENDING on remove.
-	 */
-	Set<String> pendingAddressAliasRemoves = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Tracks which authorities already have a BIP_CONSENSUS_PARAMS_SET
-	 * transaction pending in the mempool.
-	 * This prevents one authority from spamming governance.
-	 */
-	private final Set<Address> authoritiesWithPendingParamChange = ConcurrentHashMap.newKeySet();
-
-	/**
-	 * Tracks pending BIP votes to prevent duplicate votes in the mempool.
-	 * Key: BIP Hash (the one being voted on)
-	 * Value: Set of Authority Addresses that have a pending vote for this BIP.
-	 */
-	ConcurrentHashMap<Hash, Set<Address>> pendingBipVotes = new ConcurrentHashMap<>();
-
-	/**
-	 * A global lock for operations that modify the entire pool structure,
-	 * such as processing a new block or handling a reorg.
-	 */
 	ReentrantReadWriteLock globalLock = new ReentrantReadWriteLock();
 
 	@PostConstruct
@@ -190,400 +125,206 @@ public class MempoolStore {
 		registry.gaugeMapSize("blockchain.mempool.senders_count", Tags.empty(), userTxsBySender);
 		registry.gaugeCollectionSize("blockchain.mempool.system_tx_count", Tags.empty(), systemTxs);
 		registry.gauge("blockchain.mempool.future_tx_count", Tags.empty(), this,
-				store -> store.allTxsByFee.size() - store.executableTxsByFee.size());
+				store -> store.countFutureTransactions());
 	}
 
-	// =================================================================================
-	// === PUBLIC API (Called by MempoolManager) ===
-	// =================================================================================
-
-	/**
-	 * Adds a validated transaction to the appropriate pool.
-	 *
-	 * @param tx
-	 *            The validated transaction.
-	 * @param currentChainNonce
-	 *            The current confirmed nonce (from chain state) for
-	 *            the
-	 *            sender.
-	 *            -1 if the tx is a "system tx" (sender ==
-	 *            null).
-	 * @return The result of the add operation.
-	 */
 	public StorageAddResult addTransaction(@NonNull MempoolEntry entry, long currentChainNonce,
 			MempoolTxAddEvent.AddReason reason) {
-		List<MempoolTxRemoveEvent> eventsToPublish = new ArrayList<>();
-		StorageAddResult result = addTransactionInternal(entry, currentChainNonce, eventsToPublish);
-		for (MempoolTxRemoveEvent event : eventsToPublish) {
-			applicationEventPublisher.publishEvent(event);
-		}
+		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
+		StorageAddResult result = addTransactionInternal(entry, currentChainNonce, removeEvents);
+		publishRemoveEvents(removeEvents);
 		if (result.isSuccess()) {
-			applicationEventPublisher
-					.publishEvent(new MempoolTxAddEvent(this, entry, reason));
+			publishAddEvent(new MempoolTxAddEvent(this, entry, reason));
 		}
 		return result;
 	}
 
 	/**
-	 * Batch add transactions.
-	 * Optimized to acquire global lock only once.
+	 * Batch admission deliberately uses the same implementation as single
+	 * admission. The enclosing write lock makes duplicate checks and inserts
+	 * atomic while preserving input order for nonce chains and RBF.
 	 */
 	public Map<Hash, StorageAddResult> addTransactions(List<MempoolEntry> entries,
-			Map<Address, Long> senderChainNonces,
-			MempoolTxAddEvent.AddReason reason) {
-		Map<Hash, StorageAddResult> results = new HashMap<>();
-		List<MempoolEntry> successfulEntries = new ArrayList<>();
-		List<MempoolTxRemoveEvent> eventsToPublish = new ArrayList<>();
+			Map<Address, Long> senderChainNonces, MempoolTxAddEvent.AddReason reason) {
+		Map<Hash, StorageAddResult> results = new LinkedHashMap<>();
+		Map<Hash, MempoolEntry> successful = new LinkedHashMap<>();
+		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
+		Set<Hash> transientEntries = new HashSet<>();
 
-		globalLock.readLock().lock();
+		globalLock.writeLock().lock();
 		try {
-			Map<Address, List<MempoolEntry>> bySender = new HashMap<>();
-			List<MempoolEntry> systemTxsList = new ArrayList<>();
-
 			for (MempoolEntry entry : entries) {
-				if (allTxsByHash.containsKey(entry.getHash())) {
-					results.put(entry.getHash(), StorageAddResult.DUPLICATE_HASH);
-					continue;
+				long chainNonce = entry.getTx().getSender() == null
+						? -1L
+						: senderChainNonces.getOrDefault(entry.getTx().getSender(), 0L);
+				int eventStart = removeEvents.size();
+				StorageAddResult result = addTransactionInternal(entry, chainNonce, removeEvents);
+				results.put(entry.getHash(), result);
+				if (result.isSuccess()) {
+					successful.put(entry.getHash(), entry);
 				}
-				allTxsByHash.put(entry.getHash(), entry);
-				allTxsByFee.add(entry);
-				if (entry.getTx().getSender() != null) {
-					bySender.computeIfAbsent(entry.getTx().getSender(), k -> new ArrayList<>()).add(entry);
-				} else {
-					systemTxsList.add(entry);
-				}
-			}
-
-			// 2. Process User Txs
-			for (Map.Entry<Address, List<MempoolEntry>> group : bySender.entrySet()) {
-				Address sender = group.getKey();
-				List<MempoolEntry> senderEntries = group.getValue();
-				Long chainNonce = senderChainNonces.getOrDefault(sender, 0L);
-
-				SenderAccountPool pool = userTxsBySender.computeIfAbsent(
-						sender,
-						k -> new SenderAccountPool(mempoolProperties, sender, chainNonce));
-
-				pool.lock.lock();
-				try {
-					List<MempoolEntry> txsToAdd = new ArrayList<>();
-					List<MempoolEntry> txsToRemove = new ArrayList<>();
-
-					for (MempoolEntry entry : senderEntries) {
-						StorageAddResult res = pool.addTransaction(entry, chainNonce, txsToAdd, txsToRemove);
-						results.put(entry.getHash(), res);
-
-						if (res.isSuccess()) {
-							successfulEntries.add(entry);
-							updateGovernanceSets(entry, true);
-
-							// Handle RBF removals
-							for (MempoolEntry rbf : txsToRemove) {
-								allTxsByFee.remove(rbf);
-								executableTxsByFee.remove(rbf);
-								eventsToPublish.add(
-										new MempoolTxRemoveEvent(this, rbf, MempoolTxRemoveEvent.RemoveReason.RBF));
-							}
-						} else {
-							allTxsByHash.remove(entry.getHash());
-							allTxsByFee.remove(entry);
+				for (int i = eventStart; i < removeEvents.size(); i++) {
+					MempoolTxRemoveEvent event = removeEvents.get(i);
+					if (successful.remove(event.getEntry().getHash()) != null) {
+						transientEntries.add(event.getEntry().getHash());
+						if (event.getReason() == MempoolTxRemoveEvent.RemoveReason.RBF) {
+							results.put(event.getEntry().getHash(), StorageAddResult.REPLACED);
 						}
 					}
-					executableTxsByFee.removeAll(txsToRemove);
-					executableTxsByFee.addAll(txsToAdd);
-
-				} finally {
-					pool.lock.unlock();
-				}
-			}
-
-			// 3. Process System Txs
-			for (MempoolEntry sysTx : systemTxsList) {
-				systemTxs.add(sysTx);
-				results.put(sysTx.getHash(), StorageAddResult.ADDED_EXECUTABLE);
-				successfulEntries.add(sysTx);
-				updateGovernanceSets(sysTx, true);
-			}
-
-			// 4. Check Limits (EVICTION LOGIC)
-			if (isFull()) {
-				while (isFull() && !allTxsByFee.isEmpty()) {
-					MempoolEntry victim = allTxsByFee.last();
-					evictTransaction(victim, eventsToPublish);
-					if (results.containsKey(victim.getHash())) {
-						results.put(victim.getHash(), StorageAddResult.MEMPOOL_FULL);
-						successfulEntries.remove(victim);
+					if (event.getReason() == MempoolTxRemoveEvent.RemoveReason.EVICTED_FULL) {
+						if (results.containsKey(event.getEntry().getHash())) {
+							results.put(event.getEntry().getHash(), StorageAddResult.MEMPOOL_FULL);
+						}
 					}
 				}
 			}
-
 		} finally {
-			globalLock.readLock().unlock();
+			globalLock.writeLock().unlock();
 		}
 
-		// 5. Publish Events OUTSIDE LOCK
-		for (MempoolTxRemoveEvent event : eventsToPublish) {
-			applicationEventPublisher.publishEvent(event);
-		}
-		for (MempoolEntry entry : successfulEntries) {
-			applicationEventPublisher.publishEvent(new MempoolTxAddEvent(this, entry, reason));
-		}
+		removeEvents.removeIf(event -> transientEntries.contains(event.getEntry().getHash()));
+		publishRemoveEvents(removeEvents);
+		successful.values().forEach(entry -> publishAddEvent(new MempoolTxAddEvent(this, entry, reason)));
 		return results;
 	}
 
-	/**
-	 * Gathers all executable transactions for a miner.
-	 * This combines system txs and the head of each user tx pool.
-	 *
-	 * @return A flat list of all executable transactions.
-	 */
 	public Iterator<MempoolEntry> getExecutableTransactionsIterator() {
-		Iterator<MempoolEntry> userTxs = executableTxsByFee.iterator();
-
-		log.debug(
-				"[MEMPOOL-DEBUG] getExecutableTransactionsIterator: executableTxsByFee.size={}, systemTxs.size={}, allTxsByHash.size={}",
-				executableTxsByFee.size(), systemTxs.size(), allTxsByHash.size());
-
-		// Log first 5 executable transactions for debugging
-		int count = 0;
-		for (MempoolEntry entry : executableTxsByFee) {
-			if (count++ >= 5)
-				break;
-			log.debug("[MEMPOOL-DEBUG] Executable tx #{}: hash={}, sender={}, nonce={}, fee={}",
-					count, entry.getHash().toShortLogString(),
-					entry.getTx().getSender() != null ? entry.getTx().getSender().toChecksumAddress() : "null",
-					entry.getNonce(), entry.getTx().getFee().toBigInteger());
-		}
-
-		// System txs have priority, so put them at the beginning
-		return Iterators.concat(systemTxs.iterator(), userTxs);
+		return Iterators.concat(systemTxs.iterator(), executableTxsByFee.iterator());
 	}
 
-	/**
-	 * Processes a new block that has been connected to the chain.
-	 * This method evicts mined transactions and promotes future transactions.
-	 *
-	 * @param minedTxs
-	 *            The list of transactions included in the new block.
-	 * @param newTipStateRoot
-	 *            The new stateRootHash *after* the block was applied.
-	 */
 	public void processNewBlock(@NonNull List<Tx> txs) {
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
+		Set<Address> affectedSenders = new HashSet<>();
 		globalLock.writeLock().lock();
 		try {
-			log.debug("Mempool: Processing new block, evicting {} txs.", txs.size());
-
-			Set<Address> affectedSenders = new HashSet<>();
-
-			// 1. Eviction Phase: Remove mined txs from all pools
 			for (Tx tx : txs) {
-				Hash txHash = tx.getHash();
-				MempoolEntry txFromMempool = allTxsByHash.remove(txHash);
-
 				if (tx.getSender() != null) {
 					affectedSenders.add(tx.getSender());
 				}
-
-				if (txFromMempool == null) {
-					continue;
+				MempoolEntry entry = allTxsByHash.get(tx.getHash());
+				if (entry != null) {
+					removeEntry(entry, MempoolTxRemoveEvent.RemoveReason.MINED, events, false);
 				}
-
-				allTxsByFee.remove(txFromMempool);
-				executableTxsByFee.remove(txFromMempool);
-				updateGovernanceSets(txFromMempool, false);
-
-				if (txFromMempool.getTx().getSender() != null) {
-					SenderAccountPool pool = userTxsBySender.get(txFromMempool.getTx().getSender());
-					if (pool != null) {
-						pool.lock.lock();
-						try {
-							pool.removeTxs(Set.of(txFromMempool.getNonce()));
-						} finally {
-							pool.lock.unlock();
-						}
-					}
-				} else {
-					systemTxs.remove(txFromMempool);
-				}
-				applicationEventPublisher
-						.publishEvent(
-								new MempoolTxRemoveEvent(this, txFromMempool,
-										MempoolTxRemoveEvent.RemoveReason.MINED));
 			}
 
-			// 2. Promotion/Re-validation Phase (only for affected user txs)
 			WorldState worldstate = chainHeadStateService.getHeadState();
-			List<Address> emptyPools = new ArrayList<>();
-			List<MempoolEntry> evictedStaleTxs = new ArrayList<>();
-			List<MempoolEntry> newlyPromotedTxs = new ArrayList<>();
-
 			for (Address sender : affectedSenders) {
-				SenderAccountPool pool = userTxsBySender.get(sender);
-				if (pool == null)
-					continue;
-
-				pool.lock.lock();
-				try {
-					// Get the fresh, confirmed nonce from the new chain state
-					AccountNonceState newNonceState = worldstate.getNonce(pool.getSenderAddress());
-					long newChainNonce = newNonceState.getNonce();
-
-					// This method evicts stale txs and promotes future txs
-					List<MempoolEntry> staleTxs = pool.updateChainNonceAndPromote(newChainNonce, newlyPromotedTxs);
-					evictedStaleTxs.addAll(staleTxs);
-
-					if (pool.isEmpty()) {
-						emptyPools.add(pool.getSenderAddress());
-					}
-				} finally {
-					pool.lock.unlock();
-				}
+				resynchronizeSenderInternal(sender, worldstate.getNonce(sender).getNonce(), events);
 			}
-
-			// 3. Cleanup Phase
-			// Remove pools that are now empty
-			emptyPools.forEach(userTxsBySender::remove);
-
-			// Remove newly stale txs from master map and governance
-			for (MempoolEntry staleTx : evictedStaleTxs) {
-				allTxsByHash.remove(staleTx.getHash());
-				allTxsByFee.remove(staleTx);
-				executableTxsByFee.remove(staleTx);
-				updateGovernanceSets(staleTx, false);
-				applicationEventPublisher.publishEvent(
-						new MempoolTxRemoveEvent(this, staleTx, MempoolTxRemoveEvent.RemoveReason.STALE_NONCE));
-			}
-			executableTxsByFee.addAll(newlyPromotedTxs);
-
-			log.debug("Mempool: Processed new block. Updated {} pools. {} accounts remaining.",
-					affectedSenders.size(), userTxsBySender.size());
-
 		} finally {
 			globalLock.writeLock().unlock();
 		}
+		publishRemoveEvents(events);
 	}
 
-	/**
-	 * Adds transactions from disconnected blocks back into the mempool.
-	 * This is part of the event-driven reorg logic.
-	 *
-	 * @param txsToReAdd
-	 *            Transactions from disconnected blocks.
-	 */
-
-	/**
-	 *
-	 * Iterates through the entire mempool and removes transactions older than
-	 * 'cutoffTime'.
-	 * This operation is performance-critical (O(N)) and locks the entire mempool.
-	 *
-	 * @param cutoffTime
-	 *            Time, before which transactions are considered expired.
-	 * @return List of transactions that were removed.
-	 */
-	public List<MempoolEntry> pruneExpiredTransactions(@NonNull Instant cutoffTime) {
+	public void addTransactionsBack(@NonNull List<Tx> txs, Block block) {
+		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
+		Map<Hash, MempoolEntry> added = new LinkedHashMap<>();
 		globalLock.writeLock().lock();
 		try {
-			log.warn("Mempool: Starting pruning of transactions older than {}. This will lock the mempool.",
-					cutoffTime);
-
-			List<MempoolEntry> expiredTxs = allTxsByHash.values().stream()
-					.filter(tx -> tx.getFirstSeenTime() != null && tx.getFirstSeenTime().isBefore(cutoffTime))
-					.toList();
-
-			if (expiredTxs.isEmpty()) {
-				log.debug("Mempool: Pruning complete. No expired transactions found.");
-				return Collections.emptyList();
-			}
-
-			log.warn("Mempool: Found {} expired transactions to prune.", expiredTxs.size());
-
-			for (MempoolEntry tx : expiredTxs) {
-				allTxsByHash.remove(tx.getHash());
-				allTxsByFee.remove(tx);
-				executableTxsByFee.remove(tx);
-				updateGovernanceSets(tx, false);
-
-				if (tx.getTx().getSender() != null) {
-					SenderAccountPool pool = userTxsBySender.get(tx.getTx().getSender());
-					if (pool != null) {
-						pool.lock.lock();
-						try {
-							pool.removeTxs(Set.of(tx.getNonce()));
-							if (pool.isEmpty()) {
-								userTxsBySender.remove(tx.getTx().getSender());
-							}
-						} finally {
-							pool.lock.unlock();
-						}
-					}
-				} else {
-					systemTxs.remove(tx);
+			WorldState worldstate = chainHeadStateService.getHeadState();
+			Map<Address, Long> chainNonces = new HashMap<>();
+			for (Tx tx : txs) {
+				MempoolEntry entry = new MempoolEntry(tx);
+				entry.setFirstSeenHeight(block.getHeight());
+				entry.setFirstSeenTime(block.getHeader().getTimestamp());
+				long chainNonce = tx.getSender() == null ? -1L : chainNonces.computeIfAbsent(
+						tx.getSender(), sender -> worldstate.getNonce(sender).getNonce());
+				if (addTransactionInternal(entry, chainNonce, removeEvents).isSuccess()) {
+					added.put(entry.getHash(), entry);
 				}
-				applicationEventPublisher
-						.publishEvent(
-								new MempoolTxRemoveEvent(this, tx, MempoolTxRemoveEvent.RemoveReason.EXPIRED));
 			}
-
-			log.warn("Mempool: Pruning complete. Evicted {} transactions.", expiredTxs.size());
-			return expiredTxs;
 		} finally {
 			globalLock.writeLock().unlock();
 		}
+		Set<Hash> transientEntries = removeEvents.stream()
+				.map(event -> event.getEntry().getHash())
+				.filter(added::containsKey)
+				.collect(Collectors.toSet());
+		removeEvents.removeIf(event -> transientEntries.contains(event.getEntry().getHash()));
+		transientEntries.forEach(added::remove);
+		publishRemoveEvents(removeEvents);
+		added.values().forEach(entry -> publishAddEvent(
+				new MempoolTxAddEvent(this, entry, MempoolTxAddEvent.AddReason.REORG)));
 	}
 
-	// =================================================================================
-	// === PUBLIC GETTERS (For ValidationService) ===
-	// =================================================================================
+	public List<MempoolEntry> pruneExpiredTransactions(@NonNull Instant cutoffTime) {
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
+		List<MempoolEntry> expired;
+		globalLock.writeLock().lock();
+		try {
+			expired = allTxsByHash.values().stream()
+					.filter(entry -> entry.getFirstSeenTime() != null
+							&& entry.getFirstSeenTime().isBefore(cutoffTime))
+					.toList();
+			for (MempoolEntry entry : expired) {
+				removeEntry(entry, MempoolTxRemoveEvent.RemoveReason.EXPIRED, events, false);
+			}
+		} finally {
+			globalLock.writeLock().unlock();
+		}
+		publishRemoveEvents(events);
+		return expired.isEmpty() ? Collections.emptyList() : expired;
+	}
 
 	public boolean isAuthorityAddPending(Address address) {
-		return pendingAuthorityAdds.contains(address);
+		return pendingAuthorityAdds.containsKey(address);
 	}
 
 	public boolean isAuthorityRemovePending(Address address) {
-		return pendingAuthorityRemoves.contains(address);
+		return pendingAuthorityRemoves.containsKey(address);
 	}
 
 	public boolean isValidatorAddPending(Address address) {
-		return pendingValidatorAdds.contains(address);
+		return pendingValidatorAdds.containsKey(address);
 	}
 
 	public boolean isValidatorRemovePending(Address address) {
-		return pendingValidatorRemoves.contains(address);
+		return pendingValidatorRemoves.containsKey(address);
 	}
 
 	public boolean isAddressAliasAddPending(String alias) {
-		return pendingAddressAliasAdds.contains(alias);
+		return pendingAddressAliasAdds.containsKey(alias);
 	}
 
 	public boolean isAddressAliasRemovePending(String alias) {
-		return pendingAddressAliasRemoves.contains(alias);
+		return pendingAddressAliasRemoves.containsKey(alias);
 	}
 
 	public boolean hasAuthorityPendingParamChange(Address authority) {
-		return authoritiesWithPendingParamChange.contains(authority);
+		return authoritiesWithPendingParamChange.containsKey(authority);
+	}
+
+	public boolean isBipVotePending(Hash bipHash, Address voter) {
+		Map<Address, Hash> voters = pendingBipVotes.get(bipHash);
+		return voters != null && voters.containsKey(voter);
+	}
+
+	/** Returns whether entry conflicts with a different pending governance tx. */
+	public boolean hasGovernanceConflict(@NonNull MempoolEntry entry, Hash ignoredHash) {
+		globalLock.readLock().lock();
+		try {
+			return hasGovernanceConflictInternal(entry, ignoredHash);
+		} finally {
+			globalLock.readLock().unlock();
+		}
+	}
+
+	public Optional<MempoolEntry> getTransactionBySenderAndNonce(Address sender, long nonce) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			return Optional.empty();
+		}
+		pool.lock.lock();
+		try {
+			return Optional.ofNullable(pool.get(nonce));
+		} finally {
+			pool.lock.unlock();
+		}
 	}
 
 	public Optional<MempoolEntry> getTxByHash(Hash hash) {
 		return Optional.ofNullable(allTxsByHash.get(hash));
-	}
-
-	/**
-	 * Checks if a specific authority already has a vote for a specific BIP
-	 * pending in the mempool.
-	 *
-	 * @param bipHash
-	 *            The hash of the BIP being voted on.
-	 * @param voter
-	 *            The address of the authority.
-	 * @return true if a vote is already pending, false otherwise.
-	 */
-	public boolean isBipVotePending(Hash bipHash, Address voter) {
-		Set<Address> voters = pendingBipVotes.get(bipHash);
-		if (voters == null) {
-			return false;
-		}
-		return voters.contains(voter);
 	}
 
 	public List<MempoolEntry> getAllTxs() {
@@ -598,66 +339,27 @@ public class MempoolStore {
 		return allTxsByHash.size();
 	}
 
-	/**
-	 * Returns fee statistics from the current mempool.
-	 * Used for calculating recommended transaction fees.
-	 *
-	 * @return FeeStatistics record with median and fast (80th percentile) fee per
-	 *         byte.
-	 */
 	public FeeStatistics getFeeStatistics() {
-		// Get all executable transactions sorted by fee (highest first)
-		List<MempoolEntry> sortedTxs = new ArrayList<>(executableTxsByFee);
-
-		if (sortedTxs.isEmpty()) {
-			// Empty mempool - return zero statistics
-			return new FeeStatistics(0.0, 0.0, 0);
-		}
-
-		// Calculate fee per byte for each transaction
-		List<Double> feesPerByte = sortedTxs.stream()
+		List<Double> feesPerByte = executableTxsByFee.stream()
 				.map(MempoolStore::calculateFeePerByte)
 				.filter(fee -> fee > 0)
-				.sorted(Comparator.reverseOrder()) // Highest first
+				.sorted(Comparator.reverseOrder())
 				.toList();
-
 		if (feesPerByte.isEmpty()) {
-			return new FeeStatistics(0.0, 0.0, sortedTxs.size());
+			return new FeeStatistics(0.0, 0.0, 0);
 		}
-
 		int size = feesPerByte.size();
-
-		// Median (50th percentile)
-		double medianFeePerByte;
-		int midIndex = size / 2;
-		if (size % 2 == 0) {
-			medianFeePerByte = (feesPerByte.get(midIndex - 1) + feesPerByte.get(midIndex)) / 2.0;
-		} else {
-			medianFeePerByte = feesPerByte.get(midIndex);
-		}
-
-		// Fast fee (20th percentile from top = 80th percentile overall)
-		// This means 20% of transactions have higher fees
-		int fastIndex = (int) Math.ceil(size * 0.2) - 1;
-		if (fastIndex < 0)
-			fastIndex = 0;
-		double fastFeePerByte = feesPerByte.get(fastIndex);
-
-		return new FeeStatistics(medianFeePerByte, fastFeePerByte, size);
+		int middle = size / 2;
+		double median = size % 2 == 0
+				? (feesPerByte.get(middle - 1) + feesPerByte.get(middle)) / 2.0
+				: feesPerByte.get(middle);
+		int fastIndex = Math.max(0, (int) Math.ceil(size * 0.2) - 1);
+		return new FeeStatistics(median, feesPerByte.get(fastIndex), size);
 	}
 
-	/**
-	 * Record holding fee statistics from mempool.
-	 */
-	public record FeeStatistics(
-			double medianFeePerByte,
-			double fastFeePerByte,
-			int txCount) {
+	public record FeeStatistics(double medianFeePerByte, double fastFeePerByte, int txCount) {
 	}
 
-	/**
-	 * Returns all pending transactions for a specific sender address.
-	 */
 	public List<MempoolEntry> getTxsBySender(Address sender) {
 		SenderAccountPool pool = userTxsBySender.get(sender);
 		if (pool == null) {
@@ -665,18 +367,12 @@ public class MempoolStore {
 		}
 		pool.lock.lock();
 		try {
-			List<MempoolEntry> result = new ArrayList<>();
-			result.addAll(pool.getExecutableTxs().values());
-			result.addAll(pool.getFutureTxs().values());
-			return result;
+			return new ArrayList<>(pool.allTransactions().values());
 		} finally {
 			pool.lock.unlock();
 		}
 	}
 
-	/**
-	 * Returns the count of pending transactions for a specific sender address.
-	 */
 	public int getPendingTxCount(Address sender) {
 		SenderAccountPool pool = userTxsBySender.get(sender);
 		if (pool == null) {
@@ -684,170 +380,100 @@ public class MempoolStore {
 		}
 		pool.lock.lock();
 		try {
-			return pool.getExecutableTxs().size() + pool.getFutureTxs().size();
+			return pool.size();
 		} finally {
 			pool.lock.unlock();
 		}
 	}
 
-	/**
-	 * Returns the next available nonce for a sender.
-	 * This considers both the confirmed chain nonce and any pending transactions in
-	 * the mempool.
-	 * If there's a gap in the nonce sequence (e.g., user sent future tx with nonce
-	 * 10 but nonce 9 is missing),
-	 * this will return the first missing nonce (9 in this example).
-	 * 
-	 * @param sender
-	 *            The sender address
-	 * @param confirmedNonce
-	 *            The last confirmed nonce from blockchain state (the highest used
-	 *            nonce)
-	 * @return The next nonce that should be used for a transaction to be
-	 *         immediately executable
-	 */
 	public long getNextAvailableNonce(Address sender, long confirmedNonce) {
 		SenderAccountPool pool = userTxsBySender.get(sender);
 		if (pool == null) {
-			// No pending transactions for this sender
 			return confirmedNonce + 1;
 		}
 		pool.lock.lock();
 		try {
-			// Start from the first expected nonce
-			long nextNonce = confirmedNonce + 1;
-
-			// Check both executable and future txs for each nonce
-			while (pool.getExecutableTxs().containsKey(nextNonce)
-					|| pool.getFutureTxs().containsKey(nextNonce)) {
-				nextNonce++;
+			long nonce = confirmedNonce + 1;
+			while (pool.get(nonce) != null) {
+				nonce++;
 			}
-
-			return nextNonce;
+			return nonce;
 		} finally {
 			pool.lock.unlock();
 		}
 	}
 
+	/** Full means no free slot remains; insertion evicts only when size exceeds max. */
 	public boolean isFull() {
 		return allTxsByHash.size() >= mempoolProperties.getMaxSize();
 	}
 
-	/**
-	 * Forcibly removes a single transaction from all pools.
-	 * This is called when a tx is found to be invalid *before* being mined.
-	 */
 	public void removeTransaction(@NonNull Hash txHash) {
-		globalLock.writeLock().lock(); // ZAMKNUTIE
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
+		globalLock.writeLock().lock();
 		try {
-			// EVERYTHING must be inside try block
-			MempoolEntry tx = allTxsByHash.get(txHash);
-
-			if (tx == null) {
-				return; // Now it's safe, finally block will execute
+			MempoolEntry entry = allTxsByHash.get(txHash);
+			if (entry != null) {
+				removeEntry(entry, MempoolTxRemoveEvent.RemoveReason.INVALID, events, false);
 			}
-
-			allTxsByHash.remove(tx.getHash());
-			allTxsByFee.remove(tx);
-			executableTxsByFee.remove(tx);
-			updateGovernanceSets(tx, false);
-
-			if (tx.getTx().getSender() != null) {
-				SenderAccountPool pool = userTxsBySender.get(tx.getTx().getSender());
-				if (pool != null) {
-					pool.lock.lock();
-					try {
-						pool.removeTxs(Set.of(tx.getNonce()));
-						if (pool.isEmpty()) {
-							userTxsBySender.remove(tx.getTx().getSender());
-						}
-					} finally {
-						pool.lock.unlock();
-					}
-				}
-			} else {
-				systemTxs.remove(tx);
-			}
-			applicationEventPublisher.publishEvent(
-					new MempoolTxRemoveEvent(this, tx, MempoolTxRemoveEvent.RemoveReason.INVALID));
-
 		} finally {
 			globalLock.writeLock().unlock();
 		}
+		publishRemoveEvents(events);
+	}
+
+	public void removeTransactions(@NonNull List<Hash> txHashes) {
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
+		globalLock.writeLock().lock();
+		try {
+			for (Hash hash : new LinkedHashSet<>(txHashes)) {
+				MempoolEntry entry = allTxsByHash.get(hash);
+				if (entry != null) {
+					removeEntry(entry, MempoolTxRemoveEvent.RemoveReason.INVALID, events, false);
+				}
+			}
+		} finally {
+			globalLock.writeLock().unlock();
+		}
+		publishRemoveEvents(events);
 	}
 
 	/**
-	 * Batch removal of transactions.
-	 * Highly optimized to acquire locks minimally.
+	 * Synchronizes a sender with chain state in either direction. Stale entries are
+	 * removed, gaps are repaired, and the global executable index is rebuilt.
 	 */
-	public void removeTransactions(@NonNull List<Hash> txHashes) {
-		if (txHashes.isEmpty()) {
-			return;
-		}
-		List<MempoolEntry> removedEntries = new ArrayList<>(txHashes.size());
+	public void resynchronizeSender(@NonNull Address sender, long currentChainNonce) {
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		globalLock.writeLock().lock();
 		try {
-			Map<Address, Set<Long>> noncesToRemoveBySender = new HashMap<>();
-			for (Hash hash : txHashes) {
-				MempoolEntry tx = allTxsByHash.remove(hash);
-				if (tx == null) {
-					continue;
-				}
-
-				allTxsByFee.remove(tx);
-				executableTxsByFee.remove(tx);
-				updateGovernanceSets(tx, false);
-				removedEntries.add(tx);
-				if (tx.getTx().getSender() != null) {
-					noncesToRemoveBySender
-							.computeIfAbsent(tx.getTx().getSender(), k -> new HashSet<>())
-							.add(tx.getNonce());
-				} else {
-					systemTxs.remove(tx);
-				}
-			}
-			for (Map.Entry<Address, Set<Long>> entry : noncesToRemoveBySender.entrySet()) {
-				Address sender = entry.getKey();
-				Set<Long> nonces = entry.getValue();
-
-				SenderAccountPool pool = userTxsBySender.get(sender);
-				if (pool != null) {
-					pool.lock.lock();
-					try {
-						pool.removeTxs(nonces);
-						if (pool.isEmpty()) {
-							userTxsBySender.remove(sender);
-						}
-					} finally {
-						pool.lock.unlock();
-					}
-				}
-			}
-			log.debug("Batch removed {} transactions from mempool.", removedEntries.size());
-
+			resynchronizeSenderInternal(sender, currentChainNonce, events);
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		for (MempoolEntry tx : removedEntries) {
-			try {
-				applicationEventPublisher.publishEvent(
-						new MempoolTxRemoveEvent(this, tx, MempoolTxRemoveEvent.RemoveReason.INVALID));
-			} catch (Exception e) {
-				log.error("Failed to publish remove event for tx {}", tx.getHash(), e);
-			}
+		publishRemoveEvents(events);
+	}
+
+	public void resynchronizeSenders(@NonNull Map<Address, Long> chainNonces) {
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
+		globalLock.writeLock().lock();
+		try {
+			chainNonces.forEach((sender, nonce) -> resynchronizeSenderInternal(sender, nonce, events));
+		} finally {
+			globalLock.writeLock().unlock();
 		}
+		publishRemoveEvents(events);
 	}
 
 	public void clear() {
+		List<MempoolEntry> removed;
 		globalLock.writeLock().lock();
 		try {
+			removed = new ArrayList<>(allTxsByHash.values());
 			allTxsByHash.clear();
 			allTxsByFee.clear();
 			executableTxsByFee.clear();
 			userTxsBySender.clear();
 			systemTxs.clear();
-
-			// Clear governance sets as well
 			pendingAuthorityAdds.clear();
 			pendingAuthorityRemoves.clear();
 			pendingValidatorAdds.clear();
@@ -856,511 +482,496 @@ public class MempoolStore {
 			pendingAddressAliasRemoves.clear();
 			authoritiesWithPendingParamChange.clear();
 			pendingBipVotes.clear();
-
-			log.warn("Mempool cleared manually.");
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-	}
-
-	// =================================================================================
-	// === PRIVATE HELPERS ===
-	// =================================================================================
-
-	/**
-	 * Helper to safely evict a victim transaction when the pool is full.
-	 */
-	private void evictTransaction(MempoolEntry victim, List<MempoolTxRemoveEvent> eventsCollector) {
-		allTxsByHash.remove(victim.getHash());
-		allTxsByFee.remove(victim);
-		executableTxsByFee.remove(victim);
-		updateGovernanceSets(victim, false);
-
-		if (victim.getTx().getSender() != null) {
-			SenderAccountPool pool = userTxsBySender.get(victim.getTx().getSender());
-			if (pool != null) {
-				pool.lock.lock();
-				try {
-					pool.removeTxs(Set.of(victim.getNonce()));
-					// We don't remove the pool here to avoid concurrency issues inside
-					// addTransaction
-				} finally {
-					pool.lock.unlock();
-				}
-			}
-		} else {
-			systemTxs.remove(victim);
-		}
-
-		eventsCollector.add(new MempoolTxRemoveEvent(this, victim, MempoolTxRemoveEvent.RemoveReason.EVICTED_FULL));
-	}
-
-	/**
-	 * Adds a validated transaction to the appropriate pool.
-	 *
-	 * @param tx
-	 *            The validated transaction.
-	 * @param currentChainNonce
-	 *            The current confirmed nonce (from chain state) for
-	 *            the
-	 *            sender.
-	 *            -1 if the tx is a "system tx" (sender ==
-	 *            null).
-	 * @return The result of the add operation.
-	 */
-	private StorageAddResult addTransactionInternal(@NonNull MempoolEntry tx, long currentChainNonce,
-			List<MempoolTxRemoveEvent> eventsToPublish) {
-		globalLock.readLock().lock();
-		try {
-			if (allTxsByHash.putIfAbsent(tx.getHash(), tx) != null) {
-				return StorageAddResult.DUPLICATE_HASH;
-			}
-			allTxsByFee.add(tx);
-			StorageAddResult result;
-			List<MempoolEntry> txsToAdd = new ArrayList<>();
-			List<MempoolEntry> txsToRemove = new ArrayList<>();
-			if (tx.getTx().getSender() != null) {
-				SenderAccountPool pool = userTxsBySender.computeIfAbsent(
-						tx.getTx().getSender(),
-						k -> new SenderAccountPool(mempoolProperties, tx.getTx().getSender(), currentChainNonce));
-
-				pool.lock.lock();
-				try {
-					result = pool.addTransaction(tx, currentChainNonce, txsToAdd, txsToRemove);
-				} finally {
-					pool.lock.unlock();
-				}
-			} else {
-				systemTxs.add(tx);
-				result = StorageAddResult.ADDED_EXECUTABLE;
-			}
-
-			executableTxsByFee.removeAll(txsToRemove);
-			executableTxsByFee.addAll(txsToAdd);
-			txsToRemove.forEach(allTxsByFee::remove);
-
-			for (MempoolEntry rbfTx : txsToRemove) {
-				eventsToPublish.add(new MempoolTxRemoveEvent(this, rbfTx, MempoolTxRemoveEvent.RemoveReason.RBF));
-			}
-
-			if (result.isSuccess()) {
-				updateGovernanceSets(tx, true);
-
-				// --- LIMIT CHECK ---
-				if (isFull()) {
-					if (result == StorageAddResult.ADDED_FUTURE) {
-						evictTransaction(tx, eventsToPublish);
-						return StorageAddResult.MEMPOOL_FULL;
-					}
-					MempoolEntry victim = allTxsByFee.last();
-					if (victim.equals(tx)) {
-						evictTransaction(tx, eventsToPublish);
-						return StorageAddResult.MEMPOOL_FULL;
-					}
-					evictTransaction(victim, eventsToPublish);
-				}
-			} else {
-				allTxsByHash.remove(tx.getHash());
-				allTxsByFee.remove(tx);
-				executableTxsByFee.remove(tx);
-			}
-			return result;
-		} finally {
-			globalLock.readLock().unlock();
+		for (MempoolEntry entry : removed) {
+			publishRemoveEvent(new MempoolTxRemoveEvent(
+					this, entry, MempoolTxRemoveEvent.RemoveReason.INVALID));
 		}
 	}
 
-	public void addTransactionsBack(@NonNull List<Tx> txs, Block block) {
-		List<MempoolTxRemoveEvent> eventsToPublishRemove = new ArrayList<>();
-		List<MempoolTxAddEvent> eventsToPublishAdd = new ArrayList<>();
-
+	private StorageAddResult addTransactionInternal(MempoolEntry entry, long currentChainNonce,
+			List<MempoolTxRemoveEvent> events) {
 		globalLock.writeLock().lock();
 		try {
-			log.warn("Mempool: Re-adding {} txs from disconnected blocks.", txs.size());
-			WorldState worldstate = chainHeadStateService.getHeadState();
-			Map<Address, Long> newNonces = new ConcurrentHashMap<>();
+			if (allTxsByHash.containsKey(entry.getHash())) {
+				return StorageAddResult.DUPLICATE_HASH;
+			}
 
-			for (Tx tx : txs) {
-				MempoolEntry entry = new MempoolEntry(tx);
-				entry.setFirstSeenHeight(block.getHeight());
-				entry.setFirstSeenTime(block.getHeader().getTimestamp());
-
-				long chainNonce = -1;
-				if (tx.getSender() != null) {
-					chainNonce = newNonces.computeIfAbsent(
-							tx.getSender(),
-							k -> worldstate.getNonce(k).getNonce());
-				}
-				StorageAddResult result = addTransactionInternal(entry, chainNonce, eventsToPublishRemove);
-				if (result.isSuccess()) {
-					eventsToPublishAdd.add(new MempoolTxAddEvent(this, entry, MempoolTxAddEvent.AddReason.REORG));
+			Address sender = entry.getTx().getSender();
+			SenderAccountPool pool = null;
+			MempoolEntry replacement = null;
+			if (sender != null) {
+				pool = userTxsBySender.computeIfAbsent(sender,
+						ignored -> new SenderAccountPool(mempoolProperties, sender, currentChainNonce));
+				pool.lock.lock();
+				try {
+					resynchronizePool(pool, currentChainNonce, events);
+					replacement = pool.get(entry.getNonce());
+				} finally {
+					pool.lock.unlock();
 				}
 			}
+
+			Hash ignoredGovernanceHash = replacement == null ? null : replacement.getHash();
+			if (hasGovernanceConflictInternal(entry, ignoredGovernanceHash)) {
+				removeEmptyPool(sender, pool);
+				return StorageAddResult.GOVERNANCE_CONFLICT;
+			}
+
+			/* putIfAbsent remains intentional: it protects this invariant even if a
+			 * future caller weakens the outer locking discipline. */
+			if (allTxsByHash.putIfAbsent(entry.getHash(), entry) != null) {
+				return StorageAddResult.DUPLICATE_HASH;
+			}
+			allTxsByFee.add(entry);
+
+			StorageAddResult result;
+			if (sender == null) {
+				systemTxs.add(entry);
+				result = StorageAddResult.ADDED_EXECUTABLE;
+			} else {
+				pool.lock.lock();
+				try {
+					result = pool.addTransaction(entry);
+					if (result.isSuccess()) {
+						if (replacement != null) {
+							removeGlobalIndexes(replacement);
+							events.add(new MempoolTxRemoveEvent(
+									this, replacement, MempoolTxRemoveEvent.RemoveReason.RBF));
+						}
+						refreshExecutableIndex(pool);
+					}
+				} finally {
+					pool.lock.unlock();
+				}
+			}
+
+			if (!result.isSuccess()) {
+				allTxsByHash.remove(entry.getHash(), entry);
+				allTxsByFee.remove(entry);
+				removeEmptyPool(sender, pool);
+				return result;
+			}
+
+			addGovernanceReservation(entry);
+			while (exceedsCapacity()) {
+				Set<MempoolEntry> packageToEvict = findLowestFeeDependencyPackage();
+				if (packageToEvict.isEmpty()) {
+					break;
+				}
+				for (MempoolEntry victim : packageToEvict) {
+					removeEntry(victim, MempoolTxRemoveEvent.RemoveReason.EVICTED_FULL, events, false);
+				}
+			}
+
+			return allTxsByHash.get(entry.getHash()) == entry ? result : StorageAddResult.MEMPOOL_FULL;
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		for (MempoolTxRemoveEvent event : eventsToPublishRemove) {
-			applicationEventPublisher.publishEvent(event);
+	}
+
+	private void resynchronizeSenderInternal(Address sender, long chainNonce,
+			List<MempoolTxRemoveEvent> events) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			return;
 		}
-		for (MempoolTxAddEvent event : eventsToPublishAdd) {
-			applicationEventPublisher.publishEvent(event);
+		pool.lock.lock();
+		try {
+			resynchronizePool(pool, chainNonce, events);
+			if (pool.isEmpty()) {
+				userTxsBySender.remove(sender, pool);
+			}
+		} finally {
+			pool.lock.unlock();
 		}
 	}
 
-	/**
-	 * Helper to add/remove a tx from the governance sets.
-	 */
-	private void updateGovernanceSets(MempoolEntry tx, boolean isAdding) {
-		// --- BIP Creation ---
-		if (tx.getTx().getType() == TxType.BIP_CREATE && tx.getTx().getPayload() != null) {
-			TxPayload payload = tx.getTx().getPayload();
+	private void resynchronizePool(SenderAccountPool pool, long chainNonce,
+			List<MempoolTxRemoveEvent> events) {
+		List<MempoolEntry> stale = pool.resynchronize(chainNonce);
+		for (MempoolEntry entry : stale) {
+			removeGlobalIndexes(entry);
+			events.add(new MempoolTxRemoveEvent(
+					this, entry, MempoolTxRemoveEvent.RemoveReason.STALE_NONCE));
+		}
+		refreshExecutableIndex(pool);
+	}
 
-			if (payload instanceof TxBipAuthorityAddPayload) {
-				Address addr = ((TxBipAuthorityAddPayload) tx.getTx().getPayload()).getAddress();
-				if (isAdding) {
-					pendingAuthorityAdds.add(addr);
-				} else {
-					pendingAuthorityAdds.remove(addr);
-				}
-			} else if (payload instanceof TxBipAuthorityRemovePayload) {
-				Address addr = ((TxBipAuthorityRemovePayload) payload).getAddress();
-				if (isAdding) {
-					pendingAuthorityRemoves.add(addr);
-				} else {
-					pendingAuthorityRemoves.remove(addr);
-				}
-			} else if (payload instanceof TxBipValidatorAddPayload) {
-				Address addr = ((TxBipValidatorAddPayload) payload).getAddress();
-				if (isAdding) {
-					pendingValidatorAdds.add(addr);
-				} else {
-					pendingValidatorAdds.remove(addr);
-				}
-			} else if (payload instanceof TxBipValidatorRemovePayload) {
-				Address addr = ((TxBipValidatorRemovePayload) payload).getAddress();
-				if (isAdding) {
-					pendingValidatorRemoves.add(addr);
-				} else {
-					pendingValidatorRemoves.remove(addr);
-				}
-			} else if (payload instanceof TxBipNetworkParamsSetPayload) {
-				Address sender = tx.getTx().getSender();
-				if (isAdding) {
-					authoritiesWithPendingParamChange.add(sender);
-				} else {
-					authoritiesWithPendingParamChange.remove(sender);
-				}
-			} else if (payload instanceof TxBipAddressAliasAddPayload) {
-				String alias = ((TxBipAddressAliasAddPayload) payload).getAlias();
-				if (isAdding) {
-					pendingAddressAliasAdds.add(alias);
-				} else {
-					pendingAddressAliasRemoves.remove(alias);
-				}
-			} else if (payload instanceof TxBipAddressAliasRemovePayload) {
-				String alias = ((TxBipAddressAliasRemovePayload) payload).getAlias();
-				if (isAdding) {
-					pendingAddressAliasRemoves.add(alias);
-				} else {
-					pendingAddressAliasRemoves.remove(alias);
-				}
-			}
+	private void removeEntry(MempoolEntry entry, MempoolTxRemoveEvent.RemoveReason reason,
+			List<MempoolTxRemoveEvent> events, boolean removeDescendants) {
+		if (allTxsByHash.get(entry.getHash()) != entry) {
+			return;
+		}
+		Address sender = entry.getTx().getSender();
+		if (sender == null) {
+			systemTxs.remove(entry);
+			removeGlobalIndexes(entry);
+			events.add(new MempoolTxRemoveEvent(this, entry, reason));
 			return;
 		}
 
-		if (tx.getTx().getType() == TxType.BIP_VOTE && tx.getTx().getReferenceHash() != null
-				&& tx.getTx().getSender() != null) {
-			Hash bipHash = tx.getTx().getReferenceHash();
-			Address voter = tx.getTx().getSender();
-
-			if (isAdding) {
-				// Get or create the set for this BIP Hash, then add the voter
-				// We must use a thread-safe set inside the map
-				pendingBipVotes.computeIfAbsent(bipHash, k -> ConcurrentHashMap.newKeySet()).add(voter);
-			} else {
-				// Remove the voter from the set
-				Set<Address> voters = pendingBipVotes.get(bipHash);
-				if (voters != null) {
-					voters.remove(voter);
-					// Clean up the map if the set is now empty
-					if (voters.isEmpty()) {
-						pendingBipVotes.remove(bipHash);
-					}
-				}
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			removeGlobalIndexes(entry);
+			events.add(new MempoolTxRemoveEvent(this, entry, reason));
+			return;
+		}
+		pool.lock.lock();
+		try {
+			List<MempoolEntry> removed = removeDescendants
+					? pool.removeFromNonce(entry.getNonce())
+					: pool.remove(Set.of(entry.getNonce()));
+			for (MempoolEntry removedEntry : removed) {
+				removeGlobalIndexes(removedEntry);
+				events.add(new MempoolTxRemoveEvent(this, removedEntry, reason));
 			}
+			refreshExecutableIndex(pool);
+			if (pool.isEmpty()) {
+				userTxsBySender.remove(sender, pool);
+			}
+		} finally {
+			pool.lock.unlock();
 		}
 	}
 
-	// =================================================================================
-	// === INNER CLASS: SenderAccountPool ===
-	// =================================================================================
+	private void removeGlobalIndexes(MempoolEntry entry) {
+		allTxsByHash.remove(entry.getHash(), entry);
+		allTxsByFee.remove(entry);
+		executableTxsByFee.remove(entry);
+		removeGovernanceReservation(entry);
+	}
 
-	/**
-	 * Represents the pool of transactions for a *single* sender.
-	 * This class is NOT thread-safe on its own; it *must* be protected
-	 * by its external 'lock' field.
-	 */
+	private void refreshExecutableIndex(SenderAccountPool pool) {
+		executableTxsByFee.removeIf(entry -> pool.senderAddress.equals(entry.getTx().getSender()));
+		executableTxsByFee.addAll(pool.executableTxs.values());
+	}
+
+	private Set<MempoolEntry> findLowestFeeDependencyPackage() {
+		MempoolEntry bestStart = null;
+		double bestFeeRate = Double.POSITIVE_INFINITY;
+
+		for (MempoolEntry systemTx : systemTxs) {
+			double feeRate = calculateFeePerByte(systemTx);
+			if (feeRate < bestFeeRate) {
+				bestFeeRate = feeRate;
+				bestStart = systemTx;
+			}
+		}
+
+		for (SenderAccountPool pool : userTxsBySender.values()) {
+			pool.lock.lock();
+			try {
+				double suffixFee = 0.0;
+				long suffixSize = 0L;
+				for (MempoolEntry entry : pool.allTransactions().descendingMap().values()) {
+					suffixFee += entry.getFeeAsDouble();
+					suffixSize += entry.getSizeInBytes();
+					double feeRate = suffixSize == 0L ? 0.0 : suffixFee / suffixSize;
+					if (feeRate < bestFeeRate) {
+						bestFeeRate = feeRate;
+						bestStart = entry;
+					}
+				}
+			} finally {
+				pool.lock.unlock();
+			}
+		}
+
+		return bestStart == null ? Collections.emptySet() : dependencyPackage(bestStart);
+	}
+
+	private Set<MempoolEntry> dependencyPackage(MempoolEntry candidate) {
+		Address sender = candidate.getTx().getSender();
+		if (sender == null) {
+			return Set.of(candidate);
+		}
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		if (pool == null) {
+			return Set.of(candidate);
+		}
+		pool.lock.lock();
+		try {
+			return new LinkedHashSet<>(pool.allTransactions().tailMap(candidate.getNonce(), true).values());
+		} finally {
+			pool.lock.unlock();
+		}
+	}
+
+	private boolean exceedsCapacity() {
+		return allTxsByHash.size() > mempoolProperties.getMaxSize();
+	}
+
+	private long countFutureTransactions() {
+		return userTxsBySender.values().stream().mapToLong(pool -> {
+			pool.lock.lock();
+			try {
+				return pool.futureTxs.size();
+			} finally {
+				pool.lock.unlock();
+			}
+		}).sum();
+	}
+
+	private void removeEmptyPool(Address sender, SenderAccountPool pool) {
+		if (sender != null && pool != null && pool.isEmpty()) {
+			userTxsBySender.remove(sender, pool);
+		}
+	}
+
+	private boolean hasGovernanceConflictInternal(MempoolEntry entry, Hash ignoredHash) {
+		GovernanceReservation reservation = governanceReservation(entry);
+		if (reservation == null) {
+			return false;
+		}
+		Hash owner = reservation.owner();
+		return owner != null && !owner.equals(entry.getHash()) && !owner.equals(ignoredHash);
+	}
+
+	private void addGovernanceReservation(MempoolEntry entry) {
+		GovernanceReservation reservation = governanceReservation(entry);
+		if (reservation != null) {
+			reservation.add(entry.getHash());
+		}
+	}
+
+	private void removeGovernanceReservation(MempoolEntry entry) {
+		GovernanceReservation reservation = governanceReservation(entry);
+		if (reservation != null) {
+			reservation.remove(entry.getHash());
+		}
+	}
+
+	private GovernanceReservation governanceReservation(MempoolEntry entry) {
+		Tx tx = entry.getTx();
+		TxPayload payload = tx.getPayload();
+		if (tx.getType() == TxType.BIP_CREATE && payload != null) {
+			if (payload instanceof TxBipAuthorityAddPayload value) {
+				return mapReservation(pendingAuthorityAdds, value.getAddress());
+			}
+			if (payload instanceof TxBipAuthorityRemovePayload value) {
+				return mapReservation(pendingAuthorityRemoves, value.getAddress());
+			}
+			if (payload instanceof TxBipValidatorAddPayload value) {
+				return mapReservation(pendingValidatorAdds, value.getAddress());
+			}
+			if (payload instanceof TxBipValidatorRemovePayload value) {
+				return mapReservation(pendingValidatorRemoves, value.getAddress());
+			}
+			if (payload instanceof TxBipNetworkParamsSetPayload) {
+				return mapReservation(authoritiesWithPendingParamChange, tx.getSender());
+			}
+			if (payload instanceof TxBipAddressAliasAddPayload value) {
+				return mapReservation(pendingAddressAliasAdds, value.getAlias());
+			}
+			if (payload instanceof TxBipAddressAliasRemovePayload value) {
+				return mapReservation(pendingAddressAliasRemoves, value.getAlias());
+			}
+		}
+		if (tx.getType() == TxType.BIP_VOTE && tx.getReferenceHash() != null && tx.getSender() != null) {
+			Hash bipHash = tx.getReferenceHash();
+			Address voter = tx.getSender();
+			return new GovernanceReservation() {
+				@Override
+				public Hash owner() {
+					Map<Address, Hash> votes = pendingBipVotes.get(bipHash);
+					return votes == null ? null : votes.get(voter);
+				}
+
+				@Override
+				public void add(Hash hash) {
+					pendingBipVotes.computeIfAbsent(bipHash, ignored -> new ConcurrentHashMap<>())
+							.put(voter, hash);
+				}
+
+				@Override
+				public void remove(Hash hash) {
+					ConcurrentHashMap<Address, Hash> votes = pendingBipVotes.get(bipHash);
+					if (votes != null) {
+						votes.remove(voter, hash);
+						if (votes.isEmpty()) {
+							pendingBipVotes.remove(bipHash, votes);
+						}
+					}
+				}
+			};
+		}
+		return null;
+	}
+
+	private <K> GovernanceReservation mapReservation(ConcurrentHashMap<K, Hash> map, K key) {
+		return new GovernanceReservation() {
+			@Override
+			public Hash owner() {
+				return map.get(key);
+			}
+
+			@Override
+			public void add(Hash hash) {
+				map.put(key, hash);
+			}
+
+			@Override
+			public void remove(Hash hash) {
+				map.remove(key, hash);
+			}
+		};
+	}
+
+	private void publishRemoveEvents(List<MempoolTxRemoveEvent> events) {
+		events.forEach(this::publishRemoveEvent);
+	}
+
+	private void publishRemoveEvent(MempoolTxRemoveEvent event) {
+		try {
+			applicationEventPublisher.publishEvent(event);
+		} catch (RuntimeException exception) {
+			log.error("Failed to publish mempool removal for {}", event.getEntry().getHash(), exception);
+		}
+	}
+
+	private void publishAddEvent(MempoolTxAddEvent event) {
+		try {
+			applicationEventPublisher.publishEvent(event);
+		} catch (RuntimeException exception) {
+			log.error("Failed to publish mempool addition for {}", event.getEntry().getHash(), exception);
+		}
+	}
+
+	private interface GovernanceReservation {
+		Hash owner();
+
+		void add(Hash hash);
+
+		void remove(Hash hash);
+	}
+
 	@Getter
 	private static class SenderAccountPool {
-
 		final MempoolProperties mempoolProperties;
 		final ReentrantLock lock = new ReentrantLock();
 		final Address senderAddress;
-		long chainNonce; // The last-known *confirmed* nonce
-
-		/**
-		 * Transactions that are ready to be included in a block.
-		 * Sorted by nonce (key).
-		 */
+		long chainNonce;
 		final TreeMap<Long, MempoolEntry> executableTxs = new TreeMap<>();
-
-		/**
-		 * Transactions from this sender with a nonce-gap.
-		 * Sorted by nonce (key).
-		 */
 		final TreeMap<Long, MempoolEntry> futureTxs = new TreeMap<>();
 
-		public SenderAccountPool(MempoolProperties mempoolProperties, Address senderAddress,
-				long chainNonce) {
+		SenderAccountPool(MempoolProperties mempoolProperties, Address senderAddress, long chainNonce) {
 			this.mempoolProperties = mempoolProperties;
 			this.senderAddress = senderAddress;
 			this.chainNonce = chainNonce;
 		}
 
-		/**
-		 * Adds a transaction to this pool.
-		 * Assumes the caller is holding the pool's lock.
-		 *
-		 * @param tx
-		 *            The transaction to add.
-		 * @return The result of the add operation.
-		 */
-		public StorageAddResult addTransaction(
-				MempoolEntry tx,
-				long currentChainNonce, // NEW ARGUMENT
-				List<MempoolEntry> outTxsToAdd,
-				List<MempoolEntry> outTxsToRemove) {
-
-			log.debug(
-					"[POOL-DEBUG] addTransaction START: sender={}, txHash={}, txNonce={}, currentChainNonce={}, poolChainNonce={}, executableTxs.size={}, futureTxs.size={}",
-					senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), tx.getNonce(),
-					currentChainNonce, this.chainNonce, executableTxs.size(), futureTxs.size());
-
-			// 0. Lazy Sync: If the external world says chainNonce is higher, believe it.
-			// This fixes de-sync issues if processNewBlock was delayed/missed.
-			if (currentChainNonce > this.chainNonce) {
-				log.debug("[POOL-DEBUG] Sender {}: Lazy sync chainNonce from {} to {}.",
-						senderAddress.toChecksumAddress(), this.chainNonce, currentChainNonce);
-				List<MempoolEntry> evicted = updateChainNonceAndPromote(currentChainNonce, outTxsToAdd);
-				outTxsToRemove.addAll(evicted);
-			}
-			long txNonce = tx.getNonce();
-
-			// 1. Check for stale nonce
-			if (txNonce <= this.chainNonce) {
-				log.debug("[POOL-DEBUG] Sender {}: STALE tx {} (nonce {} <= chainNonce {})",
-						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce, this.chainNonce);
+		StorageAddResult addTransaction(MempoolEntry entry) {
+			long nonce = entry.getNonce();
+			if (nonce <= chainNonce) {
 				return StorageAddResult.STALE;
 			}
-
-			// 2. Check for RBF (Replace-by-Fee)
-			MempoolEntry existingTx = executableTxs.get(txNonce);
-			if (existingTx == null) {
-				existingTx = futureTxs.get(txNonce);
+			if (nonce > chainNonce + mempoolProperties.getMaxNonceGap()) {
+				return StorageAddResult.NONCE_TOO_FAR_FUTURE;
 			}
-
-			if (existingTx != null) {
-				BigInteger oldFee = existingTx.getTx().getFee().toBigInteger();
-				BigInteger newFee = tx.getTx().getFee().toBigInteger();
-
-				// Create the 10% threshold
+			MempoolEntry existing = get(nonce);
+			if (existing != null) {
+				BigInteger oldFee = existing.getTx().getFee().toBigInteger();
+				BigInteger newFee = entry.getTx().getFee().toBigInteger();
 				BigInteger requiredFee = oldFee.multiply(BigInteger.valueOf(110))
+						.add(BigInteger.valueOf(99))
 						.divide(BigInteger.valueOf(100));
-
-				// The new fee must be strictly greater than the old fee,
-				// AND greater than or equal to the 10% threshold.
 				if (newFee.compareTo(oldFee) <= 0 || newFee.compareTo(requiredFee) < 0) {
-					log.warn("Sender {}: Rejecting RBF tx {}. New fee {} is not > 10% higher than old fee {}.",
-							senderAddress.toChecksumAddress(), tx.getHash().toHexString(), newFee, oldFee);
 					return StorageAddResult.FAILED_FEE_TOO_LOW;
 				}
-
-				log.debug("Sender {}: RBF tx {} replacing {}",
-						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(),
-						existingTx.getHash().toShortLogString());
-
-				// RBF passed: remove existing from wherever it is
-				outTxsToRemove.add(existingTx);
-				executableTxs.remove(txNonce);
-				futureTxs.remove(txNonce);
 			}
 
-			// 3. Decide where to place it: executable or future?
-			long nextExecutableNonce = getNextExecutableNonce();
-
-			log.debug("[POOL-DEBUG] Sender {}: txNonce={}, nextExecutableNonce={}, chainNonce={}",
-					senderAddress.toChecksumAddress(), txNonce, nextExecutableNonce, this.chainNonce);
-
-			if (txNonce == nextExecutableNonce) {
-				// This is the next tx in sequence
-				executableTxs.put(txNonce, tx);
-				outTxsToAdd.add(tx);
-				log.debug("[POOL-DEBUG] Sender {}: tx {} added as EXECUTABLE (nonce={})",
-						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce);
-				// 4. CRITICAL: Promote txs from 'future'
-				promoteExecutableTxs(outTxsToAdd);
-				return StorageAddResult.ADDED_EXECUTABLE;
-
-			} else if (txNonce > nextExecutableNonce) {
-				final long MAX_NONCE_GAP = this.mempoolProperties.getMaxNonceGap();
-
-				// Check the gap against the *last confirmed chain nonce*
-				if (txNonce > this.chainNonce + MAX_NONCE_GAP) {
-					log.warn(
-							"[POOL-DEBUG] Sender {}: Tx nonce {} is too far in the future (max allowed: {}). Rejecting tx {}.",
-							senderAddress.toChecksumAddress(), txNonce, this.chainNonce + MAX_NONCE_GAP,
-							tx.getHash().toShortLogString());
-					return StorageAddResult.NONCE_TOO_FAR_FUTURE;
-				}
-				// This tx has a gap, put it in the 'future' queue
-				futureTxs.put(txNonce, tx);
-				log.warn("[POOL-DEBUG] Sender {}: tx {} added as FUTURE (nonce={}, gap from nextExecutable={})",
-						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce,
-						txNonce - nextExecutableNonce);
-				return StorageAddResult.ADDED_FUTURE;
-			} else {
-				// txNonce < nextExecutableNonce
-				// This means it's stale (e.g., chainNonce=5, executable=7, new=6)
-				log.debug("[POOL-DEBUG] Sender {}: tx {} is STALE (nonce={} < nextExecutable={})",
-						senderAddress.toChecksumAddress(), tx.getHash().toShortLogString(), txNonce,
-						nextExecutableNonce);
-				return StorageAddResult.STALE;
-			}
+			TreeMap<Long, MempoolEntry> all = allTransactions();
+			all.put(nonce, entry);
+			rebuild(all);
+			return executableTxs.get(nonce) == entry
+					? StorageAddResult.ADDED_EXECUTABLE
+					: StorageAddResult.ADDED_FUTURE;
 		}
 
-		/**
-		 * Moves transactions from 'futureTxs' to 'executableTxs'
-		 * as long as they form a continuous sequence.
-		 */
-		private void promoteExecutableTxs(List<MempoolEntry> outTxsToAdd) {
-			long nextNonce = getNextExecutableNonce();
-			int promotedCount = 0;
-			log.debug("[POOL-DEBUG] Sender {}: promoteExecutableTxs START, nextNonce={}, futureTxs.size={}",
-					senderAddress.toChecksumAddress(), nextNonce, futureTxs.size());
-			while (futureTxs.containsKey(nextNonce)) {
-				MempoolEntry txToPromote = futureTxs.remove(nextNonce);
-				executableTxs.put(nextNonce, txToPromote);
-				outTxsToAdd.add(txToPromote);
-				log.debug("[POOL-DEBUG] Sender {}: PROMOTED tx {} from FUTURE to EXECUTABLE (nonce={})",
-						senderAddress.toChecksumAddress(), txToPromote.getHash().toShortLogString(), nextNonce);
-				promotedCount++;
-				nextNonce++;
-			}
-			if (promotedCount > 0) {
-				log.info("[POOL-DEBUG] Sender {}: Promoted {} tx(s) from FUTURE to EXECUTABLE",
-						senderAddress.toChecksumAddress(), promotedCount);
-			}
+		List<MempoolEntry> resynchronize(long newChainNonce) {
+			TreeMap<Long, MempoolEntry> all = allTransactions();
+			List<MempoolEntry> stale = new ArrayList<>(all.headMap(newChainNonce, true).values());
+			all.headMap(newChainNonce, true).clear();
+			chainNonce = newChainNonce;
+			rebuild(all);
+			return stale;
 		}
 
-		/**
-		 * Updates the pool based on a new confirmed chain nonce.
-		 * Evicts any txs that are now stale.
-		 * Returns a list of txs that were evicted.
-		 */
-		public List<MempoolEntry> updateChainNonceAndPromote(long newChainNonce, List<MempoolEntry> outPromotedTxs) {
-			this.chainNonce = newChainNonce;
-			List<MempoolEntry> evictedTxs = new ArrayList<>();
-
-			// 1. Evict stale txs from both maps
-			evictStale(executableTxs, newChainNonce, evictedTxs);
-			evictStale(futureTxs, newChainNonce, evictedTxs);
-
-			// 2. Integrity Check: Ensure executableTxs are contiguous from chainNonce + 1
-			if (!executableTxs.isEmpty()) {
-				long expectedNonce = this.chainNonce + 1;
-				// If the head of executableTxs creates a gap, demote ALL executable to future
-				// This handles cases where intermediate txs were lost or reorged
-				if (executableTxs.firstKey() > expectedNonce) {
-					log.warn(
-							"Sender {}: Gap detected after chain update (Expected: {}, Got: {}). Demoting {} txs to future.",
-							senderAddress.toChecksumAddress(), expectedNonce, executableTxs.firstKey(),
-							executableTxs.size());
-					futureTxs.putAll(executableTxs);
-					executableTxs.clear();
-					// Note: caller needs to handle removal from global executable set
-					// (executableTxsByFee)
-					// But SenderAccountPool cannot access it.
-					// We can treat them as "evicted" from executable status, but they are not
-					// "removed" from mempool.
-					// Since MempoolStore relies on executableTxsByFee being a superset, having
-					// extra (future) txs
-					// in executableTxsByFee is suboptimal but not fatal (Miner will fail
-					// execution).
-					// ideally we should return them to be removed from executableTxsByFee.
-				}
-			}
-
-			// 3. Try to promote
-			promoteExecutableTxs(outPromotedTxs);
-
-			return evictedTxs;
-		}
-
-		private void evictStale(TreeMap<Long, MempoolEntry> map, long newChainNonce, List<MempoolEntry> evictedTxs) {
-			// Get all entries with nonce <= newChainNonce
-			SortedMap<Long, MempoolEntry> staleEntries = map.headMap(newChainNonce, true);
-			evictedTxs.addAll(staleEntries.values());
-			// Use iterator to remove them
-			staleEntries.clear();
-		}
-
-		/**
-		 * Removes a set of transactions by nonce (e.g., they were mined).
-		 */
-		public void removeTxs(Set<Long> nonces) {
+		List<MempoolEntry> remove(Set<Long> nonces) {
+			TreeMap<Long, MempoolEntry> all = allTransactions();
+			List<MempoolEntry> removed = new ArrayList<>();
 			for (Long nonce : nonces) {
-				executableTxs.remove(nonce);
-				futureTxs.remove(nonce);
+				MempoolEntry entry = all.remove(nonce);
+				if (entry != null) {
+					removed.add(entry);
+				}
+			}
+			rebuild(all);
+			return removed;
+		}
+
+		List<MempoolEntry> removeFromNonce(long nonce) {
+			TreeMap<Long, MempoolEntry> all = allTransactions();
+			List<MempoolEntry> removed = new ArrayList<>(all.tailMap(nonce, true).values());
+			all.tailMap(nonce, true).clear();
+			rebuild(all);
+			return removed;
+		}
+
+		MempoolEntry get(long nonce) {
+			MempoolEntry entry = executableTxs.get(nonce);
+			return entry == null ? futureTxs.get(nonce) : entry;
+		}
+
+		TreeMap<Long, MempoolEntry> allTransactions() {
+			TreeMap<Long, MempoolEntry> all = new TreeMap<>(executableTxs);
+			all.putAll(futureTxs);
+			return all;
+		}
+
+		private void rebuild(TreeMap<Long, MempoolEntry> all) {
+			executableTxs.clear();
+			futureTxs.clear();
+			long expected = chainNonce + 1;
+			for (Map.Entry<Long, MempoolEntry> item : all.entrySet()) {
+				if (item.getKey() == expected) {
+					executableTxs.put(item.getKey(), item.getValue());
+					expected++;
+				} else {
+					futureTxs.put(item.getKey(), item.getValue());
+				}
 			}
 		}
 
-		private long getNextExecutableNonce() {
-			if (executableTxs.isEmpty()) {
-				return this.chainNonce + 1;
-			} else {
-				return executableTxs.lastKey() + 1;
-			}
+		int size() {
+			return executableTxs.size() + futureTxs.size();
 		}
 
-		public boolean isEmpty() {
+		boolean isEmpty() {
 			return executableTxs.isEmpty() && futureTxs.isEmpty();
 		}
 	}
 
-	// =================================================================================
-	// === PUBLIC ENUM: StorageAddResult ===
-	// =================================================================================
-
-	/**
-	 * Enum to report the result of adding a tx to storage.
-	 */
 	public enum StorageAddResult {
-		ADDED_EXECUTABLE, ADDED_FUTURE, STALE, DUPLICATE_HASH, FAILED_FEE_TOO_LOW, // For RBF
-		MEMPOOL_FULL, // Mempool full and tx fee too low
-		NONCE_TOO_FAR_FUTURE;
+		ADDED_EXECUTABLE,
+		ADDED_FUTURE,
+		STALE,
+		DUPLICATE_HASH,
+		FAILED_FEE_TOO_LOW,
+		MEMPOOL_FULL,
+		NONCE_TOO_FAR_FUTURE,
+		GOVERNANCE_CONFLICT,
+		REPLACED;
 
 		public boolean isSuccess() {
 			return this == ADDED_EXECUTABLE || this == ADDED_FUTURE;
 		}
 	}
 
-	/**
-	 * Calculates the fee-per-byte for sorting transactions.
-	 * Uses double for sorting performance.
-	 */
-	private static double calculateFeePerByte(MempoolEntry tx) {
-		if (tx.getSizeInBytes() == 0)
-			return 0.0;
-		return tx.getFeeAsDouble() / tx.getSizeInBytes();
+	private static double calculateFeePerByte(MempoolEntry entry) {
+		return entry.getSizeInBytes() == 0 ? 0.0 : entry.getFeeAsDouble() / entry.getSizeInBytes();
 	}
 }

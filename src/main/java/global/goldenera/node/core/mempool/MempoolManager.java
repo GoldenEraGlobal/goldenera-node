@@ -24,17 +24,18 @@
 package global.goldenera.node.core.mempool;
 
 import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_SCHEDULER;
-import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_TASK_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -179,6 +180,12 @@ public class MempoolManager {
 				result = MempoolAddResult.REJECTED_DUPLICATE;
 				message = "Transaction already exists in mempool.";
 				break;
+			case GOVERNANCE_CONFLICT:
+				log.warn("Mempool: Rejecting tx {}: Conflicting governance transaction is pending.",
+						txHash.toShortLogString());
+				result = MempoolAddResult.REJECTED_DUPLICATE;
+				message = "A conflicting governance transaction is already pending.";
+				break;
 			case STALE:
 				log.warn("Mempool: Rejecting tx {}: Stale (nonce mismatch in storage).",
 						txHash.toShortLogString());
@@ -210,36 +217,14 @@ public class MempoolManager {
 	public void addTxs(@NonNull List<Tx> txs, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
 			boolean skipValidation) {
 		log.debug("addTxs called: {} txs, reason={}, skipValidation={}", txs.size(), reason, skipValidation);
-		List<MempoolEntry> validEntries = new java.util.ArrayList<>();
-		java.util.Map<Address, Long> chainNonces = new java.util.HashMap<>();
-
+		int added = 0;
 		for (Tx tx : txs) {
-			MempoolEntry entry = new MempoolEntry(tx);
-			entry.setReceivedFrom(receivedFrom);
-
-			MempoolValidator.MempoolValidationResult validationResult = mempoolValidator
-					.validateAgainstChainAndMempool(entry, reason, skipValidation);
-
-			if (validationResult.isValid()) {
-				log.debug("Tx {} passed validation", tx.getHash().toShortLogString());
-				validEntries.add(entry);
-				if (tx.getSender() != null) {
-					chainNonces.put(tx.getSender(), validationResult.getCurrentChainNonce());
-				}
-			} else {
-				log.debug("Tx {} FAILED validation: {} (status={})",
-						tx.getHash().toShortLogString(),
-						validationResult.getErrorMessage(),
-						validationResult.getStatus());
+			MempoolResult result = addTx(tx, receivedFrom, reason, skipValidation);
+			if (result.status().isSuccess()) {
+				added++;
 			}
 		}
-
-		if (!validEntries.isEmpty()) {
-			mempoolStore.addTransactions(validEntries, chainNonces, reason);
-			log.debug("Mempool batch added {}/{} tx(s)", validEntries.size(), txs.size());
-		} else {
-			log.debug("No valid txs to add from batch of {}", txs.size());
-		}
+		log.debug("Mempool batch added {}/{} tx(s)", added, txs.size());
 	}
 
 	public Iterator<MempoolEntry> getTxIterator() {
@@ -279,14 +264,14 @@ public class MempoolManager {
 	 * due to other transactions being mined, which might be missed by simple event
 	 * processing (especially on non-mining nodes).
 	 */
-	@Async(CORE_TASK_EXECUTOR)
-	public void revalidateMempool() {
+	public synchronized void revalidateMempool() {
 		if (mempoolStore.getCount() == 0) {
 			return;
 		}
 
 		log.debug("Revalidating mempool ({} txs)...", mempoolStore.getCount());
-		List<Hash> toRemove = new java.util.ArrayList<>();
+		List<Hash> toRemove = new ArrayList<>();
+		Map<Address, Long> chainNonces = new HashMap<>();
 
 		// Iterate over all transactions (snapshot iterator)
 		Iterator<MempoolEntry> it = mempoolStore.getAllTxs().iterator();
@@ -294,23 +279,30 @@ public class MempoolManager {
 			MempoolEntry entry = it.next();
 			try {
 				// Validate against CURRENT head state
-				MempoolValidator.MempoolValidationResult result = mempoolValidator.validateAgainstChainAndMempool(
-						entry, MempoolTxAddEvent.AddReason.NEW, false, false);
+				MempoolValidator.MempoolValidationResult result = mempoolValidator.revalidateAgainstChain(entry);
+				if (entry.getTx().getSender() != null && result.getCurrentChainNonce() >= 0) {
+					chainNonces.put(entry.getTx().getSender(), result.getCurrentChainNonce());
+				}
 
-				if (!result.isValid()) {
+				if (result.isPermanentlyInvalid()) {
 					log.debug("Found invalid tx during revalidation: {} (Reason: {})",
 							entry.getHash().toShortLogString(), result.getErrorMessage());
 					toRemove.add(entry.getHash());
+				} else if (result.getStatus() == MempoolValidator.ValidationStatus.TRANSIENT_ERROR) {
+					log.warn("Keeping tx {} after transient revalidation failure: {}",
+							entry.getHash().toShortLogString(), result.getErrorMessage());
 				}
 			} catch (Exception e) {
 				log.warn("Error revalidating tx {}: {}", entry.getHash(), e.getMessage());
-				toRemove.add(entry.getHash());
 			}
 		}
 
 		if (!toRemove.isEmpty()) {
 			log.info("Mempool revalidation: Evicting {} invalid transactions.", toRemove.size());
 			mempoolStore.removeTransactions(toRemove);
+		}
+		if (!chainNonces.isEmpty()) {
+			mempoolStore.resynchronizeSenders(chainNonces);
 		}
 	}
 
@@ -326,7 +318,6 @@ public class MempoolManager {
 	 *            The event containing the connected block and its txs.
 	 */
 	@EventListener
-	@Async(CORE_TASK_EXECUTOR)
 	public void onBlockConnected(BlockConnectedEvent event) {
 		Block newBlock = event.getBlock();
 		if (newBlock.getHeight() == 0) { // Genesis block
@@ -345,7 +336,6 @@ public class MempoolManager {
 	 *            The event containing the *disconnected* block and its txs.
 	 */
 	@EventListener
-	@Async(CORE_TASK_EXECUTOR)
 	public void onBlockDisconnected(BlockDisconnectedEvent event) {
 		Block oldBlock = event.getBlock();
 		if (oldBlock.getHeight() == 0) { // Genesis block
@@ -388,10 +378,14 @@ public class MempoolManager {
 			switch (status) {
 				case STALE:
 					return STALE;
-				case INVALID:
-					// This is generic. "REJECTED_STATE" covers most L4 invalidations.
-					// "REJECTED_DUPLICATE" might be more specific if the message indicates it.
+				case FEE_TOO_LOW:
+					return REJECTED_FEE;
+				case GOVERNANCE_DUPLICATE:
+					return REJECTED_DUPLICATE;
+				case STATE_INVALID:
 					return REJECTED_STATE;
+				case STATELESS_INVALID:
+				case TRANSIENT_ERROR:
 				default:
 					return REJECTED_OTHER;
 			}

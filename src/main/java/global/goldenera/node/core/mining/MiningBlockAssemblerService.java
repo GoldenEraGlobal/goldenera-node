@@ -221,7 +221,7 @@ public class MiningBlockAssemblerService {
 
 				if (tx.getNonce() > expectedNonce) {
 					// Park future transaction (maybe parent hasn't been seen yet due to lower fee)
-					deferredTxs.computeIfAbsent(sender, k -> new java.util.TreeMap<>()).put(tx.getNonce(), tx);
+					deferredTxs.computeIfAbsent(sender, key -> new TreeMap<>()).put(tx.getNonce(), tx);
 					log.trace("[MINING-DEBUG] Deferred future tx: hash={}, sender={}, nonce={}, expected={}",
 							tx.getHash().toShortLogString(), sender.toChecksumAddress(), tx.getNonce(), expectedNonce);
 					continue;
@@ -233,8 +233,9 @@ public class MiningBlockAssemblerService {
 				// tx.getNonce() == expectedNonce -> PROCEED
 			}
 
-			if (seenHashes.add(tx.getHash())) {
+			if (!seenHashes.contains(tx.getHash())) {
 				if (currentSize + tx.getSize() <= maxBlockSizeBytes) {
+					seenHashes.add(tx.getHash());
 					blockTxs.add(tx);
 					currentSize += tx.getSize();
 
@@ -249,14 +250,14 @@ public class MiningBlockAssemblerService {
 						senderNextNonce.put(sender, nextNonce);
 
 						// Try to pull children from deferred buffer (CPFP)
-						java.util.TreeMap<Long, Tx> pending = deferredTxs.get(sender);
+						TreeMap<Long, Tx> pending = deferredTxs.get(sender);
 						if (pending != null) {
 							while (pending.containsKey(nextNonce)) {
 								Tx childTx = pending.remove(nextNonce);
 
-								// Must also check duplicate hash/size for child
-								if (seenHashes.add(childTx.getHash())) {
+								if (!seenHashes.contains(childTx.getHash())) {
 									if (currentSize + childTx.getSize() <= maxBlockSizeBytes) {
+										seenHashes.add(childTx.getHash());
 										blockTxs.add(childTx);
 										currentSize += childTx.getSize();
 										log.debug("[MINING-DEBUG] Selected DEFERRED tx: hash={}, nonce={}",
@@ -265,15 +266,14 @@ public class MiningBlockAssemblerService {
 										nextNonce++;
 										senderNextNonce.put(sender, nextNonce);
 									} else {
-										// Block full, stop draining
-										pending.put(nextNonce, childTx); // Return to buffer
+										skippedSize++;
+										pending.put(nextNonce, childTx);
 										break;
 									}
 								} else {
 									log.warn("[MINING-DEBUG] Deferred duplicate tx found: hash={}",
 											childTx.getHash().toShortLogString());
-									nextNonce++; // Duplicate? Should not happen in local buffer logic but safe skip
-									senderNextNonce.put(sender, nextNonce);
+									break;
 								}
 							}
 							if (pending.isEmpty()) {
@@ -285,7 +285,7 @@ public class MiningBlockAssemblerService {
 					skippedSize++;
 					log.debug("[MINING-DEBUG] Skipped (size limit): hash={}, txSize={}, currentSize={}",
 							tx.getHash().toShortLogString(), tx.getSize(), currentSize);
-					break;
+					continue;
 				}
 			} else {
 				skippedDuplicates++;
