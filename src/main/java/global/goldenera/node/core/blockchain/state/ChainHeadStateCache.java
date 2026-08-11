@@ -75,8 +75,9 @@ public class ChainHeadStateCache {
 	@EventListener
 	@Order(Ordered.HIGHEST_PRECEDENCE)
 	public void onBlockConnected(BlockConnectedEvent event) {
-		Hash newRoot = event.getBlock().getHeader().getStateRootHash();
-		refreshState(newRoot);
+		// Keep block publication cheap. getHeadState() verifies the canonical root and
+		// performs one synchronized lazy reload on the first consumer thread.
+		activeState.set(null);
 	}
 
 	private synchronized WorldState refreshState(Hash rootHash) {

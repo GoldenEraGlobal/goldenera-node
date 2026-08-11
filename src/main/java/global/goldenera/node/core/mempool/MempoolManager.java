@@ -24,16 +24,21 @@
 package global.goldenera.node.core.mempool;
 
 import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_SCHEDULER;
+import static global.goldenera.node.core.config.CoreAsyncConfig.MEMPOOL_EVENT_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Executor;
 
+import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
@@ -43,12 +48,16 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
+import global.goldenera.node.core.state.WorldState;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
@@ -67,19 +76,26 @@ public class MempoolManager {
 
 	static final long MEMPOOL_PRUNE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 	static final long MEMPOOL_REVALIDATE_INTERVAL_MS = 30 * 1000; // 30 seconds
+	static final int MEMPOOL_EVENT_MAX_ATTEMPTS = 3;
 
 	MeterRegistry registry;
 	MempoolStore mempoolStore;
 	MempoolValidator mempoolValidator;
 	MempoolProperties mempoolProperties;
+	ChainHeadStateCache chainHeadStateService;
+	Executor mempoolEventExecutor;
 	ThreadPoolTaskScheduler coreScheduler;
 
 	public MempoolManager(MeterRegistry registry, MempoolStore mempoolStore, MempoolValidator mempoolValidator,
-			MempoolProperties mempoolProperties, @Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
+			MempoolProperties mempoolProperties, ChainHeadStateCache chainHeadStateService,
+			@Qualifier(MEMPOOL_EVENT_EXECUTOR) Executor mempoolEventExecutor,
+			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
 		this.registry = registry;
 		this.mempoolStore = mempoolStore;
 		this.mempoolValidator = mempoolValidator;
 		this.mempoolProperties = mempoolProperties;
+		this.chainHeadStateService = chainHeadStateService;
+		this.mempoolEventExecutor = mempoolEventExecutor;
 		this.coreScheduler = coreScheduler;
 	}
 
@@ -151,7 +167,8 @@ public class MempoolManager {
 		MempoolStore.StorageAddResult storageResult = mempoolStore.addTransaction(
 				entry,
 				validationResult.getCurrentChainNonce(),
-				reason);
+				reason,
+				validationResult.getAdmissionConstraints());
 
 		log.debug("[MANAGER-DEBUG] Storage result: {} for tx {}", storageResult, txHash.toShortLogString());
 
@@ -185,6 +202,18 @@ public class MempoolManager {
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_DUPLICATE;
 				message = "A conflicting governance transaction is already pending.";
+				break;
+			case INSUFFICIENT_FUNDS:
+				log.warn("Mempool: Rejecting tx {}: Atomic balance reservation failed.",
+						txHash.toShortLogString());
+				result = MempoolAddResult.REJECTED_STATE;
+				message = "Insufficient funds after accounting for pending transactions.";
+				break;
+			case TOKEN_SUPPLY_CONFLICT:
+				log.warn("Mempool: Rejecting tx {}: Pending token mints exceed maxSupply.",
+						txHash.toShortLogString());
+				result = MempoolAddResult.REJECTED_STATE;
+				message = "Pending token mint proposals would exceed maxSupply.";
 				break;
 			case STALE:
 				log.warn("Mempool: Rejecting tx {}: Stale (nonce mismatch in storage).",
@@ -272,6 +301,7 @@ public class MempoolManager {
 		log.debug("Revalidating mempool ({} txs)...", mempoolStore.getCount());
 		List<Hash> toRemove = new ArrayList<>();
 		Map<Address, Long> chainNonces = new HashMap<>();
+		Set<Address> successfullyValidatedSenders = new HashSet<>();
 
 		// Iterate over all transactions (snapshot iterator)
 		Iterator<MempoolEntry> it = mempoolStore.getAllTxs().iterator();
@@ -282,6 +312,9 @@ public class MempoolManager {
 				MempoolValidator.MempoolValidationResult result = mempoolValidator.revalidateAgainstChain(entry);
 				if (entry.getTx().getSender() != null && result.getCurrentChainNonce() >= 0) {
 					chainNonces.put(entry.getTx().getSender(), result.getCurrentChainNonce());
+					if (result.isValid()) {
+						successfullyValidatedSenders.add(entry.getTx().getSender());
+					}
 				}
 
 				if (result.isPermanentlyInvalid()) {
@@ -304,6 +337,31 @@ public class MempoolManager {
 		if (!chainNonces.isEmpty()) {
 			mempoolStore.resynchronizeSenders(chainNonces);
 		}
+		if (!successfullyValidatedSenders.isEmpty()) {
+			try {
+				mempoolStore.reconcileSenderBalances(loadSenderBalances(successfullyValidatedSenders));
+			} catch (RuntimeException exception) {
+				log.warn("Skipping mempool balance reconciliation because chain state is unavailable", exception);
+			}
+		}
+	}
+
+	private Map<Address, MempoolStore.SenderBalances> loadSenderBalances(Set<Address> senders) {
+		WorldState worldState = chainHeadStateService.getHeadState();
+		Map<Address, MempoolStore.SenderBalances> result = new HashMap<>();
+		for (Address sender : senders) {
+			Map<Address, Wei> tokenBalances = new HashMap<>();
+			for (MempoolEntry entry : mempoolStore.getTxsBySender(sender)) {
+				Tx tx = entry.getTx();
+				if (tx.getType() == TxType.TRANSFER && !Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+					tokenBalances.computeIfAbsent(tx.getTokenAddress(),
+							token -> worldState.getBalance(sender, token).getBalance());
+				}
+			}
+			Wei nativeBalance = worldState.getBalance(sender, Address.NATIVE_TOKEN).getBalance();
+			result.put(sender, new MempoolStore.SenderBalances(nativeBalance, tokenBalances));
+		}
+		return result;
 	}
 
 	// =================================================================================
@@ -323,8 +381,13 @@ public class MempoolManager {
 		if (newBlock.getHeight() == 0) { // Genesis block
 			return;
 		}
+		mempoolEventExecutor.execute(() -> processMempoolBlockEvent(
+				"connect", newBlock, () -> processBlockConnected(newBlock)));
+	}
+
+	private synchronized void processBlockConnected(Block newBlock) {
 		List<Tx> txsInBlock = newBlock.getTxs();
-		log.debug("Mempool: Notified of new block {}. Processing evictions/promotions.", newBlock.getHeight());
+		log.debug("Mempool: Processing connected block {} evictions/promotions.", newBlock.getHeight());
 		mempoolStore.processNewBlock(txsInBlock);
 	}
 
@@ -341,15 +404,47 @@ public class MempoolManager {
 		if (oldBlock.getHeight() == 0) { // Genesis block
 			return;
 		}
-		List<Tx> txsToReAdd = oldBlock.getTxs().stream()
-				// .filter(tx -> tx.getType() != TxType.COINBASE) // COINBASE might be removed
-				// or handled differently
-				.toList();
+		mempoolEventExecutor.execute(() -> processMempoolBlockEvent(
+				"disconnect", oldBlock, () -> processBlockDisconnected(oldBlock)));
+	}
 
-		log.debug("Mempool: Notified of disconnected block {}. Re-adding {} txs.",
+	private synchronized void processBlockDisconnected(Block oldBlock) {
+		List<Tx> txsToReAdd = oldBlock.getTxs();
+		log.debug("Mempool: Processing disconnected block {}. Re-adding {} txs.",
 				oldBlock.getHeight(), txsToReAdd.size());
-
 		mempoolStore.addTransactionsBack(txsToReAdd, oldBlock);
+	}
+
+	private void processMempoolBlockEvent(String eventType, Block block, Runnable action) {
+		Timer.Sample sample = Timer.start(registry);
+		try {
+			for (int attempt = 1; attempt <= MEMPOOL_EVENT_MAX_ATTEMPTS; attempt++) {
+				try {
+					action.run();
+					registry.counter("blockchain.mempool.event.processed_total", "type", eventType).increment();
+					return;
+				} catch (RuntimeException exception) {
+					if (attempt == MEMPOOL_EVENT_MAX_ATTEMPTS) {
+						registry.counter("blockchain.mempool.event.failures_total", "type", eventType).increment();
+						log.error("Mempool: Failed to process {} block {} after {} attempts",
+								eventType, block.getHeight(), attempt, exception);
+						return;
+					}
+					registry.counter("blockchain.mempool.event.retries_total", "type", eventType).increment();
+					log.warn("Mempool: Retrying {} block {} after attempt {} failed: {}",
+							eventType, block.getHeight(), attempt, exception.getMessage());
+					try {
+						Thread.sleep(50L * attempt);
+					} catch (InterruptedException interrupted) {
+						Thread.currentThread().interrupt();
+						registry.counter("blockchain.mempool.event.failures_total", "type", eventType).increment();
+						return;
+					}
+				}
+			}
+		} finally {
+			sample.stop(registry.timer("blockchain.mempool.event.processing_time", "type", eventType));
+		}
 	}
 
 	// =================================================================================

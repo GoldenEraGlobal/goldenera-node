@@ -37,6 +37,7 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
@@ -49,6 +50,8 @@ public class CoreAsyncConfig {
 	public static final String P2P_RECEIVE_EXECUTOR = "p2pReceiveExecutor";
 	public static final String P2P_SEND_EXECUTOR = "p2pSendExecutor";
 	public static final String CORE_TASK_EXECUTOR = "coreTaskExecutor";
+	public static final String MEMPOOL_EVENT_EXECUTOR = "mempoolEventExecutor";
+	public static final String WEBHOOK_EVENT_EXECUTOR = "webhookEventExecutor";
 	public static final String CORE_SCHEDULER = "coreTaskScheduler";
 	public static final String BLOCK_MINING_EXECUTOR = "blockMiningExecutor";
 	public static final String MINER_WORKER_POOL = "minerWorkerPool";
@@ -89,6 +92,37 @@ public class CoreAsyncConfig {
 		executor.setThreadNamePrefix("Core-Worker-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
 		executor.initialize();
+		return executor;
+	}
+
+	@Bean(name = MEMPOOL_EVENT_EXECUTOR)
+	public ThreadPoolTaskExecutor mempoolEventExecutor(MeterRegistry registry) {
+		return orderedEventExecutor("Mempool-Event-", "blockchain.mempool.event_queue", registry);
+	}
+
+	@Bean(name = WEBHOOK_EVENT_EXECUTOR)
+	public ThreadPoolTaskExecutor webhookEventExecutor(MeterRegistry registry) {
+		return orderedEventExecutor("Webhook-Event-", "blockchain.webhook.event_queue", registry);
+	}
+
+	private ThreadPoolTaskExecutor orderedEventExecutor(String threadNamePrefix, String metricPrefix,
+			MeterRegistry registry) {
+		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(1);
+		executor.setMaxPoolSize(1);
+		executor.setQueueCapacity(10000);
+		executor.setThreadNamePrefix(threadNamePrefix);
+		ThreadPoolExecutor.CallerRunsPolicy callerRuns = new ThreadPoolExecutor.CallerRunsPolicy();
+		executor.setRejectedExecutionHandler((task, threadPool) -> {
+			registry.counter(metricPrefix + ".backpressure_total").increment();
+			callerRuns.rejectedExecution(task, threadPool);
+		});
+		executor.setWaitForTasksToCompleteOnShutdown(true);
+		executor.setAwaitTerminationSeconds(30);
+		executor.initialize();
+		registry.gauge(metricPrefix + ".size", executor, eventExecutor ->
+				eventExecutor.getThreadPoolExecutor().getQueue().size());
+		registry.gauge(metricPrefix + ".active", executor, ThreadPoolTaskExecutor::getActiveCount);
 		return executor;
 	}
 

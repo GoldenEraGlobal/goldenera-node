@@ -43,12 +43,15 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+
+import org.apache.tuweni.units.ethereum.Wei;
 
 import com.google.common.collect.Iterators;
 
@@ -60,6 +63,8 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePaylo
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
@@ -108,14 +113,14 @@ public class MempoolStore {
 
 	/* Values identify the owning transaction, so removing one duplicate cannot
 	 * accidentally clear another transaction's reservation. */
-	ConcurrentHashMap<Address, Hash> pendingAuthorityAdds = new ConcurrentHashMap<>();
-	ConcurrentHashMap<Address, Hash> pendingAuthorityRemoves = new ConcurrentHashMap<>();
-	ConcurrentHashMap<Address, Hash> pendingValidatorAdds = new ConcurrentHashMap<>();
-	ConcurrentHashMap<Address, Hash> pendingValidatorRemoves = new ConcurrentHashMap<>();
-	ConcurrentHashMap<String, Hash> pendingAddressAliasAdds = new ConcurrentHashMap<>();
-	ConcurrentHashMap<String, Hash> pendingAddressAliasRemoves = new ConcurrentHashMap<>();
-	ConcurrentHashMap<Address, Hash> authoritiesWithPendingParamChange = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, Hash> pendingAuthorityChanges = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, Hash> pendingValidatorChanges = new ConcurrentHashMap<>();
+	ConcurrentHashMap<String, Hash> pendingAddressAliasChanges = new ConcurrentHashMap<>();
+	AtomicReference<Hash> pendingNetworkParamsChange = new AtomicReference<>();
+	ConcurrentHashMap<Address, Hash> pendingTokenUpdates = new ConcurrentHashMap<>();
 	ConcurrentHashMap<Hash, ConcurrentHashMap<Address, Hash>> pendingBipVotes = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Address, BigInteger> pendingTokenMintAmounts = new ConcurrentHashMap<>();
+	ConcurrentHashMap<Hash, TokenMintReservation> tokenMintsByHash = new ConcurrentHashMap<>();
 
 	ReentrantReadWriteLock globalLock = new ReentrantReadWriteLock();
 
@@ -130,8 +135,13 @@ public class MempoolStore {
 
 	public StorageAddResult addTransaction(@NonNull MempoolEntry entry, long currentChainNonce,
 			MempoolTxAddEvent.AddReason reason) {
+		return addTransaction(entry, currentChainNonce, reason, null);
+	}
+
+	public StorageAddResult addTransaction(@NonNull MempoolEntry entry, long currentChainNonce,
+			MempoolTxAddEvent.AddReason reason, AdmissionConstraints constraints) {
 		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
-		StorageAddResult result = addTransactionInternal(entry, currentChainNonce, removeEvents);
+		StorageAddResult result = addTransactionInternal(entry, currentChainNonce, constraints, removeEvents);
 		publishRemoveEvents(removeEvents);
 		if (result.isSuccess()) {
 			publishAddEvent(new MempoolTxAddEvent(this, entry, reason));
@@ -158,7 +168,7 @@ public class MempoolStore {
 						? -1L
 						: senderChainNonces.getOrDefault(entry.getTx().getSender(), 0L);
 				int eventStart = removeEvents.size();
-				StorageAddResult result = addTransactionInternal(entry, chainNonce, removeEvents);
+				StorageAddResult result = addTransactionInternal(entry, chainNonce, null, removeEvents);
 				results.put(entry.getHash(), result);
 				if (result.isSuccess()) {
 					successful.put(entry.getHash(), entry);
@@ -230,7 +240,7 @@ public class MempoolStore {
 				entry.setFirstSeenTime(block.getHeader().getTimestamp());
 				long chainNonce = tx.getSender() == null ? -1L : chainNonces.computeIfAbsent(
 						tx.getSender(), sender -> worldstate.getNonce(sender).getNonce());
-				if (addTransactionInternal(entry, chainNonce, removeEvents).isSuccess()) {
+				if (addTransactionInternal(entry, chainNonce, null, removeEvents).isSuccess()) {
 					added.put(entry.getHash(), entry);
 				}
 			}
@@ -268,36 +278,179 @@ public class MempoolStore {
 	}
 
 	public boolean isAuthorityAddPending(Address address) {
-		return pendingAuthorityAdds.containsKey(address);
+		return pendingAuthorityChanges.containsKey(address);
 	}
 
 	public boolean isAuthorityRemovePending(Address address) {
-		return pendingAuthorityRemoves.containsKey(address);
+		return pendingAuthorityChanges.containsKey(address);
 	}
 
 	public boolean isValidatorAddPending(Address address) {
-		return pendingValidatorAdds.containsKey(address);
+		return pendingValidatorChanges.containsKey(address);
 	}
 
 	public boolean isValidatorRemovePending(Address address) {
-		return pendingValidatorRemoves.containsKey(address);
+		return pendingValidatorChanges.containsKey(address);
 	}
 
 	public boolean isAddressAliasAddPending(String alias) {
-		return pendingAddressAliasAdds.containsKey(alias);
+		return pendingAddressAliasChanges.containsKey(alias);
 	}
 
 	public boolean isAddressAliasRemovePending(String alias) {
-		return pendingAddressAliasRemoves.containsKey(alias);
+		return pendingAddressAliasChanges.containsKey(alias);
 	}
 
-	public boolean hasAuthorityPendingParamChange(Address authority) {
-		return authoritiesWithPendingParamChange.containsKey(authority);
+	public boolean isNetworkParamsChangePending() {
+		return pendingNetworkParamsChange.get() != null;
+	}
+
+	public boolean isTokenUpdatePending(Address tokenAddress) {
+		return pendingTokenUpdates.containsKey(tokenAddress);
 	}
 
 	public boolean isBipVotePending(Hash bipHash, Address voter) {
 		Map<Address, Hash> voters = pendingBipVotes.get(bipHash);
 		return voters != null && voters.containsKey(voter);
+	}
+
+	public BigInteger getPendingTokenMintAmount(Address tokenAddress, Hash ignoredHash) {
+		globalLock.readLock().lock();
+		try {
+			BigInteger total = pendingTokenMintAmounts.getOrDefault(tokenAddress, BigInteger.ZERO);
+			if (ignoredHash == null) {
+				return total;
+			}
+			TokenMintReservation ignored = tokenMintsByHash.get(ignoredHash);
+			return ignored != null && ignored.tokenAddress().equals(tokenAddress)
+					? total.subtract(ignored.amount())
+					: total;
+		} finally {
+			globalLock.readLock().unlock();
+		}
+	}
+
+	public ReservationSnapshot nativeReservation(Address sender, Tx candidate, Wei available) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		BigInteger reserved = BigInteger.ZERO;
+		BigInteger replacing = BigInteger.ZERO;
+		if (pool != null) {
+			pool.lock.lock();
+			try {
+				reserved = pool.reservedNative;
+				MempoolEntry existing = pool.get(candidate.getNonce());
+				if (existing != null) {
+					replacing = nativeCost(existing.getTx());
+				}
+			} finally {
+				pool.lock.unlock();
+			}
+		}
+		return reservationSnapshot(reserved, replacing, nativeCost(candidate), available);
+	}
+
+	public ReservationSnapshot tokenReservation(Address sender, Address tokenAddress, Tx candidate, Wei available) {
+		SenderAccountPool pool = userTxsBySender.get(sender);
+		BigInteger reserved = BigInteger.ZERO;
+		BigInteger replacing = BigInteger.ZERO;
+		if (pool != null) {
+			pool.lock.lock();
+			try {
+				reserved = pool.reservedTokens.getOrDefault(tokenAddress, BigInteger.ZERO);
+				MempoolEntry existing = pool.get(candidate.getNonce());
+				if (existing != null) {
+					replacing = tokenCost(existing.getTx(), tokenAddress);
+				}
+			} finally {
+				pool.lock.unlock();
+			}
+		}
+		return reservationSnapshot(reserved, replacing, tokenCost(candidate, tokenAddress), available);
+	}
+
+	/**
+	 * Keeps the lowest-nonce prefix affordable by the supplied confirmed balances.
+	 * A missing custom-token balance means that token was not loaded and is not
+	 * reconciled by this call.
+	 */
+	public void reconcileSenderBalances(@NonNull Map<Address, SenderBalances> balancesBySender) {
+		List<MempoolTxRemoveEvent> events = new ArrayList<>();
+		globalLock.writeLock().lock();
+		try {
+			for (Map.Entry<Address, SenderBalances> item : balancesBySender.entrySet()) {
+				SenderAccountPool pool = userTxsBySender.get(item.getKey());
+				if (pool == null) {
+					continue;
+				}
+				pool.lock.lock();
+				try {
+					SenderBalances balances = item.getValue();
+					BigInteger nativeUsed = BigInteger.ZERO;
+					Map<Address, BigInteger> tokenUsed = new HashMap<>();
+					Long unaffordableNonce = null;
+					for (Map.Entry<Long, MempoolEntry> pending : pool.allTransactions().entrySet()) {
+						Tx tx = pending.getValue().getTx();
+						nativeUsed = nativeUsed.add(nativeCost(tx));
+						boolean affordable = nativeUsed.compareTo(balances.nativeBalance().toBigInteger()) <= 0;
+						if (tx.getType() == TxType.TRANSFER && tx.getTokenAddress() != null
+								&& !Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+							BigInteger used = tokenUsed.merge(tx.getTokenAddress(), amount(tx), BigInteger::add);
+							Wei tokenBalance = balances.tokenBalances().get(tx.getTokenAddress());
+							affordable &= tokenBalance == null || used.compareTo(tokenBalance.toBigInteger()) <= 0;
+						}
+						if (!affordable) {
+							unaffordableNonce = pending.getKey();
+							break;
+						}
+					}
+					if (unaffordableNonce != null) {
+						for (MempoolEntry removed : pool.removeFromNonce(unaffordableNonce)) {
+							removeGlobalIndexes(removed);
+							events.add(new MempoolTxRemoveEvent(
+									this, removed, MempoolTxRemoveEvent.RemoveReason.INSUFFICIENT_FUNDS));
+						}
+						refreshExecutableIndex(pool);
+					}
+					if (pool.isEmpty()) {
+						userTxsBySender.remove(item.getKey(), pool);
+					}
+				} finally {
+					pool.lock.unlock();
+				}
+			}
+		} finally {
+			globalLock.writeLock().unlock();
+		}
+		publishRemoveEvents(events);
+	}
+
+	public record ReservationSnapshot(
+			Wei reserved,
+			Wei replacing,
+			Wei candidate,
+			Wei required,
+			Wei available) {
+		public boolean affordable() {
+			return required.compareTo(available) <= 0;
+		}
+	}
+
+	public record SenderBalances(Wei nativeBalance, Map<Address, Wei> tokenBalances) {
+		public SenderBalances {
+			tokenBalances = Map.copyOf(tokenBalances);
+		}
+	}
+
+	public record AdmissionConstraints(
+			Wei nativeBalance,
+			Map<Address, Wei> tokenBalances,
+			MintSupplyConstraint mintSupply) {
+		public AdmissionConstraints {
+			tokenBalances = Map.copyOf(tokenBalances);
+		}
+	}
+
+	public record MintSupplyConstraint(Address tokenAddress, BigInteger maxPendingAmount) {
 	}
 
 	/** Returns whether entry conflicts with a different pending governance tx. */
@@ -474,14 +627,14 @@ public class MempoolStore {
 			executableTxsByFee.clear();
 			userTxsBySender.clear();
 			systemTxs.clear();
-			pendingAuthorityAdds.clear();
-			pendingAuthorityRemoves.clear();
-			pendingValidatorAdds.clear();
-			pendingValidatorRemoves.clear();
-			pendingAddressAliasAdds.clear();
-			pendingAddressAliasRemoves.clear();
-			authoritiesWithPendingParamChange.clear();
+			pendingAuthorityChanges.clear();
+			pendingValidatorChanges.clear();
+			pendingAddressAliasChanges.clear();
+			pendingNetworkParamsChange.set(null);
+			pendingTokenUpdates.clear();
 			pendingBipVotes.clear();
+			pendingTokenMintAmounts.clear();
+			tokenMintsByHash.clear();
 		} finally {
 			globalLock.writeLock().unlock();
 		}
@@ -492,7 +645,7 @@ public class MempoolStore {
 	}
 
 	private StorageAddResult addTransactionInternal(MempoolEntry entry, long currentChainNonce,
-			List<MempoolTxRemoveEvent> events) {
+			AdmissionConstraints constraints, List<MempoolTxRemoveEvent> events) {
 		globalLock.writeLock().lock();
 		try {
 			if (allTxsByHash.containsKey(entry.getHash())) {
@@ -515,6 +668,11 @@ public class MempoolStore {
 			}
 
 			Hash ignoredGovernanceHash = replacement == null ? null : replacement.getHash();
+			StorageAddResult constraintResult = validateAdmissionConstraints(entry, constraints, ignoredGovernanceHash);
+			if (constraintResult != null) {
+				removeEmptyPool(sender, pool);
+				return constraintResult;
+			}
 			if (hasGovernanceConflictInternal(entry, ignoredGovernanceHash)) {
 				removeEmptyPool(sender, pool);
 				return StorageAddResult.GOVERNANCE_CONFLICT;
@@ -570,6 +728,34 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
+	}
+
+	private StorageAddResult validateAdmissionConstraints(MempoolEntry entry, AdmissionConstraints constraints,
+			Hash replacedHash) {
+		if (constraints == null || entry.getTx().getSender() == null) {
+			return null;
+		}
+		Tx tx = entry.getTx();
+		if (!nativeReservation(tx.getSender(), tx, constraints.nativeBalance()).affordable()) {
+			return StorageAddResult.INSUFFICIENT_FUNDS;
+		}
+		if (tx.getType() == TxType.TRANSFER && !Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+			Wei available = constraints.tokenBalances().get(tx.getTokenAddress());
+			if (available != null && !tokenReservation(tx.getSender(), tx.getTokenAddress(), tx, available).affordable()) {
+				return StorageAddResult.INSUFFICIENT_FUNDS;
+			}
+		}
+		MintSupplyConstraint mintConstraint = constraints.mintSupply();
+		if (mintConstraint != null && tx.getType() == TxType.BIP_CREATE
+				&& tx.getPayload() instanceof TxBipTokenMintPayload mint
+				&& mintConstraint.tokenAddress().equals(mint.getTokenAddress())) {
+			BigInteger required = getPendingTokenMintAmount(mint.getTokenAddress(), replacedHash)
+					.add(mint.getAmount().toBigInteger());
+			if (required.compareTo(mintConstraint.maxPendingAmount()) > 0) {
+				return StorageAddResult.TOKEN_SUPPLY_CONFLICT;
+			}
+		}
+		return null;
 	}
 
 	private void resynchronizeSenderInternal(Address sender, long chainNonce,
@@ -645,8 +831,9 @@ public class MempoolStore {
 	}
 
 	private void refreshExecutableIndex(SenderAccountPool pool) {
-		executableTxsByFee.removeIf(entry -> pool.senderAddress.equals(entry.getTx().getSender()));
-		executableTxsByFee.addAll(pool.executableTxs.values());
+		executableTxsByFee.removeAll(pool.executableRemoves);
+		executableTxsByFee.addAll(pool.executableAdds);
+		pool.resetExecutableChanges();
 	}
 
 	private Set<MempoolEntry> findLowestFeeDependencyPackage() {
@@ -735,12 +922,26 @@ public class MempoolStore {
 		if (reservation != null) {
 			reservation.add(entry.getHash());
 		}
+		if (entry.getTx().getType() == TxType.BIP_CREATE
+				&& entry.getTx().getPayload() instanceof TxBipTokenMintPayload mint) {
+			TokenMintReservation tokenMint = new TokenMintReservation(
+					mint.getTokenAddress(), mint.getAmount().toBigInteger());
+			tokenMintsByHash.put(entry.getHash(), tokenMint);
+			pendingTokenMintAmounts.merge(tokenMint.tokenAddress(), tokenMint.amount(), BigInteger::add);
+		}
 	}
 
 	private void removeGovernanceReservation(MempoolEntry entry) {
 		GovernanceReservation reservation = governanceReservation(entry);
 		if (reservation != null) {
 			reservation.remove(entry.getHash());
+		}
+		TokenMintReservation mint = tokenMintsByHash.remove(entry.getHash());
+		if (mint != null) {
+			pendingTokenMintAmounts.computeIfPresent(mint.tokenAddress(), (token, total) -> {
+				BigInteger remaining = total.subtract(mint.amount());
+				return remaining.signum() == 0 ? null : remaining;
+			});
 		}
 	}
 
@@ -749,25 +950,28 @@ public class MempoolStore {
 		TxPayload payload = tx.getPayload();
 		if (tx.getType() == TxType.BIP_CREATE && payload != null) {
 			if (payload instanceof TxBipAuthorityAddPayload value) {
-				return mapReservation(pendingAuthorityAdds, value.getAddress());
+				return mapReservation(pendingAuthorityChanges, value.getAddress());
 			}
 			if (payload instanceof TxBipAuthorityRemovePayload value) {
-				return mapReservation(pendingAuthorityRemoves, value.getAddress());
+				return mapReservation(pendingAuthorityChanges, value.getAddress());
 			}
 			if (payload instanceof TxBipValidatorAddPayload value) {
-				return mapReservation(pendingValidatorAdds, value.getAddress());
+				return mapReservation(pendingValidatorChanges, value.getAddress());
 			}
 			if (payload instanceof TxBipValidatorRemovePayload value) {
-				return mapReservation(pendingValidatorRemoves, value.getAddress());
+				return mapReservation(pendingValidatorChanges, value.getAddress());
 			}
 			if (payload instanceof TxBipNetworkParamsSetPayload) {
-				return mapReservation(authoritiesWithPendingParamChange, tx.getSender());
+				return referenceReservation(pendingNetworkParamsChange);
 			}
 			if (payload instanceof TxBipAddressAliasAddPayload value) {
-				return mapReservation(pendingAddressAliasAdds, value.getAlias());
+				return mapReservation(pendingAddressAliasChanges, value.getAlias());
 			}
 			if (payload instanceof TxBipAddressAliasRemovePayload value) {
-				return mapReservation(pendingAddressAliasRemoves, value.getAlias());
+				return mapReservation(pendingAddressAliasChanges, value.getAlias());
+			}
+			if (payload instanceof TxBipTokenUpdatePayload value) {
+				return mapReservation(pendingTokenUpdates, value.getTokenAddress());
 			}
 		}
 		if (tx.getType() == TxType.BIP_VOTE && tx.getReferenceHash() != null && tx.getSender() != null) {
@@ -820,6 +1024,25 @@ public class MempoolStore {
 		};
 	}
 
+	private GovernanceReservation referenceReservation(AtomicReference<Hash> reference) {
+		return new GovernanceReservation() {
+			@Override
+			public Hash owner() {
+				return reference.get();
+			}
+
+			@Override
+			public void add(Hash hash) {
+				reference.set(hash);
+			}
+
+			@Override
+			public void remove(Hash hash) {
+				reference.compareAndSet(hash, null);
+			}
+		};
+	}
+
 	private void publishRemoveEvents(List<MempoolTxRemoveEvent> events) {
 		events.forEach(this::publishRemoveEvent);
 	}
@@ -856,6 +1079,10 @@ public class MempoolStore {
 		long chainNonce;
 		final TreeMap<Long, MempoolEntry> executableTxs = new TreeMap<>();
 		final TreeMap<Long, MempoolEntry> futureTxs = new TreeMap<>();
+		final Set<MempoolEntry> executableAdds = new HashSet<>();
+		final Set<MempoolEntry> executableRemoves = new HashSet<>();
+		BigInteger reservedNative = BigInteger.ZERO;
+		final Map<Address, BigInteger> reservedTokens = new HashMap<>();
 
 		SenderAccountPool(MempoolProperties mempoolProperties, Address senderAddress, long chainNonce) {
 			this.mempoolProperties = mempoolProperties;
@@ -864,6 +1091,7 @@ public class MempoolStore {
 		}
 
 		StorageAddResult addTransaction(MempoolEntry entry) {
+			resetExecutableChanges();
 			long nonce = entry.getNonce();
 			if (nonce <= chainNonce) {
 				return StorageAddResult.STALE;
@@ -881,14 +1109,35 @@ public class MempoolStore {
 				if (newFee.compareTo(oldFee) <= 0 || newFee.compareTo(requiredFee) < 0) {
 					return StorageAddResult.FAILED_FEE_TOO_LOW;
 				}
+				removeCost(existing.getTx());
+				addCost(entry.getTx());
+				if (executableTxs.get(nonce) == existing) {
+					executableTxs.put(nonce, entry);
+					executableRemoves.add(existing);
+					executableAdds.add(entry);
+					return StorageAddResult.ADDED_EXECUTABLE;
+				}
+				futureTxs.put(nonce, entry);
+				return StorageAddResult.ADDED_FUTURE;
 			}
 
-			TreeMap<Long, MempoolEntry> all = allTransactions();
-			all.put(nonce, entry);
-			rebuild(all);
-			return executableTxs.get(nonce) == entry
-					? StorageAddResult.ADDED_EXECUTABLE
-					: StorageAddResult.ADDED_FUTURE;
+			addCost(entry.getTx());
+			long expectedNonce = chainNonce + executableTxs.size() + 1L;
+			if (nonce != expectedNonce) {
+				futureTxs.put(nonce, entry);
+				return StorageAddResult.ADDED_FUTURE;
+			}
+
+			executableTxs.put(nonce, entry);
+			executableAdds.add(entry);
+			long promotableNonce = nonce + 1L;
+			MempoolEntry promotable;
+			while ((promotable = futureTxs.remove(promotableNonce)) != null) {
+				executableTxs.put(promotableNonce, promotable);
+				executableAdds.add(promotable);
+				promotableNonce++;
+			}
+			return StorageAddResult.ADDED_EXECUTABLE;
 		}
 
 		List<MempoolEntry> resynchronize(long newChainNonce) {
@@ -933,16 +1182,52 @@ public class MempoolStore {
 		}
 
 		private void rebuild(TreeMap<Long, MempoolEntry> all) {
+			Set<MempoolEntry> previouslyExecutable = new HashSet<>(executableTxs.values());
 			executableTxs.clear();
 			futureTxs.clear();
+			reservedNative = BigInteger.ZERO;
+			reservedTokens.clear();
 			long expected = chainNonce + 1;
 			for (Map.Entry<Long, MempoolEntry> item : all.entrySet()) {
+				Tx tx = item.getValue().getTx();
+				addCost(tx);
 				if (item.getKey() == expected) {
 					executableTxs.put(item.getKey(), item.getValue());
 					expected++;
 				} else {
 					futureTxs.put(item.getKey(), item.getValue());
 				}
+			}
+			Set<MempoolEntry> currentlyExecutable = new HashSet<>(executableTxs.values());
+			executableRemoves.clear();
+			executableRemoves.addAll(previouslyExecutable);
+			executableRemoves.removeAll(currentlyExecutable);
+			executableAdds.clear();
+			executableAdds.addAll(currentlyExecutable);
+			executableAdds.removeAll(previouslyExecutable);
+		}
+
+		private void resetExecutableChanges() {
+			executableAdds.clear();
+			executableRemoves.clear();
+		}
+
+		private void addCost(Tx tx) {
+			reservedNative = reservedNative.add(nativeCost(tx));
+			if (tx.getType() == TxType.TRANSFER && tx.getTokenAddress() != null
+					&& !Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+				reservedTokens.merge(tx.getTokenAddress(), amount(tx), BigInteger::add);
+			}
+		}
+
+		private void removeCost(Tx tx) {
+			reservedNative = reservedNative.subtract(nativeCost(tx));
+			if (tx.getType() == TxType.TRANSFER && tx.getTokenAddress() != null
+					&& !Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+				reservedTokens.computeIfPresent(tx.getTokenAddress(), (token, reserved) -> {
+					BigInteger remaining = reserved.subtract(amount(tx));
+					return remaining.signum() == 0 ? null : remaining;
+				});
 			}
 		}
 
@@ -964,6 +1249,8 @@ public class MempoolStore {
 		MEMPOOL_FULL,
 		NONCE_TOO_FAR_FUTURE,
 		GOVERNANCE_CONFLICT,
+		INSUFFICIENT_FUNDS,
+		TOKEN_SUPPLY_CONFLICT,
 		REPLACED;
 
 		public boolean isSuccess() {
@@ -971,7 +1258,35 @@ public class MempoolStore {
 		}
 	}
 
+	private static ReservationSnapshot reservationSnapshot(BigInteger reserved, BigInteger replacing,
+			BigInteger candidate, Wei available) {
+		BigInteger required = reserved.subtract(replacing).add(candidate);
+		return new ReservationSnapshot(
+				Wei.valueOf(reserved), Wei.valueOf(replacing), Wei.valueOf(candidate), Wei.valueOf(required), available);
+	}
+
+	private static BigInteger nativeCost(Tx tx) {
+		BigInteger cost = tx.getFee().toBigInteger();
+		if (tx.getType() == TxType.TRANSFER && Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+			cost = cost.add(amount(tx));
+		}
+		return cost;
+	}
+
+	private static BigInteger tokenCost(Tx tx, Address tokenAddress) {
+		return tx.getType() == TxType.TRANSFER && tokenAddress.equals(tx.getTokenAddress())
+				? amount(tx)
+				: BigInteger.ZERO;
+	}
+
+	private static BigInteger amount(Tx tx) {
+		return tx.getAmount() == null ? BigInteger.ZERO : tx.getAmount().toBigInteger();
+	}
+
 	private static double calculateFeePerByte(MempoolEntry entry) {
 		return entry.getSizeInBytes() == 0 ? 0.0 : entry.getFeeAsDouble() / entry.getSizeInBytes();
+	}
+
+	private record TokenMintReservation(Address tokenAddress, BigInteger amount) {
 	}
 }

@@ -51,6 +51,6 @@ public class MempoolTxRemoveEvent extends ApplicationEvent {
 	}
 
 	public static enum RemoveReason {
-		MINED, STALE_NONCE, EXPIRED, RBF, INVALID, EVICTED_FULL;
+		MINED, STALE_NONCE, EXPIRED, RBF, INVALID, EVICTED_FULL, INSUFFICIENT_FUNDS;
 	}
 }

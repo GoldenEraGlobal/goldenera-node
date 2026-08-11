@@ -23,8 +23,12 @@
  */
 package global.goldenera.node.shared.services.webhook;
 
+import static global.goldenera.node.core.config.CoreAsyncConfig.WEBHOOK_EVENT_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.concurrent.Executor;
+
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
@@ -39,7 +43,6 @@ import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
 import global.goldenera.node.explorer.events.ExBlockReorgEvent;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
-import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -51,11 +54,17 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 @Service
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE)
+@FieldDefaults(level = PRIVATE, makeFinal = true)
 public class WebhookListenerService {
 
 	WebhookDispatchService webhookDispatchService;
+	Executor webhookEventExecutor;
+
+	public WebhookListenerService(WebhookDispatchService webhookDispatchService,
+			@Qualifier(WEBHOOK_EVENT_EXECUTOR) Executor webhookEventExecutor) {
+		this.webhookDispatchService = webhookDispatchService;
+		this.webhookEventExecutor = webhookEventExecutor;
+	}
 
 	// ==================== BLOCKCHAIN EVENTS ====================
 
@@ -65,6 +74,10 @@ public class WebhookListenerService {
 	 */
 	@EventListener
 	public void handleBlockConnected(BlockConnectedEvent event) {
+		submitWebhookEvent("block connected", () -> processBlockConnected(event));
+	}
+
+	private void processBlockConnected(BlockConnectedEvent event) {
 		log.debug("Processing BlockConnectedEvent: {}", event.getBlock().getHash());
 		webhookDispatchService.processNewBlockEvent(event.getBlock(), event.getEvents(), WebhookType.BLOCKCHAIN);
 		int index = 0;
@@ -80,6 +93,10 @@ public class WebhookListenerService {
 	 */
 	@EventListener
 	public void handleBlockReorg(BlockReorgEvent event) {
+		submitWebhookEvent("block reorg", () -> processBlockReorg(event));
+	}
+
+	private void processBlockReorg(BlockReorgEvent event) {
 		log.debug("Processing BlockReorgEvent: old=#{} -> new=#{}", event.getOldHeight(), event.getNewHeight());
 		webhookDispatchService.processReorgEvent(
 				event.getOldHeight(), event.getOldHash(),
@@ -94,6 +111,10 @@ public class WebhookListenerService {
 	 */
 	@EventListener
 	public void handleMempoolTxAdd(MempoolTxAddEvent event) {
+		submitWebhookEvent("mempool add", () -> processMempoolTxAdd(event));
+	}
+
+	private void processMempoolTxAdd(MempoolTxAddEvent event) {
 		log.trace("Processing MempoolTxAddEvent: {}", event.getEntry().getTx().getHash());
 		switch (event.getReason()) {
 			case NEW:
@@ -113,6 +134,10 @@ public class WebhookListenerService {
 	 */
 	@EventListener
 	public void handleMempoolTxRemove(MempoolTxRemoveEvent event) {
+		submitWebhookEvent("mempool remove", () -> processMempoolTxRemove(event));
+	}
+
+	private void processMempoolTxRemove(MempoolTxRemoveEvent event) {
 		log.trace("Processing MempoolTxRemoveEvent: {}", event.getEntry().getHash());
 
 		switch (event.getReason()) {
@@ -125,6 +150,8 @@ public class WebhookListenerService {
 			case STALE_NONCE:
 			case EXPIRED:
 			case INVALID:
+			case EVICTED_FULL:
+			case INSUFFICIENT_FUNDS:
 				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
 						WebhookTxStatus.DROPPED, null, WebhookType.BLOCKCHAIN);
 				break;
@@ -139,6 +166,10 @@ public class WebhookListenerService {
 	 */
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void handleExBlockConnected(ExBlockConnectedEvent event) {
+		submitWebhookEvent("explorer block connected", () -> processExBlockConnected(event));
+	}
+
+	private void processExBlockConnected(ExBlockConnectedEvent event) {
 		log.debug("Processing ExBlockConnectedEvent: {}", event.getBlock().getHash());
 		webhookDispatchService.processNewBlockEvent(event.getBlock(), event.getEvents(), WebhookType.EXPLORER);
 	}
@@ -149,10 +180,24 @@ public class WebhookListenerService {
 	 */
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void handleExBlockReorg(ExBlockReorgEvent event) {
+		submitWebhookEvent("explorer block reorg", () -> processExBlockReorg(event));
+	}
+
+	private void processExBlockReorg(ExBlockReorgEvent event) {
 		log.debug("Processing ExBlockReorgEvent: old=#{} -> new=#{}", event.getOldHeight(), event.getNewHeight());
 		webhookDispatchService.processReorgEvent(
 				event.getOldHeight(), event.getOldHash(),
 				event.getNewHeight(), event.getNewHash(),
 				WebhookType.EXPLORER);
+	}
+
+	private void submitWebhookEvent(String eventType, Runnable action) {
+		webhookEventExecutor.execute(() -> {
+			try {
+				action.run();
+			} catch (RuntimeException exception) {
+				log.error("Failed to process {} webhook event", eventType, exception);
+			}
+		});
 	}
 }

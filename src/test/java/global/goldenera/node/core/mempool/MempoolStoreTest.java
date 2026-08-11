@@ -1,3 +1,26 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 package global.goldenera.node.core.mempool;
 
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.ALICE;
@@ -19,6 +42,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -33,6 +57,7 @@ import java.util.function.BooleanSupplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
@@ -41,6 +66,8 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePaylo
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
@@ -49,6 +76,9 @@ import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.MempoolStore.StorageAddResult;
+import global.goldenera.node.core.mempool.MempoolStore.AdmissionConstraints;
+import global.goldenera.node.core.mempool.MempoolStore.MintSupplyConstraint;
+import global.goldenera.node.core.mempool.MempoolStore.SenderBalances;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -311,7 +341,7 @@ class MempoolStoreTest {
 		assertReservation(governance(6, ALICE, 1, 10, aliasRemove), () -> store.isAddressAliasRemovePending("alice"));
 
 		TxBipNetworkParamsSetPayload params = mock(TxBipNetworkParamsSetPayload.class);
-		assertReservation(governance(7, ALICE, 1, 10, params), () -> store.hasAuthorityPendingParamChange(ALICE));
+		assertReservation(governance(7, ALICE, 1, 10, params), store::isNetworkParamsChangePending);
 
 		MempoolEntry vote = vote(8, ALICE, 1, 10, hash(80));
 		assertReservation(vote, () -> store.isBipVotePending(hash(80), ALICE));
@@ -362,6 +392,161 @@ class MempoolStoreTest {
 		assertThat(store.getTxByHash(first.getHash())).containsSame(first);
 		assertThat(store.getTxsBySender(BOB)).isEmpty();
 		assertInvariants();
+	}
+
+	@Test
+	void opposingGovernanceOperationsShareCanonicalConflictKeys() {
+		Address target = MempoolTestFixtures.address(50);
+		TxBipAuthorityAddPayload authorityAdd = mock(TxBipAuthorityAddPayload.class);
+		when(authorityAdd.getAddress()).thenReturn(target);
+		TxBipAuthorityRemovePayload authorityRemove = mock(TxBipAuthorityRemovePayload.class);
+		when(authorityRemove.getAddress()).thenReturn(target);
+		assertCanonicalConflict(governance(101, ALICE, 1, 10, authorityAdd),
+				governance(102, BOB, 1, 10, authorityRemove));
+
+		TxBipValidatorAddPayload validatorAdd = mock(TxBipValidatorAddPayload.class);
+		when(validatorAdd.getAddress()).thenReturn(target);
+		TxBipValidatorRemovePayload validatorRemove = mock(TxBipValidatorRemovePayload.class);
+		when(validatorRemove.getAddress()).thenReturn(target);
+		assertCanonicalConflict(governance(103, ALICE, 1, 10, validatorAdd),
+				governance(104, BOB, 1, 10, validatorRemove));
+
+		TxBipAddressAliasAddPayload aliasAdd = mock(TxBipAddressAliasAddPayload.class);
+		when(aliasAdd.getAlias()).thenReturn("canonical");
+		TxBipAddressAliasRemovePayload aliasRemove = mock(TxBipAddressAliasRemovePayload.class);
+		when(aliasRemove.getAlias()).thenReturn("canonical");
+		assertCanonicalConflict(governance(105, ALICE, 1, 10, aliasAdd),
+				governance(106, BOB, 1, 10, aliasRemove));
+	}
+
+	@Test
+	void networkParamsConflictIsGlobalAcrossAuthorities() {
+		TxBipNetworkParamsSetPayload firstPayload = mock(TxBipNetworkParamsSetPayload.class);
+		TxBipNetworkParamsSetPayload secondPayload = mock(TxBipNetworkParamsSetPayload.class);
+
+		assertCanonicalConflict(governance(110, ALICE, 1, 10, firstPayload),
+				governance(111, BOB, 1, 10, secondPayload));
+		assertThat(store.isNetworkParamsChangePending()).isTrue();
+	}
+
+	@Test
+	void tokenUpdatesConflictPerTokenButDifferentTokensCanCoexist() {
+		Address token = MempoolTestFixtures.address(60);
+		Address otherToken = MempoolTestFixtures.address(61);
+		TxBipTokenUpdatePayload firstPayload = mock(TxBipTokenUpdatePayload.class);
+		when(firstPayload.getTokenAddress()).thenReturn(token);
+		TxBipTokenUpdatePayload conflictPayload = mock(TxBipTokenUpdatePayload.class);
+		when(conflictPayload.getTokenAddress()).thenReturn(token);
+		TxBipTokenUpdatePayload independentPayload = mock(TxBipTokenUpdatePayload.class);
+		when(independentPayload.getTokenAddress()).thenReturn(otherToken);
+
+		assertThat(store.addTransaction(governance(120, ALICE, 1, 10, firstPayload), 0,
+				MempoolTxAddEvent.AddReason.NEW)).matches(StorageAddResult::isSuccess);
+		assertThat(store.addTransaction(governance(121, BOB, 1, 10, conflictPayload), 0,
+				MempoolTxAddEvent.AddReason.NEW)).isEqualTo(StorageAddResult.GOVERNANCE_CONFLICT);
+		assertThat(store.addTransaction(governance(122, CAROL, 1, 10, independentPayload), 0,
+				MempoolTxAddEvent.AddReason.NEW)).matches(StorageAddResult::isSuccess);
+	}
+
+	@Test
+	void concurrentNativeAdmissionsCannotOverReserveConfirmedBalance() throws Exception {
+		MempoolEntry first = nativeTransfer(130, ALICE, 1, 60, 0);
+		MempoolEntry second = nativeTransfer(131, ALICE, 2, 60, 0);
+		AdmissionConstraints constraints = new AdmissionConstraints(Wei.valueOf(100), Map.of(), null);
+
+		assertExactlyOneConcurrentAdmission(first, second, constraints, StorageAddResult.INSUFFICIENT_FUNDS);
+		assertThat(store.nativeReservation(ALICE, nativeTransfer(132, ALICE, 3, 0, 0).getTx(), Wei.valueOf(100))
+				.reserved()).isEqualTo(Wei.valueOf(60));
+	}
+
+	@Test
+	void concurrentTokenAdmissionsCannotOverReserveConfirmedBalance() throws Exception {
+		Address token = MempoolTestFixtures.address(70);
+		MempoolEntry first = tokenTransfer(140, ALICE, 1, token, 60, 1);
+		MempoolEntry second = tokenTransfer(141, ALICE, 2, token, 60, 1);
+		AdmissionConstraints constraints = new AdmissionConstraints(
+				Wei.valueOf(10), Map.of(token, Wei.valueOf(100)), null);
+
+		assertExactlyOneConcurrentAdmission(first, second, constraints, StorageAddResult.INSUFFICIENT_FUNDS);
+		assertThat(store.tokenReservation(ALICE, token,
+				tokenTransfer(142, ALICE, 3, token, 0, 0).getTx(), Wei.valueOf(100)).reserved())
+				.isEqualTo(Wei.valueOf(60));
+	}
+
+	@Test
+	void concurrentMintsCannotExceedPendingMaxSupplyAllowance() throws Exception {
+		Address token = MempoolTestFixtures.address(80);
+		MempoolEntry first = tokenMint(150, ALICE, 1, token, 60);
+		MempoolEntry second = tokenMint(151, BOB, 1, token, 60);
+		AdmissionConstraints constraints = new AdmissionConstraints(
+				Wei.valueOf(100), Map.of(), new MintSupplyConstraint(token, BigInteger.valueOf(100)));
+
+		assertExactlyOneConcurrentAdmission(first, second, constraints, StorageAddResult.TOKEN_SUPPLY_CONFLICT);
+		assertThat(store.getPendingTokenMintAmount(token, null)).isEqualTo(BigInteger.valueOf(60));
+	}
+
+	@Test
+	void balanceDropKeepsAffordableLowestNoncePrefixAndEvictsEntireSuffix() {
+		MempoolEntry one = nativeTransfer(160, ALICE, 1, 40, 0);
+		MempoolEntry two = nativeTransfer(161, ALICE, 2, 40, 0);
+		MempoolEntry three = nativeTransfer(162, ALICE, 3, 40, 0);
+		store.addTransactions(List.of(one, two, three), Map.of(ALICE, 0L), MempoolTxAddEvent.AddReason.SYNC);
+
+		store.reconcileSenderBalances(Map.of(ALICE, new SenderBalances(Wei.valueOf(90), Map.of())));
+
+		assertThat(store.getAllTxs()).containsExactlyInAnyOrder(one, two);
+		assertThat(store.getTxByHash(three.getHash())).isEmpty();
+		assertThat(removeEvents(MempoolTxRemoveEvent.RemoveReason.INSUFFICIENT_FUNDS))
+				.extracting(MempoolTxRemoveEvent::getEntry).containsExactly(three);
+		assertInvariants();
+	}
+
+	private void assertCanonicalConflict(MempoolEntry first, MempoolEntry conflict) {
+		store.clear();
+		assertThat(store.addTransaction(first, 0, MempoolTxAddEvent.AddReason.NEW))
+				.matches(StorageAddResult::isSuccess);
+		assertThat(store.addTransaction(conflict, 0, MempoolTxAddEvent.AddReason.NEW))
+				.isEqualTo(StorageAddResult.GOVERNANCE_CONFLICT);
+		assertThat(store.getAllTxs()).containsExactly(first);
+	}
+
+	private void assertExactlyOneConcurrentAdmission(MempoolEntry first, MempoolEntry second,
+			AdmissionConstraints constraints, StorageAddResult rejection) throws Exception {
+		CountDownLatch start = new CountDownLatch(1);
+		try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+			Future<StorageAddResult> firstResult = executor.submit(() -> {
+				start.await();
+				return store.addTransaction(first, 0, MempoolTxAddEvent.AddReason.NEW, constraints);
+			});
+			Future<StorageAddResult> secondResult = executor.submit(() -> {
+				start.await();
+				return store.addTransaction(second, 0, MempoolTxAddEvent.AddReason.NEW, constraints);
+			});
+			start.countDown();
+			List<StorageAddResult> results = List.of(firstResult.get(), secondResult.get());
+			assertThat(results).filteredOn(StorageAddResult::isSuccess).hasSize(1);
+			assertThat(results).contains(rejection);
+		}
+		assertThat(store.getCount()).isOne();
+		assertInvariants();
+	}
+
+	private MempoolEntry nativeTransfer(int id, Address sender, long nonce, long amount, long fee) {
+		return tokenTransfer(id, sender, nonce, Address.NATIVE_TOKEN, amount, fee);
+	}
+
+	private MempoolEntry tokenTransfer(int id, Address sender, long nonce, Address token, long amount, long fee) {
+		MempoolEntry entry = transfer(id, sender, nonce, fee);
+		when(entry.getTx().getTokenAddress()).thenReturn(token);
+		when(entry.getTx().getAmount()).thenReturn(Wei.valueOf(amount));
+		return entry;
+	}
+
+	private MempoolEntry tokenMint(int id, Address sender, long nonce, Address token, long amount) {
+		TxBipTokenMintPayload payload = mock(TxBipTokenMintPayload.class);
+		when(payload.getTokenAddress()).thenReturn(token);
+		when(payload.getAmount()).thenReturn(Wei.valueOf(amount));
+		return governance(id, sender, nonce, 1, payload);
 	}
 
 	private void assertReservation(MempoolEntry entry, BooleanSupplier pending) {

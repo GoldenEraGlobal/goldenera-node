@@ -1,3 +1,26 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 package global.goldenera.node.core.mempool;
 
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.ALICE;
@@ -8,6 +31,7 @@ import static global.goldenera.node.core.mempool.MempoolTestFixtures.vote;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Answers.RETURNS_DEEP_STUBS;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -34,6 +58,7 @@ import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.mempool.MempoolValidator.ValidationStatus;
+import global.goldenera.node.core.mempool.MempoolStore.ReservationSnapshot;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
@@ -69,6 +94,10 @@ class MempoolValidatorTest {
 		when(nonce.getNonce()).thenReturn(0L);
 		when(worldState.getNonce(any(Address.class))).thenReturn(nonce);
 		when(worldState.getAuthority(ALICE).exists()).thenReturn(true);
+		when(store.nativeReservation(any(Address.class), any(Tx.class), any(Wei.class)))
+				.thenAnswer(invocation -> affordable(invocation.getArgument(2)));
+		when(store.tokenReservation(any(Address.class), any(Address.class), any(Tx.class), any(Wei.class)))
+				.thenAnswer(invocation -> affordable(invocation.getArgument(3)));
 		validator = new MempoolValidator(new SimpleMeterRegistry(), chainHead, chainQuery, properties, store,
 				mock(TxValidator.class));
 	}
@@ -79,6 +108,8 @@ class MempoolValidatorTest {
 		MempoolEntry candidate = nativeTransfer(2, 2, 60, 10);
 		when(store.getTxsBySender(ALICE)).thenReturn(List.of(pending));
 		balance(Address.NATIVE_TOKEN, 150);
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(150))))
+				.thenReturn(reservation(90, 0, 70, 150));
 
 		MempoolValidationResult result = admit(candidate);
 
@@ -92,6 +123,8 @@ class MempoolValidatorTest {
 		MempoolEntry candidate = nativeTransfer(2, 1, 60, 10);
 		when(store.getTxsBySender(ALICE)).thenReturn(List.of(replaced));
 		balance(Address.NATIVE_TOKEN, 70);
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(70))))
+				.thenReturn(reservation(1_010, 1_010, 70, 70));
 
 		assertThat(admit(candidate).getStatus()).isEqualTo(ValidationStatus.VALID);
 	}
@@ -107,17 +140,23 @@ class MempoolValidatorTest {
 		TokenState tokenState = mock(TokenState.class);
 		when(tokenState.exists()).thenReturn(true);
 		when(worldState.getToken(token)).thenReturn(tokenState);
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(100))))
+				.thenReturn(reservation(5, 0, 5, 100));
+		when(store.tokenReservation(eq(ALICE), eq(token), eq(candidate.getTx()), eq(Wei.valueOf(100))))
+				.thenReturn(reservation(50, 0, 60, 100));
 
 		MempoolValidationResult result = admit(candidate);
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
-		assertThat(result.getErrorMessage()).contains("Insufficient token balance");
+		assertThat(result.getErrorMessage()).contains("Insufficient token funds");
 	}
 
 	@Test
 	void governanceFeeMustBeCoveredByNativeBalance() {
 		MempoolEntry vote = vote(1, ALICE, 1, 10, hash(50));
 		balance(Address.NATIVE_TOKEN, 9);
+		when(store.nativeReservation(eq(ALICE), eq(vote.getTx()), eq(Wei.valueOf(9))))
+				.thenReturn(reservation(0, 0, 10, 9));
 
 		MempoolValidationResult result = admit(vote);
 
@@ -198,5 +237,15 @@ class MempoolValidatorTest {
 		when(bip.getExpirationTimestamp()).thenReturn(Instant.now().plusSeconds(60));
 		when(bip.getAllVoters()).thenReturn(new LinkedHashSet<>());
 		return bip;
+	}
+
+	private ReservationSnapshot affordable(Wei available) {
+		return new ReservationSnapshot(Wei.ZERO, Wei.ZERO, Wei.ZERO, Wei.ZERO, available);
+	}
+
+	private ReservationSnapshot reservation(long reserved, long replacing, long candidate, long available) {
+		return new ReservationSnapshot(
+				Wei.valueOf(reserved), Wei.valueOf(replacing), Wei.valueOf(candidate),
+				Wei.valueOf(reserved - replacing + candidate), Wei.valueOf(available));
 	}
 }

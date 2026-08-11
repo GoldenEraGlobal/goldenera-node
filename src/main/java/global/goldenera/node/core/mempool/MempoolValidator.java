@@ -25,8 +25,10 @@ package global.goldenera.node.core.mempool;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.math.BigInteger;
 import java.time.Instant;
-import java.util.Objects;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Service;
@@ -189,10 +191,12 @@ public class MempoolValidator {
 		}
 
 		// 4c. TX-Type specific L4 logic
+		MempoolStore.AdmissionConstraints admissionConstraints = null;
 		switch (tx.getType()) {
 			case TRANSFER:
 				AccountBalanceState nativeBalance = worldstate.getBalance(sender, Address.NATIVE_TOKEN);
-				Wei totalNativeCost = pendingNativeCost(sender, tx);
+				MempoolStore.ReservationSnapshot nativeReservation = mempoolStorage.nativeReservation(
+						sender, tx, nativeBalance.getBalance());
 
 				if (!tx.getTokenAddress().equals(Address.NATIVE_TOKEN)) {
 					// Check custom token balance
@@ -201,13 +205,24 @@ public class MempoolValidator {
 						return MempoolValidationResult.invalid("Token does not exist on-chain.");
 					}
 					AccountBalanceState tokenBalance = worldstate.getBalance(sender, tx.getTokenAddress());
-					if (tokenBalance.getBalance().compareTo(pendingTokenCost(sender, tx)) < 0) {
-						return MempoolValidationResult.invalid("Insufficient token balance for transfer.");
+					MempoolStore.ReservationSnapshot tokenReservation = mempoolStorage.tokenReservation(
+							sender, tx.getTokenAddress(), tx, tokenBalance.getBalance());
+					if (mode == ValidationMode.ADMISSION && !tokenReservation.affordable()) {
+						return MempoolValidationResult.invalid(insufficientFundsMessage(
+								"token", tx.getTokenAddress(), tokenReservation));
 					}
 				}
-				if (nativeBalance.getBalance().compareTo(totalNativeCost) < 0) {
-					return MempoolValidationResult.invalid("Insufficient native funds for fee and/or amount.");
+				if (mode == ValidationMode.ADMISSION && !nativeReservation.affordable()) {
+					return MempoolValidationResult.invalid(insufficientFundsMessage(
+							"native", Address.NATIVE_TOKEN, nativeReservation));
 				}
+				Map<Address, Wei> tokenBalances = new HashMap<>();
+				if (!Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
+					tokenBalances.put(tx.getTokenAddress(),
+							worldstate.getBalance(sender, tx.getTokenAddress()).getBalance());
+				}
+				admissionConstraints = new MempoolStore.AdmissionConstraints(
+						nativeBalance.getBalance(), tokenBalances, null);
 
 				// Early validation: Check if user is trying to burn a non-burnable token
 				if (tx.getRecipient().equals(Address.ZERO)) {
@@ -226,8 +241,11 @@ public class MempoolValidator {
 				// StateProcessor classifies governance fees as user-paid, so admission must
 				// reserve them just like transfer fees.
 				AccountBalanceState governanceBalance = worldstate.getBalance(sender, Address.NATIVE_TOKEN);
-				if (governanceBalance.getBalance().compareTo(pendingNativeCost(sender, tx)) < 0) {
-					return MempoolValidationResult.stateInvalid("Insufficient native funds for governance fee.");
+				MempoolStore.ReservationSnapshot governanceReservation = mempoolStorage.nativeReservation(
+						sender, tx, governanceBalance.getBalance());
+				if (mode == ValidationMode.ADMISSION && !governanceReservation.affordable()) {
+					return MempoolValidationResult.stateInvalid("Insufficient native funds for governance fee. "
+							+ reservationDiagnostic(governanceReservation));
 				}
 				if (!worldstate.getAuthority(sender).exists()) {
 					return MempoolValidationResult.stateInvalid("Sender is not an authority.");
@@ -237,6 +255,16 @@ public class MempoolValidator {
 				if (!governanceResult.isValid()) {
 					return governanceResult;
 				}
+				MempoolStore.MintSupplyConstraint mintConstraint = null;
+				if (tx.getPayload() instanceof TxBipTokenMintPayload mint) {
+					TokenState token = worldstate.getToken(mint.getTokenAddress());
+					if (token.getMaxSupply() != null) {
+						BigInteger maxPending = token.getMaxSupply().subtract(token.getTotalSupply().toBigInteger());
+						mintConstraint = new MempoolStore.MintSupplyConstraint(mint.getTokenAddress(), maxPending);
+					}
+				}
+				admissionConstraints = new MempoolStore.AdmissionConstraints(
+						governanceBalance.getBalance(), Map.of(), mintConstraint);
 				break;
 			default:
 				return MempoolValidationResult.stateInvalid("Unsupported user transaction type: " + tx.getType());
@@ -245,7 +273,7 @@ public class MempoolValidator {
 		// All checks passed for this user tx
 		log.debug("[VALIDATOR-DEBUG] VALID: tx {} passed all checks, chainNonce={}",
 				tx.getHash().toShortLogString(), currentChainNonce);
-		return MempoolValidationResult.valid(currentChainNonce);
+		return MempoolValidationResult.valid(currentChainNonce, admissionConstraints);
 	}
 
 	/**
@@ -324,7 +352,7 @@ public class MempoolValidator {
 			} else if (payload instanceof TxBipNetworkParamsSetPayload) {
 				// Check mempool
 				if (isConflictingAdmission(tx, checkMempoolDuplicates,
-						mempoolStorage.hasAuthorityPendingParamChange(tx.getSender()))) {
+						mempoolStorage.isNetworkParamsChangePending())) {
 					return MempoolValidationResult.governanceDuplicate(
 							"ConsensusParamsSet is already pending in mempool.");
 				}
@@ -335,12 +363,17 @@ public class MempoolValidator {
 					return MempoolValidationResult.invalid("Token does not exist on-chain.");
 				}
 				if (tokenState.getMaxSupply() != null) {
-					var newTotalSupply = tokenState.getTotalSupply().toBigInteger()
+					Hash replacedHash = replacedHash(tx);
+					BigInteger pendingMints = mempoolStorage.getPendingTokenMintAmount(
+							mintPayload.getTokenAddress(), replacedHash);
+					BigInteger newTotalSupply = tokenState.getTotalSupply().toBigInteger()
+							.add(pendingMints)
 							.add(mintPayload.getAmount().toBigInteger());
 					if (newTotalSupply.compareTo(tokenState.getMaxSupply()) > 0) {
 						return MempoolValidationResult.invalid(
 								"Minting would exceed maxSupply. Current: "
 										+ tokenState.getTotalSupply().toBigInteger().toString()
+										+ ", Pending: " + pendingMints
 										+ ", Minting: " + mintPayload.getAmount().toBigInteger().toString()
 										+ ", MaxSupply: "
 										+ tokenState.getMaxSupply().toString());
@@ -357,6 +390,11 @@ public class MempoolValidator {
 				TokenState tokenState = worldstate.getToken(updatePayload.getTokenAddress());
 				if (!tokenState.exists()) {
 					return MempoolValidationResult.invalid("Token does not exist on-chain.");
+				}
+				if (isConflictingAdmission(tx, checkMempoolDuplicates,
+						mempoolStorage.isTokenUpdatePending(updatePayload.getTokenAddress()))) {
+					return MempoolValidationResult.governanceDuplicate(
+							"TokenUpdate is already pending in mempool for this token.");
 				}
 			}
 		}
@@ -391,45 +429,31 @@ public class MempoolValidator {
 		return MempoolValidationResult.valid(-1L);
 	}
 
-	private Wei pendingNativeCost(Address sender, Tx candidate) {
-		Wei total = nativeCost(candidate);
-		for (MempoolEntry pending : mempoolStorage.getTxsBySender(sender)) {
-			Tx tx = pending.getTx();
-			if (!Objects.equals(tx.getNonce(), candidate.getNonce())) {
-				total = total.add(nativeCost(tx));
-			}
-		}
-		return total;
+	private String insufficientFundsMessage(String asset, Address token,
+			MempoolStore.ReservationSnapshot reservation) {
+		return "Insufficient " + asset + " funds for " + token.toChecksumAddress() + ". "
+				+ reservationDiagnostic(reservation);
 	}
 
-	private Wei nativeCost(Tx tx) {
-		Wei cost = tx.getFee();
-		if (tx.getType() == TxType.TRANSFER && Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
-			cost = cost.add(tx.getAmount());
-		}
-		return cost;
+	private String reservationDiagnostic(MempoolStore.ReservationSnapshot reservation) {
+		return "available=" + reservation.available().toBigInteger()
+				+ ", reserved=" + reservation.reserved().toBigInteger()
+				+ ", replacing=" + reservation.replacing().toBigInteger()
+				+ ", candidate=" + reservation.candidate().toBigInteger()
+				+ ", required=" + reservation.required().toBigInteger();
 	}
 
-	private Wei pendingTokenCost(Address sender, Tx candidate) {
-		Wei total = candidate.getAmount();
-		for (MempoolEntry pending : mempoolStorage.getTxsBySender(sender)) {
-			Tx tx = pending.getTx();
-			if (!Objects.equals(tx.getNonce(), candidate.getNonce()) && tx.getType() == TxType.TRANSFER
-					&& Objects.equals(tx.getTokenAddress(), candidate.getTokenAddress())) {
-				total = total.add(tx.getAmount());
-			}
-		}
-		return total;
+	private Hash replacedHash(Tx candidate) {
+		return mempoolStorage.getTransactionBySenderAndNonce(candidate.getSender(), candidate.getNonce())
+				.map(MempoolEntry::getHash)
+				.orElse(null);
 	}
 
 	private boolean isConflictingAdmission(Tx candidate, boolean checkMempoolDuplicates, boolean pending) {
 		if (!checkMempoolDuplicates || !pending) {
 			return false;
 		}
-		Hash replacedHash = mempoolStorage.getTransactionBySenderAndNonce(candidate.getSender(), candidate.getNonce())
-				.map(MempoolEntry::getHash)
-				.orElse(null);
-		return mempoolStorage.hasGovernanceConflict(new MempoolEntry(candidate), replacedHash);
+		return mempoolStorage.hasGovernanceConflict(new MempoolEntry(candidate), replacedHash(candidate));
 	}
 
 	// --- Helper Inner Class for Validation Result ---
@@ -440,15 +464,23 @@ public class MempoolValidator {
 		private final ValidationStatus status;
 		private final String errorMessage;
 		private final long currentChainNonce; // The confirmed nonce from the chain
+		private final MempoolStore.AdmissionConstraints admissionConstraints;
 
-		private MempoolValidationResult(ValidationStatus status, String errorMessage, long currentChainNonce) {
+		private MempoolValidationResult(ValidationStatus status, String errorMessage, long currentChainNonce,
+				MempoolStore.AdmissionConstraints admissionConstraints) {
 			this.status = status;
 			this.errorMessage = errorMessage;
 			this.currentChainNonce = currentChainNonce;
+			this.admissionConstraints = admissionConstraints;
 		}
 
 		public static MempoolValidationResult valid(long currentChainNonce) {
-			return new MempoolValidationResult(ValidationStatus.VALID, null, currentChainNonce);
+			return valid(currentChainNonce, null);
+		}
+
+		public static MempoolValidationResult valid(long currentChainNonce,
+				MempoolStore.AdmissionConstraints admissionConstraints) {
+			return new MempoolValidationResult(ValidationStatus.VALID, null, currentChainNonce, admissionConstraints);
 		}
 
 		public static MempoolValidationResult invalid(String message) {
@@ -456,27 +488,27 @@ public class MempoolValidator {
 		}
 
 		public static MempoolValidationResult stateInvalid(String message) {
-			return new MempoolValidationResult(ValidationStatus.STATE_INVALID, message, -1L);
+			return new MempoolValidationResult(ValidationStatus.STATE_INVALID, message, -1L, null);
 		}
 
 		public static MempoolValidationResult statelessInvalid(String message) {
-			return new MempoolValidationResult(ValidationStatus.STATELESS_INVALID, message, -1L);
+			return new MempoolValidationResult(ValidationStatus.STATELESS_INVALID, message, -1L, null);
 		}
 
 		public static MempoolValidationResult feeTooLow(String message) {
-			return new MempoolValidationResult(ValidationStatus.FEE_TOO_LOW, message, -1L);
+			return new MempoolValidationResult(ValidationStatus.FEE_TOO_LOW, message, -1L, null);
 		}
 
 		public static MempoolValidationResult governanceDuplicate(String message) {
-			return new MempoolValidationResult(ValidationStatus.GOVERNANCE_DUPLICATE, message, -1L);
+			return new MempoolValidationResult(ValidationStatus.GOVERNANCE_DUPLICATE, message, -1L, null);
 		}
 
 		public static MempoolValidationResult transientError(String message) {
-			return new MempoolValidationResult(ValidationStatus.TRANSIENT_ERROR, message, -1L);
+			return new MempoolValidationResult(ValidationStatus.TRANSIENT_ERROR, message, -1L, null);
 		}
 
 		public static MempoolValidationResult stale(long currentChainNonce, String message) {
-			return new MempoolValidationResult(ValidationStatus.STALE, message, currentChainNonce);
+			return new MempoolValidationResult(ValidationStatus.STALE, message, currentChainNonce, null);
 		}
 
 		public boolean isValid() {
