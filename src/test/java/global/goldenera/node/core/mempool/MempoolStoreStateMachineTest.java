@@ -60,14 +60,17 @@ class MempoolStoreStateMachineTest {
 
 	@Test
 	void randomizedStateMachineMatchesIndependentNonceModelForEveryStep() {
-		for (long seed : List.of(7L, 19L, 41L, 73L, 101L)) {
+		int seedCount = Integer.getInteger("mempool.soak.seedCount", 5);
+		int steps = Integer.getInteger("mempool.soak.steps", 500);
+		for (int seedIndex = 0; seedIndex < seedCount; seedIndex++) {
+			long seed = 7L + seedIndex * 31L;
 			MempoolStore store = newStore(10_000);
 			Map<Address, Long> confirmedNonces = new HashMap<>();
 			Map<SenderNonce, MempoolEntry> model = new HashMap<>();
 			Random random = new Random(seed);
 			int nextId = 1;
 
-			for (int step = 0; step < 500; step++) {
+			for (int step = 0; step < steps; step++) {
 				Address sender = SENDERS.get(random.nextInt(SENDERS.size()));
 				long confirmedNonce = confirmedNonces.getOrDefault(sender, 0L);
 				int operation = random.nextInt(100);
@@ -102,16 +105,18 @@ class MempoolStoreStateMachineTest {
 	@Test
 	void concurrentAdmissionRemovalPruningAndResynchronizationPreserveAllIndexes() throws Exception {
 		MempoolStore store = newStore(5_000);
+		int workerCount = Integer.getInteger("mempool.soak.workers", 12);
+		int operationsPerWorker = Integer.getInteger("mempool.soak.operationsPerWorker", 300);
 		AtomicInteger ids = new AtomicInteger(10_000);
 		CountDownLatch start = new CountDownLatch(1);
 		List<Future<?>> futures = new ArrayList<>();
 		try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
-			for (int worker = 0; worker < 12; worker++) {
+			for (int worker = 0; worker < workerCount; worker++) {
 				int workerId = worker;
 				futures.add(executor.submit(() -> {
 					Random random = new Random(1_000L + workerId);
 					start.await();
-					for (int operation = 0; operation < 300; operation++) {
+					for (int operation = 0; operation < operationsPerWorker; operation++) {
 						Address sender = SENDERS.get(random.nextInt(SENDERS.size()));
 						long nonce = 1 + random.nextInt(80);
 						MempoolEntry entry = transfer(ids.incrementAndGet(), sender, nonce,

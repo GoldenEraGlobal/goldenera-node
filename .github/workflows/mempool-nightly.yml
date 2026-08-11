@@ -1,0 +1,58 @@
+name: Mempool Hardening (Manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+          tool_versions: |
+            java@21
+      - name: Configure GitHub Packages
+        run: |
+          mkdir -p ~/.m2
+          printf '<settings><servers><server><id>github</id><username>%s</username><password>%s</password></server><server><id>github-merkletrie</id><username>%s</username><password>%s</password></server><server><id>github-rlp</id><username>%s</username><password>%s</password></server><server><id>github-cryptoj</id><username>%s</username><password>%s</password></server></servers></settings>' "$GITHUB_ACTOR" "$GITHUB_TOKEN" "$GITHUB_ACTOR" "$GITHUB_TOKEN" "$GITHUB_ACTOR" "$GITHUB_TOKEN" "$GITHUB_ACTOR" "$GITHUB_TOKEN" > ~/.m2/settings.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run extended deterministic and concurrent mempool soak
+        run: >-
+          mise exec -- mvn -B -s ~/.m2/settings.xml
+          -Dtest=MempoolStoreStateMachineTest
+          -Dmempool.soak.seedCount=40
+          -Dmempool.soak.steps=5000
+          -Dmempool.soak.workers=32
+          -Dmempool.soak.operationsPerWorker=5000
+          test
+
+  benchmark-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+          tool_versions: |
+            java@21
+      - name: Configure GitHub Packages
+        run: |
+          mkdir -p ~/.m2
+          printf '<settings><servers><server><id>github</id><username>%s</username><password>%s</password></server><server><id>github-merkletrie</id><username>%s</username><password>%s</password></server><server><id>github-rlp</id><username>%s</username><password>%s</password></server><server><id>github-cryptoj</id><username>%s</username><password>%s</password></server></servers></settings>' "$GITHUB_ACTOR" "$GITHUB_TOKEN" "$GITHUB_ACTOR" "$GITHUB_TOKEN" "$GITHUB_ACTOR" "$GITHUB_TOKEN" "$GITHUB_ACTOR" "$GITHUB_TOKEN" > ~/.m2/settings.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build benchmarks
+        run: mise exec -- mvn clean -B -Pmempool-benchmarks -DskipTests package -s ~/.m2/settings.xml
+      - name: Run benchmark smoke check
+        run: mise exec -- java -jar target/mempool-benchmarks.jar -foe true -wi 1 -i 1 -f 1 -r 250ms -w 250ms

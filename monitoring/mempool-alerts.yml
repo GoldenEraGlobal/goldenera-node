@@ -1,0 +1,56 @@
+groups:
+  - name: goldenera-mempool
+    rules:
+      - alert: GoldenEraMempoolEventFailures
+        expr: increase(blockchain_mempool_event_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Mempool failed to process a block event after all retries
+          description: "Node {{ $labels.instance }} failed to apply {{ $labels.type }} event(s) to its mempool."
+
+      - alert: GoldenEraMempoolEventQueueNearCapacity
+        expr: blockchain_mempool_event_queue_size > 8000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mempool event queue is above 80 percent capacity
+          description: "Node {{ $labels.instance }} has {{ $value }} queued mempool block events."
+
+      - alert: GoldenEraMempoolBackpressure
+        expr: increase(blockchain_mempool_event_queue_backpressure_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mempool event processing applied publisher backpressure
+          description: "The event queue filled on {{ $labels.instance }} and work ran on the publisher thread."
+
+      - alert: GoldenEraMempoolRepeatedRetries
+        expr: increase(blockchain_mempool_event_retries_total[10m]) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mempool block event processing is repeatedly retrying
+          description: "Node {{ $labels.instance }} retried {{ $labels.type }} processing at least three times."
+
+      - alert: GoldenEraWebhookEventQueueNearCapacity
+        expr: blockchain_webhook_event_queue_size > 8000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhook event queue is above 80 percent capacity
+          description: "Node {{ $labels.instance }} has {{ $value }} queued webhook events."
+
+      - alert: GoldenEraWebhookBackpressure
+        expr: increase(blockchain_webhook_event_queue_backpressure_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Webhook event processing applied publisher backpressure
+          description: "The webhook queue filled on {{ $labels.instance }} and work ran on the publisher thread."
