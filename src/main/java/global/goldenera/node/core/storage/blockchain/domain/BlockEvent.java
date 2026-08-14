@@ -38,6 +38,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
@@ -272,6 +273,18 @@ public sealed interface BlockEvent {
         @Override
         public BlockEventType type() {
             return BlockEventType.VALIDATOR_REMOVED;
+        }
+    }
+
+    /** Validator mining policy was changed via an approved BIP. */
+    record ValidatorMiningPolicyChanged(
+            Hash bipHash,
+            TxVersion txVersion,
+            TxBipValidatorMiningPolicySetPayload payload) implements BlockEvent {
+
+        @Override
+        public BlockEventType type() {
+            return BlockEventType.VALIDATOR_MINING_POLICY_CHANGED;
         }
     }
 

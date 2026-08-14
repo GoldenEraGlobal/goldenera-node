@@ -35,6 +35,8 @@ import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
@@ -50,16 +52,15 @@ import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
+import global.goldenera.node.core.monitoring.EquivocationDetectionService;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.randomx.RandomXVM;
-import lombok.AllArgsConstructor;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
-@AllArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class BlockValidator {
@@ -69,6 +70,27 @@ public class BlockValidator {
 	CheckpointRegistry checkpointService;
 	TxValidator txValidator;
 	ValidatorMiningPolicyService validatorMiningPolicyService;
+	EquivocationDetectionService equivocationDetectionService;
+
+	@Autowired
+	public BlockValidator(RandomXManager randomXService, DifficultyCalculator difficultyService,
+			CheckpointRegistry checkpointService, TxValidator txValidator,
+			ValidatorMiningPolicyService validatorMiningPolicyService,
+			EquivocationDetectionService equivocationDetectionService) {
+		this.randomXService = randomXService;
+		this.difficultyService = difficultyService;
+		this.checkpointService = checkpointService;
+		this.txValidator = txValidator;
+		this.validatorMiningPolicyService = validatorMiningPolicyService;
+		this.equivocationDetectionService = equivocationDetectionService;
+	}
+
+	/** Test-friendly constructor for consensus tests that do not exercise monitoring. */
+	public BlockValidator(RandomXManager randomXService, DifficultyCalculator difficultyService,
+			CheckpointRegistry checkpointService, TxValidator txValidator,
+			ValidatorMiningPolicyService validatorMiningPolicyService) {
+		this(randomXService, difficultyService, checkpointService, txValidator, validatorMiningPolicyService, null);
+	}
 
 	// =================================================================================
 	// 1. HEADER VALIDATION (Lightweight)
@@ -107,8 +129,13 @@ public class BlockValidator {
 			if (header.getIdentity() == null || header.getIdentity().equals(Address.ZERO)) {
 				throw new GEValidationException("Consensus violation: Miner identity cannot be the zero address.");
 			}
+			checkArgument(header.getSignature().validate(BlockHeaderUtil.hashForSigning(header), header.getIdentity()),
+					"Miner signature does not authenticate the recovered identity");
 			// 3. RandomX PoW Calculation
 			validateRandomXPoWInternal(header, batchContext);
+			if (equivocationDetectionService != null) {
+				equivocationDetectionService.observeValidatedHeader(header, Instant.now());
+			}
 		} catch (Exception e) {
 			log.warn("PoW Validation failed for header {}: {}", header.getHash(), e.getMessage());
 			throw new GEValidationException("PoW Validation failed", e);

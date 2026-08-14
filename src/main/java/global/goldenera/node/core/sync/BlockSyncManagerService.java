@@ -607,6 +607,9 @@ public class BlockSyncManagerService {
 		}
 
 		try {
+			// Authenticate and validate before body download. This also records signed
+			// side-branch evidence for equivocation monitoring.
+			blockValidationService.validateHeader(header);
 			StoredBlock localBestStored = chainQueryService.getLatestStoredBlockOrThrow();
 
 			// Skip blocks that are too old - they can't possibly extend our chain

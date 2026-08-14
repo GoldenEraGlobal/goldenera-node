@@ -132,6 +132,9 @@ public enum BlockEventType {
      */
     NETWORK_PARAMS_UPDATED(25),
 
+    /** Validator mining policy was changed via an approved BIP. */
+    VALIDATOR_MINING_POLICY_CHANGED(26),
+
     // === ADDRESS ALIAS EVENTS (BIP execution results) ===
 
     /**

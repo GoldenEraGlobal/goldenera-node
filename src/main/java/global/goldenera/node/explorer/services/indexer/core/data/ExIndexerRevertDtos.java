@@ -32,6 +32,7 @@ import org.apache.tuweni.units.ethereum.Wei;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
@@ -40,8 +41,11 @@ import global.goldenera.cryptoj.enums.state.AddressAliasStateVersion;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
+import global.goldenera.node.explorer.entities.ExValidator;
+import global.goldenera.node.shared.enums.MiningPolicySource;
 
 public class ExIndexerRevertDtos {
 
@@ -116,9 +120,42 @@ public class ExIndexerRevertDtos {
 			@JsonProperty("tx") String originTxHex,
 			@JsonProperty("ch") long createdAtBlockHeight,
 			@JsonProperty("ct") Instant createdAtTimestamp,
-			@JsonProperty("ver") int version) {
-		public static ValidatorRevertDto from(Hash originTx, long ch, Instant ct, ValidatorStateVersion v) {
-			return new ValidatorRevertDto(originTx.toHexString(), ch, ct, v.getCode());
+			@JsonProperty("ver") int version,
+			@JsonProperty("mode") String miningLimitMode,
+			@JsonProperty("src") String miningPolicySource,
+			@JsonProperty("bps") Long maxMiningShareBps,
+			@JsonProperty("ptx") String policyUpdatedByTxHashHex,
+			@JsonProperty("ph") Long policyUpdatedAtBlockHeight,
+			@JsonProperty("pt") Instant policyUpdatedAtTimestamp) {
+		public static ValidatorRevertDto from(ValidatorState state) {
+			boolean explicit = state.getVersion() == ValidatorStateVersion.V2;
+			return new ValidatorRevertDto(
+					state.getOriginTxHash().toHexString(),
+					state.getCreatedAtBlockHeight(),
+					state.getCreatedAtTimestamp(),
+					state.getVersion().getCode(),
+					explicit ? state.getMiningLimitMode().name() : null,
+					explicit ? MiningPolicySource.EXPLICIT.name() : null,
+					explicit ? state.getMaxMiningShareBps() : null,
+					explicit ? state.getPolicyUpdatedByTxHash().toHexString() : null,
+					explicit ? state.getPolicyUpdatedAtBlockHeight() : null,
+					explicit ? state.getPolicyUpdatedAtTimestamp() : null);
+		}
+
+		public static ValidatorRevertDto from(ExValidator state) {
+			return new ValidatorRevertDto(
+					state.getOriginTxHash().toHexString(),
+					state.getCreatedAtBlockHeight(),
+					state.getCreatedAtTimestamp(),
+					state.getVersion().getCode(),
+					state.getStoredMiningLimitMode() != null ? state.getStoredMiningLimitMode().name() : null,
+					state.getStoredMiningPolicySource() != null ? state.getStoredMiningPolicySource().name() : null,
+					state.getMaxMiningShareBpsValue(),
+					state.getPolicyUpdatedByTxHash() != null
+							? state.getPolicyUpdatedByTxHash().toHexString()
+							: null,
+					state.getPolicyUpdatedAtBlockHeightValue(),
+					state.getPolicyUpdatedAtTimestamp());
 		}
 	}
 
@@ -134,10 +171,13 @@ public class ExIndexerRevertDtos {
 			@JsonProperty("byte") BigDecimal minTxByteFee,
 			@JsonProperty("auth_cnt") long currentAuthorityCount,
 			@JsonProperty("val_cnt") long currentValidatorCount,
+			@JsonProperty("window") Long validatorMiningWindowBlocks,
+			@JsonProperty("unlimited_cnt") Long currentUnlimitedValidatorCount,
 			@JsonProperty("utx") String updatedByTxHashHex,
 			@JsonProperty("uh") long updatedAtBlockHeight,
 			@JsonProperty("ut") Instant updatedAtTimestamp) {
 		public static NetworkParamsRevertDto from(NetworkParamsState state) {
+			boolean explicit = state.getVersion() == NetworkParamsStateVersion.V2;
 			return new NetworkParamsRevertDto(
 					state.getVersion().getCode(),
 					new BigDecimal(state.getBlockReward().toBigInteger()),
@@ -150,6 +190,8 @@ public class ExIndexerRevertDtos {
 					new BigDecimal(state.getMinTxByteFee().toBigInteger()),
 					state.getCurrentAuthorityCount(),
 					state.getCurrentValidatorCount(),
+					explicit ? state.getValidatorMiningWindowBlocks() : null,
+					explicit ? state.getCurrentUnlimitedValidatorCount() : null,
 					state.getUpdatedByTxHash().toHexString(),
 					state.getUpdatedAtBlockHeight(),
 					state.getUpdatedAtTimestamp());

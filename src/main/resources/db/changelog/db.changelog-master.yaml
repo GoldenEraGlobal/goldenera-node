@@ -7,3 +7,5 @@ databaseChangeLog:
                   file: db/changelog/changesets/003-custom-indexes.yaml
         - include:
                   file: db/changelog/changesets/004-transfer-covering-indexes.yaml
+        - include:
+                  file: db/changelog/changesets/005-mining-economics-explorer.yaml

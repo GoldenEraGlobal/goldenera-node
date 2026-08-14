@@ -65,6 +65,7 @@ import lombok.experimental.FieldDefaults;
         @JsonSubTypes.Type(value = BlockEventDtoV1.AuthorityRemovedDto.class, name = "AUTHORITY_REMOVED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.ValidatorAddedDto.class, name = "VALIDATOR_ADDED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.ValidatorRemovedDto.class, name = "VALIDATOR_REMOVED"),
+        @JsonSubTypes.Type(value = BlockEventDtoV1.ValidatorMiningPolicyChangedDto.class, name = "VALIDATOR_MINING_POLICY_CHANGED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.NetworkParamsChangedDto.class, name = "NETWORK_PARAMS_CHANGED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.NetworkParamsUpdatedDto.class, name = "NETWORK_PARAMS_UPDATED"),
         @JsonSubTypes.Type(value = BlockEventDtoV1.AddressAliasAddedDto.class, name = "ADDRESS_ALIAS_ADDED"),
@@ -84,6 +85,7 @@ import lombok.experimental.FieldDefaults;
         @DiscriminatorMapping(value = "AUTHORITY_REMOVED", schema = BlockEventDtoV1.AuthorityRemovedDto.class),
         @DiscriminatorMapping(value = "VALIDATOR_ADDED", schema = BlockEventDtoV1.ValidatorAddedDto.class),
         @DiscriminatorMapping(value = "VALIDATOR_REMOVED", schema = BlockEventDtoV1.ValidatorRemovedDto.class),
+        @DiscriminatorMapping(value = "VALIDATOR_MINING_POLICY_CHANGED", schema = BlockEventDtoV1.ValidatorMiningPolicyChangedDto.class),
         @DiscriminatorMapping(value = "NETWORK_PARAMS_CHANGED", schema = BlockEventDtoV1.NetworkParamsChangedDto.class),
         @DiscriminatorMapping(value = "NETWORK_PARAMS_UPDATED", schema = BlockEventDtoV1.NetworkParamsUpdatedDto.class),
         @DiscriminatorMapping(value = "ADDRESS_ALIAS_ADDED", schema = BlockEventDtoV1.AddressAliasAddedDto.class),
@@ -103,6 +105,7 @@ public abstract sealed class BlockEventDtoV1 permits
         BlockEventDtoV1.AuthorityRemovedDto,
         BlockEventDtoV1.ValidatorAddedDto,
         BlockEventDtoV1.ValidatorRemovedDto,
+        BlockEventDtoV1.ValidatorMiningPolicyChangedDto,
         BlockEventDtoV1.NetworkParamsChangedDto,
         BlockEventDtoV1.NetworkParamsUpdatedDto,
         BlockEventDtoV1.AddressAliasAddedDto,
@@ -342,6 +345,23 @@ public abstract sealed class BlockEventDtoV1 permits
         @JsonProperty("type")
         public BlockEventType getType() {
             return BlockEventType.VALIDATOR_REMOVED;
+        }
+    }
+
+    @Getter
+    @Setter
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @FieldDefaults(level = AccessLevel.PRIVATE)
+    public static final class ValidatorMiningPolicyChangedDto extends BlockEventDtoV1 {
+        Hash bipHash;
+        TxVersion txVersion;
+        TxPayloadDtoV1.ValidatorMiningPolicySet payload;
+
+        @Override
+        @JsonProperty("type")
+        public BlockEventType getType() {
+            return BlockEventType.VALIDATOR_MINING_POLICY_CHANGED;
         }
     }
 

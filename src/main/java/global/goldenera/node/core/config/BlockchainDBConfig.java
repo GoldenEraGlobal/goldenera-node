@@ -184,6 +184,8 @@ public class BlockchainDBConfig {
 				new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_VALIDATORS.getBytes(StandardCharsets.UTF_8),
 						defaultOpts),
 				new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_ENTITY_UNDO_LOG.getBytes(StandardCharsets.UTF_8),
+						defaultOpts),
+				new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_EQUIVOCATIONS.getBytes(StandardCharsets.UTF_8),
 						defaultOpts));
 
 		// ========================
@@ -238,6 +240,7 @@ public class BlockchainDBConfig {
 		columnFamiliesHolder.addHandle(RocksDbColumnFamilies.CF_AUTHORITIES, columnFamilyHandles.get(7));
 		columnFamiliesHolder.addHandle(RocksDbColumnFamilies.CF_VALIDATORS, columnFamilyHandles.get(8));
 		columnFamiliesHolder.addHandle(RocksDbColumnFamilies.CF_ENTITY_UNDO_LOG, columnFamilyHandles.get(9));
+		columnFamiliesHolder.addHandle(RocksDbColumnFamilies.CF_EQUIVOCATIONS, columnFamilyHandles.get(10));
 
 		log.info("RocksDB successfully opened with {} column families", columnFamilyHandles.size());
 

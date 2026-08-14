@@ -249,19 +249,47 @@ public class ExIndexerRevertService {
 		// 2. Revert Remove (DELETE) -> INSERT
 		String sqlRestore = """
 				    INSERT INTO explorer_validator
-				    (address, origin_tx_hash, created_at_block_height, created_at_timestamp, validator_version)
+				    (address, origin_tx_hash, created_at_block_height, created_at_timestamp, validator_version,
+				     mining_limit_mode, mining_policy_source, max_mining_share_bps,
+				     policy_updated_by_tx_hash, policy_updated_at_block_height, policy_updated_at_timestamp)
 				    SELECT
 				        l.ref_key_1, -- Address PK
 				        decode(l.old_value->>'tx', 'hex'),
 				        (l.old_value->>'ch')::bigint,
 				        (l.old_value->>'ct')::timestamp,
-				        (l.old_value->>'ver')::integer
+				        (l.old_value->>'ver')::integer,
+				        l.old_value->>'mode',
+				        l.old_value->>'src',
+				        (l.old_value->>'bps')::bigint,
+				        decode(l.old_value->>'ptx', 'hex'),
+				        (l.old_value->>'ph')::bigint,
+				        (l.old_value->>'pt')::timestamp
 				    FROM explorer_revert_log l
 				    WHERE l.block_hash = ?
 				      AND l.entity_type = ?
 				      AND l.operation_type = ?
 				""";
 		jdbcTemplate.update(sqlRestore, blockHash, EntityType.VALIDATOR.getCode(), OperationType.DELETE.getCode());
+
+		jdbcTemplate.update("""
+				    UPDATE explorer_validator v
+				    SET
+				        origin_tx_hash = decode(l.old_value->>'tx', 'hex'),
+				        created_at_block_height = (l.old_value->>'ch')::bigint,
+				        created_at_timestamp = (l.old_value->>'ct')::timestamp,
+				        validator_version = (l.old_value->>'ver')::integer,
+				        mining_limit_mode = l.old_value->>'mode',
+				        mining_policy_source = l.old_value->>'src',
+				        max_mining_share_bps = (l.old_value->>'bps')::bigint,
+				        policy_updated_by_tx_hash = decode(l.old_value->>'ptx', 'hex'),
+				        policy_updated_at_block_height = (l.old_value->>'ph')::bigint,
+				        policy_updated_at_timestamp = (l.old_value->>'pt')::timestamp
+				    FROM explorer_revert_log l
+				    WHERE l.block_hash = ?
+				      AND l.entity_type = ?
+				      AND l.operation_type = ?
+				      AND v.address = l.ref_key_1
+				""", blockHash, EntityType.VALIDATOR.getCode(), OperationType.UPDATE.getCode());
 	}
 
 	private void revertBips(byte[] blockHash) {
@@ -312,6 +340,9 @@ public class ExIndexerRevertService {
 				        min_tx_byte_fee = (l.old_value->>'byte')::numeric,
 
 				        current_authority_count = (l.old_value->>'auth_cnt')::bigint,
+				        current_validator_count = (l.old_value->>'val_cnt')::bigint,
+				        validator_mining_window_blocks = (l.old_value->>'window')::bigint,
+				        current_unlimited_validator_count = (l.old_value->>'unlimited_cnt')::bigint,
 				        updated_by_tx_hash = decode(l.old_value->>'utx', 'hex'),
 
 				        updated_at_block_height = (l.old_value->>'uh')::bigint,

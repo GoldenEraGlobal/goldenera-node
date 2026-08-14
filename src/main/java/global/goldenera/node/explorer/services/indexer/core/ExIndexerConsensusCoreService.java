@@ -29,6 +29,7 @@ import java.math.BigDecimal;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -46,8 +47,11 @@ import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.serialization.tx.payload.TxPayloadEncoder;
 import global.goldenera.node.explorer.converters.AddressSetConverter;
+import global.goldenera.node.shared.enums.MiningPolicySource;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -164,9 +168,11 @@ public class ExIndexerConsensusCoreService {
 				        updated_by_tx_hash,
 				        current_authority_count,
 				        current_validator_count,
+				        validator_mining_window_blocks,
+				        current_unlimited_validator_count,
 				        updated_at_block_height,
 				        updated_at_timestamp
-				    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				    ON CONFLICT (id) DO UPDATE SET
 				        network_params_version = EXCLUDED.network_params_version,
 				        block_reward = EXCLUDED.block_reward,
@@ -180,10 +186,13 @@ public class ExIndexerConsensusCoreService {
 				        updated_by_tx_hash = EXCLUDED.updated_by_tx_hash,
 				        current_authority_count = EXCLUDED.current_authority_count,
 				        current_validator_count = EXCLUDED.current_validator_count,
+				        validator_mining_window_blocks = EXCLUDED.validator_mining_window_blocks,
+				        current_unlimited_validator_count = EXCLUDED.current_unlimited_validator_count,
 				        updated_at_block_height = EXCLUDED.updated_at_block_height,
 				        updated_at_timestamp = EXCLUDED.updated_at_timestamp
 				""";
 
+		boolean miningEconomicsState = state.getVersion() == NetworkParamsStateVersion.V2;
 		jdbcTemplate.update(sql,
 				// 1. Version (Enum -> Int)
 				state.getVersion().getCode(),
@@ -221,10 +230,16 @@ public class ExIndexerConsensusCoreService {
 				// 12. Validator Count
 				state.getCurrentValidatorCount(),
 
-				// 13. Updated Height
+				// 13. Validator mining window
+				miningEconomicsState ? state.getValidatorMiningWindowBlocks() : null,
+
+				// 14. Unlimited validator count
+				miningEconomicsState ? state.getCurrentUnlimitedValidatorCount() : null,
+
+				// 15. Updated Height
 				state.getUpdatedAtBlockHeight(),
 
-				// 14. Updated Time
+				// 16. Updated Time
 				Timestamp.from(state.getUpdatedAtTimestamp()));
 	}
 
@@ -318,7 +333,24 @@ public class ExIndexerConsensusCoreService {
 	}
 
 	public void bulkUpsertValidators(Map<Address, ValidatorState> adds) {
-		String sql = "INSERT INTO explorer_validator (address, origin_tx_hash, created_at_block_height, created_at_timestamp, validator_version) VALUES (?, ?, ?, ?, ?) ON CONFLICT (address) DO NOTHING";
+		String sql = """
+				INSERT INTO explorer_validator (
+				    address, origin_tx_hash, created_at_block_height, created_at_timestamp, validator_version,
+				    mining_limit_mode, mining_policy_source, max_mining_share_bps,
+				    policy_updated_by_tx_hash, policy_updated_at_block_height, policy_updated_at_timestamp
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT (address) DO UPDATE SET
+				    origin_tx_hash = EXCLUDED.origin_tx_hash,
+				    created_at_block_height = EXCLUDED.created_at_block_height,
+				    created_at_timestamp = EXCLUDED.created_at_timestamp,
+				    validator_version = EXCLUDED.validator_version,
+				    mining_limit_mode = EXCLUDED.mining_limit_mode,
+				    mining_policy_source = EXCLUDED.mining_policy_source,
+				    max_mining_share_bps = EXCLUDED.max_mining_share_bps,
+				    policy_updated_by_tx_hash = EXCLUDED.policy_updated_by_tx_hash,
+				    policy_updated_at_block_height = EXCLUDED.policy_updated_at_block_height,
+				    policy_updated_at_timestamp = EXCLUDED.policy_updated_at_timestamp
+				""";
 		List<Map.Entry<Address, ValidatorState>> list = new ArrayList<>(adds.entrySet());
 		jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
 			public void setValues(PreparedStatement ps, int i) throws SQLException {
@@ -329,6 +361,21 @@ public class ExIndexerConsensusCoreService {
 				ps.setLong(3, s.getCreatedAtBlockHeight());
 				ps.setTimestamp(4, Timestamp.from(s.getCreatedAtTimestamp()));
 				ps.setInt(5, s.getVersion().getCode());
+				if (s.getVersion() == ValidatorStateVersion.V2) {
+					ps.setString(6, s.getMiningLimitMode().name());
+					ps.setString(7, MiningPolicySource.EXPLICIT.name());
+					ps.setLong(8, s.getMaxMiningShareBps());
+					ps.setBytes(9, s.getPolicyUpdatedByTxHash().toArray());
+					ps.setLong(10, s.getPolicyUpdatedAtBlockHeight());
+					ps.setTimestamp(11, Timestamp.from(s.getPolicyUpdatedAtTimestamp()));
+				} else {
+					ps.setNull(6, Types.VARCHAR);
+					ps.setNull(7, Types.VARCHAR);
+					ps.setNull(8, Types.BIGINT);
+					ps.setNull(9, Types.BINARY);
+					ps.setNull(10, Types.BIGINT);
+					ps.setNull(11, Types.TIMESTAMP_WITH_TIMEZONE);
+				}
 			}
 
 			public int getBatchSize() {

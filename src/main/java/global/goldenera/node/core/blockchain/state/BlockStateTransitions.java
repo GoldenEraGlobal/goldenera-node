@@ -201,7 +201,7 @@ public class BlockStateTransitions {
 			final boolean performFullConnect = isNewHead;
 
 			try {
-				blockRepository.getRepository().executeAtomicBatch(batch -> {
+				blockRepository.executeAtomicBatch(batch -> {
 					worldState.persistToBatch(batch);
 					if (performFullConnect) {
 						entityIndexRepository.saveEntities(batch, block, worldState);

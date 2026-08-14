@@ -49,6 +49,7 @@ import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.state.WorldState;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class ValidatorMiningPolicyServiceTest {
 
@@ -81,6 +82,18 @@ class ValidatorMiningPolicyServiceTest {
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("candidate count 41 exceeds maximum 40");
 		assertThat(service.isCandidateEligible(aboveBoundary, 51, VALIDATOR)).isFalse();
+	}
+
+	@Test
+	void rejectedCandidateIncrementsLowCardinalityMetric() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ValidatorMiningPolicyService meteredService = new ValidatorMiningPolicyService(registry);
+		WorldState aboveBoundary = parent(limited(4_000), windowWith(VALIDATOR, 40), 100);
+
+		assertThatThrownBy(() -> meteredService.validateCandidate(aboveBoundary, VALIDATOR, 51))
+				.isInstanceOf(IllegalArgumentException.class);
+
+		assertThat(registry.counter("blockchain.mining.share_limit.rejections").count()).isEqualTo(1);
 	}
 
 	@Test

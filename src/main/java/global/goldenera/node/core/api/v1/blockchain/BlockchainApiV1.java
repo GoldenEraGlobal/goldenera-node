@@ -289,19 +289,22 @@ public class BlockchainApiV1 {
     @CoreApiSecurity(ApiKeyPermission.READ_VALIDATOR)
     @GetMapping("worldstate/validator/{address}")
     public ResponseEntity<ValidatorStateDtoV1> getWorldStateValidator(@PathVariable Address address) {
-        var validatorState = chainHeadStateCache.getHeadState().getValidator(address);
+        WorldState headState = chainHeadStateCache.getHeadState();
+        var validatorState = headState.getValidator(address);
         if (!validatorState.exists()) {
             throw new GENotFoundException("Validator not found");
         }
-        return ResponseEntity.ok(stateMapper.map(validatorState));
+        return ResponseEntity.ok(stateMapper.map(address, validatorState, headState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_VALIDATOR)
     @GetMapping("worldstate/validators")
     public ResponseEntity<Map<Address, ValidatorStateDtoV1>> getAllValidators() {
+        WorldState headState = chainHeadStateCache.getHeadState();
         return ResponseEntity.ok(
                 entityIndexRepository.getAllValidatorsWithAddresses().entrySet().stream()
-                        .collect(Collectors.toMap(Map.Entry::getKey, e -> stateMapper.map(e.getValue()))));
+                        .collect(Collectors.toMap(Map.Entry::getKey,
+                                e -> stateMapper.map(e.getKey(), e.getValue(), headState))));
     }
 
     // ========================

@@ -27,6 +27,7 @@ import org.springframework.stereotype.Component;
 
 import global.goldenera.node.explorer.api.v1.networkparams.dtos.NetworkParamsDtoV1;
 import global.goldenera.node.explorer.entities.ExNetworkParams;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -52,6 +53,10 @@ public class NetworkParamsMapper {
                 in.getUpdatedByTxHash(),
                 in.getCurrentAuthorityCount(),
                 in.getCurrentValidatorCount(),
+                in.getVersion() == NetworkParamsStateVersion.V2
+                        ? in.getValidatorMiningWindowBlocks()
+                        : null,
+                in.getCurrentUnlimitedValidatorCount(),
                 in.getUpdatedAtBlockHeight(),
                 in.getUpdatedAtTimestamp());
     }

@@ -29,6 +29,8 @@ import java.math.BigInteger;
 
 import org.springframework.stereotype.Service;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import global.goldenera.cryptoj.common.MiningConsensusRules;
 import global.goldenera.cryptoj.common.MiningWindowStateValidation;
 import global.goldenera.cryptoj.common.state.MiningWindowState;
@@ -44,10 +46,22 @@ import global.goldenera.node.Constants;
 import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.state.WorldState;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 
 /** Consensus mining-share validation and rolling-window transitions. */
 @Service
 public class ValidatorMiningPolicyService {
+	private final Counter shareLimitRejections;
+
+	public ValidatorMiningPolicyService() {
+		this.shareLimitRejections = null;
+	}
+
+	@Autowired
+	public ValidatorMiningPolicyService(MeterRegistry registry) {
+		this.shareLimitRejections = registry.counter("blockchain.mining.share_limit.rejections");
+	}
 
 	public void validateCandidate(WorldState parentState, long candidateHeight, Address minerIdentity) {
 		if (!tracksCandidate(candidateHeight)) {
@@ -65,6 +79,9 @@ public class ValidatorMiningPolicyService {
 
 	void validateCandidate(WorldState parentState, Address minerIdentity, long candidateHeight) {
 		CandidateEvaluation evaluation = evaluateCandidate(parentState, minerIdentity, candidateHeight);
+		if (!evaluation.eligible() && shareLimitRejections != null) {
+			shareLimitRejections.increment();
+		}
 		checkArgument(evaluation.eligible(),
 				"Mining share exceeded for %s: candidate count %s exceeds maximum %s",
 				minerIdentity.toChecksumAddress(), evaluation.candidateCount(), evaluation.maxBlocks());

@@ -36,6 +36,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipVotePayload;
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
@@ -47,6 +48,9 @@ import global.goldenera.cryptoj.common.state.BipStateMetadata;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.common.state.ValidatorState;
+import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AccountBalanceStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AccountNonceStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.AddressAliasStateDtoV1;
@@ -57,6 +61,10 @@ import global.goldenera.node.core.api.v1.blockchain.dtos.NetworkParamsStateDtoV1
 import global.goldenera.node.core.api.v1.blockchain.dtos.TokenStateDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.TxPayloadDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.ValidatorStateDtoV1;
+import global.goldenera.node.core.processing.ValidatorMiningViewService;
+import global.goldenera.node.core.processing.ValidatorMiningViewService.ValidatorMiningView;
+import global.goldenera.node.core.state.WorldState;
+import global.goldenera.node.shared.enums.MiningPolicySource;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -69,6 +77,8 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class StateMapper {
+
+    ValidatorMiningViewService validatorMiningViewService;
 
     public AccountBalanceStateDtoV1 map(@NonNull AccountBalanceState in) {
         return AccountBalanceStateDtoV1.builder()
@@ -113,6 +123,39 @@ public class StateMapper {
                 .originTxHash(in.getOriginTxHash())
                 .createdAtBlockHeight(in.getCreatedAtBlockHeight())
                 .createdAtTimestamp(in.getCreatedAtTimestamp())
+                .miningLimitMode(in.getMiningLimitMode())
+                .miningPolicySource(in.getVersion() == ValidatorStateVersion.V1
+                        ? MiningPolicySource.LEGACY_DEFAULT
+                        : MiningPolicySource.EXPLICIT)
+                .maxMiningShareBps(in.getMaxMiningShareBps())
+                .policyUpdatedByTxHash(in.getPolicyUpdatedByTxHash())
+                .policyUpdatedAtBlockHeight(in.getVersion() == ValidatorStateVersion.V2
+                        ? in.getPolicyUpdatedAtBlockHeight()
+                        : null)
+                .policyUpdatedAtTimestamp(in.getPolicyUpdatedAtTimestamp())
+                .build();
+    }
+
+    public ValidatorStateDtoV1 map(@NonNull Address address, @NonNull ValidatorState in,
+            @NonNull WorldState worldState) {
+        ValidatorMiningView view = validatorMiningViewService.evaluate(worldState, address, in);
+        return ValidatorStateDtoV1.builder()
+                .version(in.getVersion())
+                .originTxHash(in.getOriginTxHash())
+                .createdAtBlockHeight(in.getCreatedAtBlockHeight())
+                .createdAtTimestamp(in.getCreatedAtTimestamp())
+                .miningLimitMode(view.miningLimitMode())
+                .miningPolicySource(view.miningPolicySource())
+                .maxMiningShareBps(view.maxMiningShareBps())
+                .maxBlocksInCurrentWindow(view.maxBlocksInCurrentWindow())
+                .blocksMinedInCurrentWindow(view.blocksMinedInCurrentWindow())
+                .remainingBlocksInCurrentWindow(view.remainingBlocksInCurrentWindow())
+                .miningEligible(view.miningEligible())
+                .policyUpdatedByTxHash(in.getPolicyUpdatedByTxHash())
+                .policyUpdatedAtBlockHeight(in.getVersion() == ValidatorStateVersion.V2
+                        ? in.getPolicyUpdatedAtBlockHeight()
+                        : null)
+                .policyUpdatedAtTimestamp(in.getPolicyUpdatedAtTimestamp())
                 .build();
     }
 
@@ -129,6 +172,10 @@ public class StateMapper {
                 .minTxByteFee(in.getMinTxByteFee())
                 .currentAuthorityCount(in.getCurrentAuthorityCount())
                 .currentValidatorCount(in.getCurrentValidatorCount())
+                .validatorMiningWindowBlocks(in.getVersion() == NetworkParamsStateVersion.V2
+                        ? in.getValidatorMiningWindowBlocks()
+                        : null)
+                .currentUnlimitedValidatorCount(in.getCurrentUnlimitedValidatorCount())
                 .updatedByTxHash(in.getUpdatedByTxHash())
                 .updatedAtBlockHeight(in.getUpdatedAtBlockHeight())
                 .updatedAtTimestamp(in.getUpdatedAtTimestamp())
@@ -216,6 +263,15 @@ public class StateMapper {
             case TxBipValidatorAddPayload p -> {
                 var d = new TxPayloadDtoV1.ValidatorAdd();
                 d.setAddress(p.getAddress());
+                d.setMiningLimitMode(p.getMiningLimitMode());
+                d.setMaxMiningShareBps(p.getMaxMiningShareBps());
+                yield d;
+            }
+            case TxBipValidatorMiningPolicySetPayload p -> {
+                var d = new TxPayloadDtoV1.ValidatorMiningPolicySet();
+                d.setValidatorAddress(p.getValidatorAddress());
+                d.setMiningLimitMode(p.getMiningLimitMode());
+                d.setMaxMiningShareBps(p.getMaxMiningShareBps());
                 yield d;
             }
             case TxBipValidatorRemovePayload p -> {
@@ -232,6 +288,7 @@ public class StateMapper {
                 d.setMinDifficulty(p.getMinDifficulty());
                 d.setMinTxBaseFee(p.getMinTxBaseFee());
                 d.setMinTxByteFee(p.getMinTxByteFee());
+                d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
                 yield d;
             }
             case TxBipTokenBurnPayload p -> {

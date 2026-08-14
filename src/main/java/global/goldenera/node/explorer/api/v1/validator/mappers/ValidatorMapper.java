@@ -31,6 +31,11 @@ import org.springframework.stereotype.Component;
 import global.goldenera.node.explorer.api.v1.validator.dtos.ValidatorDtoV1;
 import global.goldenera.node.explorer.api.v1.validator.dtos.ValidatorDtoV1_Page;
 import global.goldenera.node.explorer.entities.ExValidator;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.processing.ValidatorMiningViewService;
+import global.goldenera.node.core.processing.ValidatorMiningViewService.ValidatorMiningView;
+import global.goldenera.node.core.state.WorldState;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -41,14 +46,34 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ValidatorMapper {
 
+    ChainHeadStateCache chainHeadStateCache;
+    ValidatorMiningViewService validatorMiningViewService;
+
     public ValidatorDtoV1 map(
             @NonNull ExValidator in) {
+        WorldState headState = chainHeadStateCache.getHeadState();
+        var canonicalValidator = headState.getValidator(in.getAddress());
+        ValidatorMiningView view = canonicalValidator.exists()
+                ? validatorMiningViewService.evaluate(headState, in.getAddress(), canonicalValidator)
+                : null;
         return new ValidatorDtoV1(
                 in.getVersion(),
                 in.getAddress(),
                 in.getOriginTxHash(),
                 in.getCreatedAtBlockHeight(),
-                in.getCreatedAtTimestamp());
+                in.getCreatedAtTimestamp(),
+                in.getMiningLimitMode(),
+                in.getMiningPolicySource(),
+                in.getMaxMiningShareBps(),
+                view != null ? view.maxBlocksInCurrentWindow() : null,
+                view != null ? view.blocksMinedInCurrentWindow() : null,
+                view != null ? view.remainingBlocksInCurrentWindow() : null,
+                view != null ? view.miningEligible() : null,
+                in.getPolicyUpdatedByTxHash(),
+                in.getVersion() == ValidatorStateVersion.V2
+                        ? in.getPolicyUpdatedAtBlockHeight()
+                        : null,
+                in.getPolicyUpdatedAtTimestamp());
     }
 
     public List<ValidatorDtoV1> map(

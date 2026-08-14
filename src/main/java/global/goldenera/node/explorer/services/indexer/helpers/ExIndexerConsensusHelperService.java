@@ -47,6 +47,8 @@ import global.goldenera.node.explorer.enums.EntityType;
 import global.goldenera.node.explorer.enums.OperationType;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerConsensusCoreService;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerRevertLogCoreService;
+import global.goldenera.node.explorer.entities.ExValidator;
+import global.goldenera.node.explorer.services.core.ExValidatorCoreService;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.AliasRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.AuthorityRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BipRevertDto;
@@ -64,6 +66,7 @@ public class ExIndexerConsensusHelperService {
 
 	ExIndexerRevertLogCoreService revertLogCoreService;
 	ExIndexerConsensusCoreService consensusCoreService;
+	ExValidatorCoreService validatorCoreService;
 
 	AddressSetConverter addressSetConverter = new AddressSetConverter();
 
@@ -185,20 +188,24 @@ public class ExIndexerConsensusHelperService {
 			Map<Address, ValidatorState> validatorsToAdd,
 			Map<Address, ValidatorState> validatorsToRemove) {
 		List<Object[]> logBatch = new ArrayList<>();
+		Map<Address, ExValidator> existingValidators = validatorCoreService.getByAddresses(validatorsToAdd.keySet());
 		validatorsToRemove.forEach((address, oldState) -> {
-			ValidatorRevertDto dto = ValidatorRevertDto.from(
-					oldState.getOriginTxHash(),
-					oldState.getCreatedAtBlockHeight(),
-					oldState.getCreatedAtTimestamp(),
-					oldState.getVersion());
+			ValidatorRevertDto dto = ValidatorRevertDto.from(oldState);
 
 			revertLogCoreService.addLogToBatch(logBatch, block, EntityType.VALIDATOR, OperationType.DELETE,
 					address.toArray(), null, dto);
 		});
 
 		validatorsToAdd.forEach((address, newState) -> {
-			revertLogCoreService.addLogToBatch(logBatch, block, EntityType.VALIDATOR, OperationType.INSERT,
-					address.toArray(), null, null);
+			ExValidator oldState = existingValidators.get(address);
+			if (oldState == null) {
+				revertLogCoreService.addLogToBatch(logBatch, block, EntityType.VALIDATOR, OperationType.INSERT,
+						address.toArray(), null, null);
+			} else {
+				ValidatorRevertDto dto = ValidatorRevertDto.from(oldState);
+				revertLogCoreService.addLogToBatch(logBatch, block, EntityType.VALIDATOR, OperationType.UPDATE,
+						address.toArray(), null, dto);
+			}
 		});
 
 		revertLogCoreService.insertLogBatch(logBatch);

@@ -1,0 +1,66 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-mining-economics-validator-policy
+      author: goldenera
+      changes:
+        - addColumn:
+            tableName: explorer_validator
+            columns:
+              - column:
+                  name: mining_limit_mode
+                  type: VARCHAR(16)
+              - column:
+                  name: mining_policy_source
+                  type: VARCHAR(32)
+              - column:
+                  name: max_mining_share_bps
+                  type: BIGINT
+              - column:
+                  name: policy_updated_by_tx_hash
+                  type: BYTEA
+              - column:
+                  name: policy_updated_at_block_height
+                  type: BIGINT
+              - column:
+                  name: policy_updated_at_timestamp
+                  type: TIMESTAMP(6) WITH TIME ZONE
+      rollback:
+        - dropColumn:
+            tableName: explorer_validator
+            columnName: policy_updated_at_timestamp
+        - dropColumn:
+            tableName: explorer_validator
+            columnName: policy_updated_at_block_height
+        - dropColumn:
+            tableName: explorer_validator
+            columnName: policy_updated_by_tx_hash
+        - dropColumn:
+            tableName: explorer_validator
+            columnName: max_mining_share_bps
+        - dropColumn:
+            tableName: explorer_validator
+            columnName: mining_policy_source
+        - dropColumn:
+            tableName: explorer_validator
+            columnName: mining_limit_mode
+
+  - changeSet:
+      id: 005-mining-economics-network-params
+      author: goldenera
+      changes:
+        - addColumn:
+            tableName: explorer_network_params
+            columns:
+              - column:
+                  name: validator_mining_window_blocks
+                  type: BIGINT
+              - column:
+                  name: current_unlimited_validator_count
+                  type: BIGINT
+      rollback:
+        - dropColumn:
+            tableName: explorer_network_params
+            columnName: current_unlimited_validator_count
+        - dropColumn:
+            tableName: explorer_network_params
+            columnName: validator_mining_window_blocks

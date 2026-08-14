@@ -134,7 +134,7 @@ public class ChainSwitchService {
             }
 
             try {
-                blockRepository.getRepository().executeAtomicBatch(batch -> {
+                blockRepository.executeAtomicBatch(batch -> {
                     for (StoredBlock storedBlockToDisconnect : oldChainStored) {
                         Block blockToDisconnect = storedBlockToDisconnect.getBlock();
 

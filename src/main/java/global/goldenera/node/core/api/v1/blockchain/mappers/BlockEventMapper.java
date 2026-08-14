@@ -59,6 +59,7 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenMint
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenSupplyUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorAdded;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorMiningPolicyChanged;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorRemoved;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -142,6 +143,11 @@ public class BlockEventMapper {
                                         e.bipHash(),
                                         e.txVersion(),
                                         (TxPayloadDtoV1.ValidatorRemove) txMapper.mapPayload(e.payload()));
+
+                        case ValidatorMiningPolicyChanged e -> new BlockEventDtoV1.ValidatorMiningPolicyChangedDto(
+                                        e.bipHash(),
+                                        e.txVersion(),
+                                        (TxPayloadDtoV1.ValidatorMiningPolicySet) txMapper.mapPayload(e.payload()));
 
                         case NetworkParamsChanged e -> new NetworkParamsChangedDto(
                                         e.bipHash(),
