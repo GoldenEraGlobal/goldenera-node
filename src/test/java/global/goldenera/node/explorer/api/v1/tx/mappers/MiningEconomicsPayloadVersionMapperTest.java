@@ -21,24 +21,30 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.api.v1.equivocation;
+package global.goldenera.node.explorer.api.v1.tx.mappers;
 
-import java.time.Instant;
-import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import org.apache.tuweni.bytes.Bytes;
+import org.junit.jupiter.api.Test;
 
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.datatypes.Signature;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayloadImpl;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
 
-public record EquivocationEvidenceDtoV1(
-		long height,
-		Address identity,
-		List<SignedHeaderDtoV1> signedHeaders,
-		Instant firstSeenAt,
-		Instant lastSeenAt) {
+class MiningEconomicsPayloadVersionMapperTest {
 
-	public record SignedHeaderDtoV1(Hash blockHash, Signature signature, Bytes canonicalSignedHeader) {
+	private final TxMapper mapper = new TxMapper();
+
+	@Test
+	void exposesBothLegacyAndVersionedPayloadSchemas() {
+		var legacy = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.build();
+		var versioned = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.validatorMiningWindowBlocks(100L)
+				.build();
+
+		assertThat(mapper.mapPayload(legacy).getPayloadVersion()).isEqualTo(TxPayloadVersion.V1);
+		assertThat(mapper.mapPayload(versioned).getPayloadVersion()).isEqualTo(TxPayloadVersion.V2);
 	}
 }

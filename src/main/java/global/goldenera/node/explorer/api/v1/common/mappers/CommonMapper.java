@@ -84,7 +84,7 @@ public class CommonMapper {
                                 : new ArrayList<>();
 
                 List<ValidatorDtoV1> validators = in.getValidators() != null
-                                ? in.getValidators().stream().map(validatorMapper::map).toList()
+                                ? validatorMapper.map(in.getValidators())
                                 : Collections.emptyList();
 
                 List<AuthorityDtoV1> authorities = in.getAuthorities() != null

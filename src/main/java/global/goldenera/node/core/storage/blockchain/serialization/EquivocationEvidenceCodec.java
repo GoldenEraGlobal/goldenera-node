@@ -33,8 +33,7 @@ import java.util.List;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.datatypes.Signature;
+import org.apache.tuweni.bytes.Bytes;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence.SignedHeader;
 
@@ -43,7 +42,8 @@ import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence
 public class EquivocationEvidenceCodec {
 
 	static final int VERSION = 1;
-	static final int HEADER_BYTES = Hash.SIZE + Signature.SIZE;
+	static final int MAX_HEADERS = 64;
+	static final int MAX_CANONICAL_HEADER_BYTES = 64 * 1024;
 	static final int FIXED_BYTES = Integer.BYTES + Long.BYTES + Address.SIZE
 			+ Long.BYTES + Integer.BYTES + Long.BYTES + Integer.BYTES + Integer.BYTES;
 
@@ -51,7 +51,15 @@ public class EquivocationEvidenceCodec {
 		checkArgument(evidence.height() >= 0, "Evidence height cannot be negative");
 		checkArgument(evidence.identity() != null, "Evidence identity cannot be null");
 		checkArgument(!evidence.signedHeaders().isEmpty(), "Evidence must contain a signed header");
-		ByteBuffer output = ByteBuffer.allocate(FIXED_BYTES + evidence.signedHeaders().size() * HEADER_BYTES);
+		checkArgument(evidence.signedHeaders().size() <= MAX_HEADERS, "Too many signed headers");
+		int encodedSize = FIXED_BYTES;
+		for (SignedHeader header : evidence.signedHeaders()) {
+			header.verify(evidence.height(), evidence.identity());
+			int headerSize = header.canonicalHeader().size();
+			checkArgument(headerSize <= MAX_CANONICAL_HEADER_BYTES, "Canonical signed header is too large");
+			encodedSize = Math.addExact(encodedSize, Math.addExact(Integer.BYTES, headerSize));
+		}
+		ByteBuffer output = ByteBuffer.allocate(encodedSize);
 		output.putInt(VERSION);
 		output.putLong(evidence.height());
 		output.put(evidence.identity().toArray());
@@ -59,14 +67,14 @@ public class EquivocationEvidenceCodec {
 		putInstant(output, evidence.lastSeenAt());
 		output.putInt(evidence.signedHeaders().size());
 		for (SignedHeader header : evidence.signedHeaders()) {
-			output.put(header.blockHash().toArray());
-			output.put(header.signature().toArray());
+			output.putInt(header.canonicalHeader().size());
+			output.put(header.canonicalHeader().toArray());
 		}
 		return output.array();
 	}
 
 	public EquivocationEvidence decode(byte[] encoded) {
-		checkArgument(encoded != null && encoded.length >= FIXED_BYTES + HEADER_BYTES,
+		checkArgument(encoded != null && encoded.length >= FIXED_BYTES + Integer.BYTES + 1,
 				"Invalid equivocation evidence length");
 		ByteBuffer input = ByteBuffer.wrap(encoded);
 		int version = input.getInt();
@@ -77,17 +85,18 @@ public class EquivocationEvidenceCodec {
 		Instant firstSeenAt = getInstant(input);
 		Instant lastSeenAt = getInstant(input);
 		int count = input.getInt();
-		checkArgument(count > 0, "Evidence must contain a signed header");
-		checkArgument(input.remaining() == Math.multiplyExact(count, HEADER_BYTES),
-				"Invalid equivocation evidence payload length");
+		checkArgument(count > 0 && count <= MAX_HEADERS, "Invalid signed header count");
 		List<SignedHeader> headers = new ArrayList<>(count);
 		for (int i = 0; i < count; i++) {
-			byte[] hash = new byte[Hash.SIZE];
-			byte[] signature = new byte[Signature.SIZE];
-			input.get(hash);
-			input.get(signature);
-			headers.add(new SignedHeader(Hash.wrap(hash), Signature.wrap(signature)));
+			checkArgument(input.remaining() >= Integer.BYTES, "Invalid equivocation evidence payload length");
+			int headerLength = input.getInt();
+			checkArgument(headerLength > 0 && headerLength <= MAX_CANONICAL_HEADER_BYTES
+					&& input.remaining() >= headerLength, "Invalid canonical signed header length");
+			byte[] headerBytes = new byte[headerLength];
+			input.get(headerBytes);
+			headers.add(new SignedHeader(Bytes.wrap(headerBytes)));
 		}
+		checkArgument(!input.hasRemaining(), "Invalid equivocation evidence payload length");
 		return new EquivocationEvidence(height, Address.wrap(identityBytes), headers, firstSeenAt, lastSeenAt);
 	}
 

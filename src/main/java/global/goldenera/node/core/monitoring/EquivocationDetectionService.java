@@ -27,6 +27,12 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.stereotype.Service;
@@ -41,6 +47,7 @@ import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence.SignedHeader;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Counter;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 /** Detects signed same-height conflicts without changing block validity. */
@@ -49,18 +56,63 @@ import lombok.extern.slf4j.Slf4j;
 public class EquivocationDetectionService {
 
 	static final int MAX_SIGNED_HEADERS_PER_EVIDENCE = 64;
+	static final int MAX_PENDING_AUDIT_OBSERVATIONS = 1_024;
 	private static final Comparator<SignedHeader> HEADER_ORDER = Comparator
 			.comparing(header -> header.blockHash().toHexString());
 
 	private final EquivocationEvidenceRepository repository;
 	private final AtomicLong evidenceCount;
 	private final Counter detectionCounter;
+	private final Counter droppedCounter;
+	private final ThreadPoolExecutor auditExecutor;
 
 	public EquivocationDetectionService(EquivocationEvidenceRepository repository, MeterRegistry registry) {
 		this.repository = repository;
 		this.evidenceCount = new AtomicLong(repository.countConflicts());
 		this.detectionCounter = registry.counter("blockchain.equivocation.detections");
+		this.droppedCounter = registry.counter("blockchain.equivocation.audit.dropped");
+		ThreadFactory defaultThreadFactory = Executors.defaultThreadFactory();
+		this.auditExecutor = new ThreadPoolExecutor(
+				1, 1, 0, TimeUnit.MILLISECONDS,
+				new ArrayBlockingQueue<>(MAX_PENDING_AUDIT_OBSERVATIONS),
+				runnable -> {
+					Thread thread = defaultThreadFactory.newThread(runnable);
+					thread.setName("equivocation-audit");
+					thread.setDaemon(true);
+					return thread;
+				});
 		registry.gauge("blockchain.equivocation.evidence", evidenceCount);
+	}
+
+	/**
+	 * Enqueues audit work without allowing monitoring storage latency to block a
+	 * consensus or reorg thread.
+	 *
+	 * @return false when the bounded audit queue is full or shutting down
+	 */
+	public boolean enqueueValidatedHeader(BlockHeader header, Instant seenAt) {
+		try {
+			auditExecutor.execute(() -> observeValidatedHeader(header, seenAt));
+			return true;
+		} catch (RejectedExecutionException e) {
+			droppedCounter.increment();
+			return false;
+		}
+	}
+
+	@PreDestroy
+	public void close() {
+		auditExecutor.shutdown();
+		try {
+			if (!auditExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+				int abandoned = auditExecutor.shutdownNow().size();
+				droppedCounter.increment(abandoned);
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			int abandoned = auditExecutor.shutdownNow().size();
+			droppedCounter.increment(abandoned);
+		}
 	}
 
 	/**
@@ -70,7 +122,7 @@ public class EquivocationDetectionService {
 	 *
 	 * @return true only when this observation creates new equivocation evidence
 	 */
-	public synchronized boolean observeValidatedHeader(BlockHeader header, Instant seenAt) {
+	synchronized boolean observeValidatedHeader(BlockHeader header, Instant seenAt) {
 		try {
 			Signature signature = header.getSignature();
 			Address identity = header.getIdentity();
@@ -92,7 +144,7 @@ public class EquivocationDetectionService {
 			if (existing != null) {
 				observations.addAll(existing.signedHeaders());
 			}
-			observations.add(new SignedHeader(blockHash, signature));
+			observations.add(SignedHeader.from(header));
 			observations.sort(HEADER_ORDER);
 			if (observations.size() > MAX_SIGNED_HEADERS_PER_EVIDENCE) {
 				observations = new ArrayList<>(observations.subList(0, MAX_SIGNED_HEADERS_PER_EVIDENCE));

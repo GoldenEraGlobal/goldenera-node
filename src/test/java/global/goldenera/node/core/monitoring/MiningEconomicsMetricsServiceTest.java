@@ -31,6 +31,7 @@ import java.time.Instant;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.Answers;
 
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.ValidatorState;
@@ -40,8 +41,11 @@ import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.state.WorldState;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class MiningEconomicsMetricsServiceTest {
@@ -85,6 +89,32 @@ class MiningEconomicsMetricsServiceTest {
 		assertThat(registry.get("blockchain.mining.same_identity.longest_run").gauge().value()).isEqualTo(3);
 		assertThat(registry.getMeters()).allSatisfy(meter -> assertThat(meter.getId().getTags())
 				.noneMatch(tag -> tag.getValue().startsWith("0x")));
+	}
+
+	@Test
+	void initializesMetricsOnlyAfterCoreDatabaseAndHeadAreReady() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		WorldState state = mock(WorldState.class);
+		NetworkParamsState params = mock(NetworkParamsState.class);
+		when(params.getVersion()).thenReturn(NetworkParamsStateVersion.V1);
+		when(params.getCurrentValidatorCount()).thenReturn(3L);
+		when(params.getCurrentUnlimitedValidatorCount()).thenReturn(3L);
+		when(state.getParams()).thenReturn(params);
+		ChainHeadStateCache stateCache = mock(ChainHeadStateCache.class);
+		when(stateCache.getHeadState()).thenReturn(state);
+		ChainQuery chainQuery = mock(ChainQuery.class);
+		StoredBlock head = mock(StoredBlock.class, Answers.RETURNS_DEEP_STUBS);
+		when(head.getBlock().getHeader().getTimestamp()).thenReturn(Instant.now().minusSeconds(5));
+		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(head);
+		MiningEconomicsMetricsService service = new MiningEconomicsMetricsService(
+				registry, stateCache, chainQuery, new ValidatorMiningPolicyService());
+
+		service.onCoreDbReady(new CoreDbReadyEvent(this));
+
+		assertThat(registry.get("blockchain.mining.active_validators").tag("mode", "unlimited")
+				.gauge().value()).isEqualTo(3);
+		assertThat(registry.get("blockchain.mining.seconds_since_last_block").gauge().value())
+				.isGreaterThanOrEqualTo(5);
 	}
 
 	private ValidatorState validator(MiningLimitMode mode) {

@@ -72,6 +72,19 @@ public class ChainHeadStateCache {
 		return refreshState(expectedRootHash);
 	}
 
+	public HeadStateSnapshot getHeadSnapshot() {
+		for (int attempt = 0; attempt < 5; attempt++) {
+			StoredBlock before = chainQueryService.getLatestStoredBlockOrThrow();
+			WorldState state = refreshState(before.getBlock().getHeader().getStateRootHash());
+			StoredBlock after = chainQueryService.getLatestStoredBlockOrThrow();
+			if (before.getHash().equals(after.getHash())
+					&& state.getFinalStateRoot().equals(after.getBlock().getHeader().getStateRootHash())) {
+				return new HeadStateSnapshot(after, state);
+			}
+		}
+		throw new IllegalStateException("Canonical head changed repeatedly while capturing WorldState snapshot");
+	}
+
 	@EventListener
 	@Order(Ordered.HIGHEST_PRECEDENCE)
 	public void onBlockConnected(BlockConnectedEvent event) {
@@ -120,5 +133,8 @@ public class ChainHeadStateCache {
 		log.error("CRITICAL: Failed to load WorldState for root {} after {} attempts.", rootHash, maxRetries,
 				lastException);
 		throw new RuntimeException("Could not load WorldState for " + rootHash, lastException);
+	}
+
+	public record HeadStateSnapshot(StoredBlock head, WorldState state) {
 	}
 }

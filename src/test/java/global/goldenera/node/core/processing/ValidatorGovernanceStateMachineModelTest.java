@@ -33,6 +33,7 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -219,6 +220,8 @@ class ValidatorGovernanceStateMachineModelTest {
 				.minDifficulty(BigInteger.ONE).minTxBaseFee(Wei.ZERO).minTxByteFee(Wei.ZERO)
 				.updatedByTxHash(ACTION).currentAuthorityCount(1)
 				.currentValidatorCount(validators).currentUnlimitedValidatorCount(unlimited)
+				.limitedValidatorMiningSharesBps(Collections.nCopies(
+						Math.toIntExact(validators - unlimited), 2_500L))
 				.validatorMiningWindowBlocks(window).updatedAtBlockHeight(10).updatedAtTimestamp(TIME)
 				.build();
 	}

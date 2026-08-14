@@ -762,6 +762,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.currentAuthorityCount(1)
 					.currentValidatorCount(2)
 					.currentUnlimitedValidatorCount(1)
+					.limitedValidatorMiningSharesBps(List.of(4_000L))
 					.validatorMiningWindowBlocks(100)
 					.updatedAtBlockHeight(10)
 					.updatedAtTimestamp(BASE_TIME)

@@ -33,6 +33,7 @@ import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -182,6 +183,12 @@ public class BlockIngestionService {
 		}
 
 		blockStateTransitionService.connectBlock(childBlock, worldState, source, result, receivedFrom, receivedAt);
+	}
+
+	/** Performs parent-state validation before a broadcast body is requested. */
+	public void validateBroadcastHeaderContext(BlockHeader childHeader, Block parentBlock) {
+		WorldState worldState = worldStateFactory.createForValidation(parentBlock.getHeader().getStateRootHash());
+		blockValidationService.validateHeaderContext(childHeader, parentBlock.getHeader(), worldState);
 	}
 
 	/**

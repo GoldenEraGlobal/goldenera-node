@@ -133,9 +133,6 @@ public class BlockValidator {
 					"Miner signature does not authenticate the recovered identity");
 			// 3. RandomX PoW Calculation
 			validateRandomXPoWInternal(header, batchContext);
-			if (equivocationDetectionService != null) {
-				equivocationDetectionService.observeValidatedHeader(header, Instant.now());
-			}
 		} catch (Exception e) {
 			log.warn("PoW Validation failed for header {}: {}", header.getHash(), e.getMessage());
 			throw new GEValidationException("PoW Validation failed", e);
@@ -191,8 +188,20 @@ public class BlockValidator {
 						minerIdentity.toChecksumAddress());
 			}
 			validatorMiningPolicyService.validateCandidate(worldState, child.getHeight(), child.getIdentity());
+			observeContextuallyValidatedHeader(child);
 		} catch (IllegalArgumentException e) {
 			throw new GEValidationException("Contextual Header Validation failed: " + e.getMessage(), e);
+		}
+	}
+
+	private void observeContextuallyValidatedHeader(BlockHeader header) {
+		if (equivocationDetectionService == null) {
+			return;
+		}
+		try {
+			equivocationDetectionService.enqueueValidatedHeader(header, Instant.now());
+		} catch (Exception e) {
+			log.error("Equivocation monitoring failed for contextually valid header {}", header.getHash(), e);
 		}
 	}
 

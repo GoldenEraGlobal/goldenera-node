@@ -38,7 +38,7 @@ import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.RequiredArgsConstructor;
 
-@RestController
+@RestController("explorerEquivocationApiV1")
 @RequiredArgsConstructor
 @ExplorerApiSecurity(ApiKeyPermission.READ_BLOCK_HEADER)
 @RequestMapping("/api/explorer/v1/equivocation")

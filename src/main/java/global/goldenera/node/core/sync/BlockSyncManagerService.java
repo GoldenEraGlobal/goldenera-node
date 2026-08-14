@@ -34,12 +34,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -92,6 +92,8 @@ public class BlockSyncManagerService {
 	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch
 	static final long TIMEOUT_SECONDS = 20; // Timeout per request (reduced for faster failover)
 	static final long SYNC_POLL_DELAY_MS = 100;
+	static final int MAX_PENDING_BROADCAST_DOWNLOADS = 128;
+	static final long MAX_BROADCAST_REORG_DEPTH = 10;
 
 	/**
 	 * Calculate max bodies per request based on frame size and max block size.
@@ -175,7 +177,9 @@ public class BlockSyncManagerService {
 	@Getter
 	volatile boolean synced = false;
 
-	final BlockingQueue<Object> signalQueue = new LinkedBlockingQueue<>();
+	// Wake-ups carry no data, so coalesce them instead of allowing remote broadcasts
+	// to grow an unbounded queue.
+	final BlockingQueue<Object> signalQueue = new ArrayBlockingQueue<>(1);
 
 	final Map<Long, CompletableFuture<List<BlockHeader>>> pendingHeaderRequests = new ConcurrentHashMap<>();
 	final Map<Long, CompletableFuture<List<List<Tx>>>> pendingBodyRequests = new ConcurrentHashMap<>();
@@ -600,51 +604,29 @@ public class BlockSyncManagerService {
 		if (blockIngestionService.isOrphan(headerHash)) {
 			return;
 		}
-		// Check if we are already downloading this block
-		if (!pendingBroadcastDownloads.add(headerHash)) {
-			log.debug("Already downloading broadcast block #{}", header.getHeight());
-			return;
-		}
-
 		try {
-			// Authenticate and validate before body download. This also records signed
-			// side-branch evidence for equivocation monitoring.
-			blockValidationService.validateHeader(header);
 			StoredBlock localBestStored = chainQueryService.getLatestStoredBlockOrThrow();
-
-			// Skip blocks that are too old - they can't possibly extend our chain
-			// Only process if:
-			// 1. Block extends our tip (height > localBest)
-			// 2. OR block is at same height as tip (potential uncle/reorg)
-			// 3. OR block is slightly behind but parent exists (potential short reorg)
-			if (header.getHeight() < localBestStored.getHeight() - 10) {
-				// Block is more than 10 blocks behind - too old to care about
+			if (header.getHeight() <= 0
+					|| header.getHeight() < localBestStored.getHeight() - MAX_BROADCAST_REORG_DEPTH) {
 				log.debug("Ignoring old broadcast block #{} (local tip: {})",
 						header.getHeight(), localBestStored.getHeight());
-				pendingBroadcastDownloads.remove(headerHash);
 				return;
 			}
 
-			// Check if parent exists (must exist to process this block)
-			boolean parentExists = chainQueryService.getStoredBlockByHash(header.getPreviousHash()).isPresent();
-
-			if (header.getHeight() > localBestStored.getHeight()) {
-				// This block extends our chain - definitely want it
-				// If parent is missing, we'll need to sync anyway
-				if (!parentExists) {
-					// Gap detected - trigger sync instead of trying to download single block
-					log.debug("Broadcast block #{} has missing parent, will sync", header.getHeight());
-					signalQueue.offer(new Object());
-					pendingBroadcastDownloads.remove(headerHash);
-					return;
-				}
-			} else if (!parentExists) {
-				// Block is at or below our height AND parent doesn't exist
-				// This is an orphan on a different chain - ignore it
-				log.debug("Ignoring broadcast block #{} - no parent and not extending tip", header.getHeight());
-				pendingBroadcastDownloads.remove(headerHash);
+			Optional<StoredBlock> parent = chainQueryService.getStoredBlockByHash(header.getPreviousHash());
+			if (parent.isEmpty()) {
+				log.debug("Ignoring broadcast block #{} - parent is not stored", header.getHeight());
 				return;
 			}
+			if (!tryTrackBroadcastDownload(headerHash)) {
+				log.debug("Ignoring duplicate or excess broadcast block #{}", header.getHeight());
+				return;
+			}
+
+			// Run expensive PoW only after cheap age, parent, duplicate and global-cap
+			// checks. Evidence is recorded only by the contextual validation below.
+			blockValidationService.validateHeader(header);
+			blockIngestionService.validateBroadcastHeaderContext(header, parent.orElseThrow().getBlock());
 
 			// At this point: either block extends tip with valid parent,
 			// or is a potential reorg block we should evaluate
@@ -702,9 +684,19 @@ public class BlockSyncManagerService {
 					.whenComplete((v, e) -> {
 						pendingBroadcastDownloads.remove(headerHash);
 					});
+		} catch (GEValidationException e) {
+			log.debug("Rejected broadcast header #{}: {}", header.getHeight(), e.getMessage());
+			pendingBroadcastDownloads.remove(headerHash);
 		} catch (Exception e) {
 			log.error("Failed to handle broadcast header", e);
 			pendingBroadcastDownloads.remove(headerHash);
+		}
+	}
+
+	boolean tryTrackBroadcastDownload(Hash headerHash) {
+		synchronized (pendingBroadcastDownloads) {
+			return pendingBroadcastDownloads.size() < MAX_PENDING_BROADCAST_DOWNLOADS
+					&& pendingBroadcastDownloads.add(headerHash);
 		}
 	}
 

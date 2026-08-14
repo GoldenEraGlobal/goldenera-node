@@ -25,16 +25,22 @@ package global.goldenera.node.core.monitoring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.junit.jupiter.api.Assertions.assertTimeout;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -96,8 +102,9 @@ class EquivocationDetectionServiceTest {
 		BlockHeader first = signedHeader(20, 10, KEY_A);
 		BlockHeader second = signedHeader(20, 11, KEY_A);
 		try (EvidenceStore store = EvidenceStore.open(dbPath)) {
-			assertThat(store.service().observeValidatedHeader(first, SEEN)).isFalse();
-			assertThat(store.service().observeValidatedHeader(second, SEEN.plusSeconds(5))).isTrue();
+			assertThat(store.service().enqueueValidatedHeader(first, SEEN)).isTrue();
+			assertThat(store.service().enqueueValidatedHeader(second, SEEN.plusSeconds(5))).isTrue();
+			store.service().close();
 		}
 
 		try (EvidenceStore reopened = EvidenceStore.open(dbPath)) {
@@ -110,6 +117,51 @@ class EquivocationDetectionServiceTest {
 					.containsExactlyInAnyOrder(first.getSignature(), second.getSignature());
 			assertThat(evidence.firstSeenAt()).isEqualTo(SEEN);
 			assertThat(evidence.lastSeenAt()).isEqualTo(SEEN.plusSeconds(5));
+		}
+	}
+
+	@Test
+	void shutdownDrainsQueuedObservationsBeforeRepositoryCloses() throws Exception {
+		try (EvidenceStore store = EvidenceStore.open(tempDir.resolve("async-drain"))) {
+			BlockHeader first = signedHeader(21, 10, KEY_A);
+			BlockHeader second = signedHeader(21, 11, KEY_A);
+			assertThat(store.service().enqueueValidatedHeader(first, SEEN)).isTrue();
+			assertThat(store.service().enqueueValidatedHeader(second, SEEN.plusSeconds(1))).isTrue();
+
+			store.service().close();
+
+			assertThat(store.repository.findConflicts(100)).hasSize(1);
+		}
+	}
+
+	@Test
+	void blockedRepositoryCannotBlockConsensusCallerAndAuditQueueIsBounded() throws Exception {
+		EquivocationEvidenceRepository repository = mock(EquivocationEvidenceRepository.class);
+		when(repository.countConflicts()).thenReturn(0L);
+		CountDownLatch repositoryEntered = new CountDownLatch(1);
+		CountDownLatch releaseRepository = new CountDownLatch(1);
+		when(repository.find(anyLong(), any())).thenAnswer(invocation -> {
+			repositoryEntered.countDown();
+			releaseRepository.await();
+			return Optional.empty();
+		});
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		EquivocationDetectionService service = new EquivocationDetectionService(repository, registry);
+		BlockHeader header = signedHeader(22, 1, KEY_A);
+		try {
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			assertThat(repositoryEntered.await(5, TimeUnit.SECONDS)).isTrue();
+			assertTimeout(Duration.ofSeconds(2), () -> {
+				for (int index = 0; index < EquivocationDetectionService.MAX_PENDING_AUDIT_OBSERVATIONS; index++) {
+					assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+				}
+				assertThat(service.enqueueValidatedHeader(header, SEEN)).isFalse();
+			});
+			assertThat(registry.counter("blockchain.equivocation.audit.dropped").count()).isEqualTo(1);
+		} finally {
+			releaseRepository.countDown();
+			service.close();
+			registry.close();
 		}
 	}
 
@@ -129,7 +181,7 @@ class EquivocationDetectionServiceTest {
 				executor.submit(() -> {
 					ready.countDown();
 					start.await();
-					store.service().observeValidatedHeader(header, SEEN);
+					store.service().enqueueValidatedHeader(header, SEEN);
 					return null;
 				});
 			}
@@ -137,6 +189,7 @@ class EquivocationDetectionServiceTest {
 			start.countDown();
 			executor.shutdown();
 			assertThat(executor.awaitTermination(5, TimeUnit.SECONDS)).isTrue();
+			store.service().close();
 
 			List<Hash> actual = store.repository.findConflicts(100).getFirst().signedHeaders().stream()
 					.map(EquivocationEvidence.SignedHeader::blockHash).toList();
@@ -206,8 +259,9 @@ class EquivocationDetectionServiceTest {
 		EquivocationEvidenceCodec codec = new EquivocationEvidenceCodec();
 		BlockHeader header = signedHeader(60, 1, KEY_A);
 		EquivocationEvidence evidence = new EquivocationEvidence(60, KEY_A.getAddress(),
-				List.of(new EquivocationEvidence.SignedHeader(header.getHash(), header.getSignature())), SEEN, SEEN);
+				List.of(EquivocationEvidence.SignedHeader.from(header)), SEEN, SEEN);
 		byte[] encoded = codec.encode(evidence);
+		assertThat(ByteBuffer.wrap(encoded).getInt()).isEqualTo(1);
 
 		byte[] unknownVersion = encoded.clone();
 		unknownVersion[Integer.BYTES - 1] = 2;
@@ -217,11 +271,24 @@ class EquivocationDetectionServiceTest {
 		assertThat(catchThrowable(
 				() -> codec.decode(Arrays.copyOf(encoded, encoded.length - 1))))
 				.isInstanceOf(IllegalArgumentException.class)
-				.hasMessageContaining("evidence length");
+				.hasMessageContaining("signed header length");
 		assertThat(catchThrowable(
 				() -> codec.decode(Arrays.copyOf(encoded, encoded.length + 1))))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("payload length");
+	}
+
+	@Test
+	void evidenceCodecRejectsTamperedCanonicalSignedHeader() {
+		EquivocationEvidenceCodec codec = new EquivocationEvidenceCodec();
+		BlockHeader header = signedHeader(61, 1, KEY_A);
+		EquivocationEvidence evidence = new EquivocationEvidence(61, KEY_A.getAddress(),
+				List.of(EquivocationEvidence.SignedHeader.from(header)), SEEN, SEEN);
+		byte[] encoded = codec.encode(evidence);
+		encoded[encoded.length - 1] ^= 1;
+
+		assertThat(catchThrowable(() -> codec.decode(encoded)))
+				.isInstanceOf(RuntimeException.class);
 	}
 
 	private static BlockHeader signedHeader(long height, long nonce, PrivateKey key) {
@@ -296,6 +363,7 @@ class EquivocationDetectionServiceTest {
 
 		@Override
 		public void close() {
+			service.close();
 			registry.close();
 			handles.forEach(ColumnFamilyHandle::close);
 			database.close();

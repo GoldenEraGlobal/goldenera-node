@@ -29,6 +29,7 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -197,6 +198,8 @@ class MiningEconomicsFailClosedStateTest {
 				.currentAuthorityCount(1)
 				.currentValidatorCount(validators)
 				.currentUnlimitedValidatorCount(unlimited)
+				.limitedValidatorMiningSharesBps(Collections.nCopies(
+						Math.toIntExact(Math.max(0, validators - unlimited)), 4_000L))
 				.validatorMiningWindowBlocks(window)
 				.updatedAtBlockHeight(10)
 				.updatedAtTimestamp(TIME)

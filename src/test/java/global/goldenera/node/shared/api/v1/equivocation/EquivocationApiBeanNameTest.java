@@ -23,22 +23,35 @@
  */
 package global.goldenera.node.shared.api.v1.equivocation;
 
-import java.time.Instant;
-import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import org.apache.tuweni.bytes.Bytes;
+import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.FilterType;
+import org.springframework.web.bind.annotation.RestController;
 
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.datatypes.Signature;
+class EquivocationApiBeanNameTest {
 
-public record EquivocationEvidenceDtoV1(
-		long height,
-		Address identity,
-		List<SignedHeaderDtoV1> signedHeaders,
-		Instant firstSeenAt,
-		Instant lastSeenAt) {
+	@Test
+	void coreAndExplorerControllersHaveDistinctBeanNames() {
+		try (AnnotationConfigApplicationContext context =
+				new AnnotationConfigApplicationContext(EquivocationControllerScan.class)) {
+			assertThat(context.containsBeanDefinition("coreEquivocationApiV1")).isTrue();
+			assertThat(context.containsBeanDefinition("explorerEquivocationApiV1")).isTrue();
+		}
+	}
 
-	public record SignedHeaderDtoV1(Hash blockHash, Signature signature, Bytes canonicalSignedHeader) {
+	@Configuration(proxyBeanMethods = false)
+	@ComponentScan(
+			basePackages = {
+					"global.goldenera.node.core.api.v1.equivocation",
+					"global.goldenera.node.explorer.api.v1.equivocation"
+			},
+			useDefaultFilters = false,
+			lazyInit = true,
+			includeFilters = @ComponentScan.Filter(type = FilterType.ANNOTATION, classes = RestController.class))
+	static class EquivocationControllerScan {
 	}
 }

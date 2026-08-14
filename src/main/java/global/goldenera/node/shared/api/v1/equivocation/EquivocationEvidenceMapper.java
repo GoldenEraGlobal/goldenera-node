@@ -35,7 +35,11 @@ public class EquivocationEvidenceMapper {
 
 	public EquivocationEvidenceDtoV1 map(EquivocationEvidence evidence) {
 		List<SignedHeaderDtoV1> headers = evidence.signedHeaders().stream()
-				.map(header -> new SignedHeaderDtoV1(header.blockHash(), header.signature()))
+				.map(header -> {
+					header.verify(evidence.height(), evidence.identity());
+					return new SignedHeaderDtoV1(
+							header.blockHash(), header.signature(), header.canonicalHeader());
+				})
 				.toList();
 		return new EquivocationEvidenceDtoV1(evidence.height(), evidence.identity(), headers,
 				evidence.firstSeenAt(), evidence.lastSeenAt());

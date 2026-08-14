@@ -30,12 +30,18 @@ import static org.mockito.Mockito.when;
 import java.time.Instant;
 import java.util.List;
 
-import org.apache.tuweni.bytes.Bytes;
+import java.math.BigInteger;
+
+import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
 
+import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.BlockHeaderImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.datatypes.Signature;
+import global.goldenera.cryptoj.datatypes.PrivateKey;
+import global.goldenera.cryptoj.enums.BlockVersion;
+import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.node.core.storage.blockchain.EquivocationEvidenceRepository;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence.SignedHeader;
@@ -47,13 +53,13 @@ class EquivocationApiV1Test {
 	@Test
 	void mapsPersistentEvidenceToApiDto() {
 		EquivocationEvidenceRepository repository = mock(EquivocationEvidenceRepository.class);
-		Address identity = Address.fromHexString("0x0000000000000000000000000000000000000001");
-		Hash firstHash = Hash.hash(Bytes.of(1));
-		Hash secondHash = Hash.hash(Bytes.of(2));
-		Signature firstSignature = mock(Signature.class);
-		Signature secondSignature = mock(Signature.class);
+		PrivateKey key = PrivateKey.wrap(Bytes32.fromHexString("0x01"));
+		Address identity = key.getAddress();
+		BlockHeader first = signedHeader(9, 1, key);
+		BlockHeader second = signedHeader(9, 2, key);
 		EquivocationEvidence evidence = new EquivocationEvidence(9, identity,
-				List.of(new SignedHeader(firstHash, firstSignature), new SignedHeader(secondHash, secondSignature)),
+				List.of(SignedHeader.from(first), SignedHeader.from(second)).stream()
+						.sorted((left, right) -> left.blockHash().compareTo(right.blockHash())).toList(),
 				Instant.EPOCH, Instant.EPOCH.plusSeconds(1));
 		when(repository.findConflicts(10)).thenReturn(List.of(evidence));
 
@@ -64,6 +70,23 @@ class EquivocationApiV1Test {
 		assertThat(body.getFirst().height()).isEqualTo(9);
 		assertThat(body.getFirst().identity()).isEqualTo(identity);
 		assertThat(body.getFirst().signedHeaders()).extracting(header -> header.blockHash())
-				.containsExactly(firstHash, secondHash);
+				.containsExactlyInAnyOrder(first.getHash(), second.getHash());
+		assertThat(body.getFirst().signedHeaders()).allSatisfy(header ->
+				assertThat(header.canonicalSignedHeader().isEmpty()).isFalse());
+	}
+
+	private BlockHeader signedHeader(long height, long nonce, PrivateKey key) {
+		BlockHeaderImpl unsigned = BlockHeaderImpl.builder()
+				.version(BlockVersion.V1)
+				.height(height)
+				.timestamp(Instant.EPOCH.plusSeconds(height))
+				.previousHash(Hash.ZERO)
+				.txRootHash(Hash.ZERO)
+				.stateRootHash(Hash.ZERO)
+				.difficulty(BigInteger.ONE)
+				.coinbase(key.getAddress())
+				.nonce(nonce)
+				.build();
+		return unsigned.toBuilder().signature(key.sign(BlockHeaderUtil.hashForSigning(unsigned))).build();
 	}
 }

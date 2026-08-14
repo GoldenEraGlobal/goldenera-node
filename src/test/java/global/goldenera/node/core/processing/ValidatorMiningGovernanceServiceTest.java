@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigInteger;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.stream.LongStream;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.Test;
@@ -121,16 +122,39 @@ class ValidatorMiningGovernanceServiceTest {
 			state.addValidator(FIRST, validator(ValidatorStateVersion.V1, MiningLimitMode.UNLIMITED, 0));
 			state.addValidator(SECOND, validator(ValidatorStateVersion.V2, MiningLimitMode.LIMITED, 2000));
 
+			assertThatThrownBy(() -> service.removeValidator(state, remove(FIRST), BLOCK, ACTION, true))
+					.hasMessageContaining("last unlimited");
+			assertThat(state.getValidator(FIRST).exists()).isTrue();
+			assertThat(state.getParams().getCurrentValidatorCount()).isEqualTo(2);
+			assertThat(state.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(1);
+
 			service.removeValidator(state, remove(SECOND), BLOCK, ACTION, true);
 			assertThat(state.getParams().getCurrentValidatorCount()).isEqualTo(1);
 			assertThat(state.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(1);
 			assertThat(state.getValidator(SECOND).exists()).isFalse();
+		}
+	}
 
-			assertThatThrownBy(() -> service.removeValidator(state, remove(FIRST), BLOCK, ACTION, true))
-					.hasMessageContaining("last unlimited");
-			assertThat(state.getValidator(FIRST).exists()).isTrue();
+	@Test
+	void zeroValidatorOpenMiningStateOnlyAcceptsUnlimitedAsFirstValidatorAndCanReturnToZero() throws Exception {
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState state = activeState(storage, 0, 0, 100);
+
+			service.assertInvariant(state.getParams());
+			assertThatThrownBy(() -> service.addValidator(
+					state, add(FIRST, MiningLimitMode.LIMITED, 4_000), BLOCK, ACTION, true))
+					.hasMessageContaining("requires an unlimited");
+			assertThat(state.getValidator(FIRST).exists()).isFalse();
+
+			service.addValidator(state, add(FIRST, MiningLimitMode.UNLIMITED, 0), BLOCK, ACTION, true);
 			assertThat(state.getParams().getCurrentValidatorCount()).isEqualTo(1);
 			assertThat(state.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(1);
+
+			service.removeValidator(state, remove(FIRST), BLOCK, ACTION, true);
+			assertThat(state.getParams().getCurrentValidatorCount()).isZero();
+			assertThat(state.getParams().getCurrentUnlimitedValidatorCount()).isZero();
+			assertThat(state.getParams().getLimitedValidatorMiningSharesBps()).isEmpty();
+			assertThat(state.getValidator(FIRST).exists()).isFalse();
 		}
 	}
 
@@ -235,6 +259,37 @@ class ValidatorMiningGovernanceServiceTest {
 		}
 	}
 
+	@Test
+	void limitedPoliciesAndWindowResizeMustPreserveAtLeastOneAllowedBlock() throws Exception {
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState addState = activeState(storage, 1, 1, 100);
+			addState.addValidator(FIRST, validator(ValidatorStateVersion.V1, MiningLimitMode.UNLIMITED, 0));
+			assertThatThrownBy(() -> service.addValidator(
+					addState, add(SECOND, MiningLimitMode.LIMITED, 1), BLOCK, ACTION, true))
+					.hasMessageContaining("at least one block");
+			assertThat(addState.getValidator(SECOND).exists()).isFalse();
+			assertThat(addState.getParams().getCurrentValidatorCount()).isEqualTo(1);
+
+			WorldState policyState = activeState(storage, 2, 2, 100);
+			policyState.addValidator(FIRST, validator(ValidatorStateVersion.V1, MiningLimitMode.UNLIMITED, 0));
+			policyState.addValidator(SECOND, validator(ValidatorStateVersion.V2, MiningLimitMode.UNLIMITED, 0));
+			assertThatThrownBy(() -> service.setMiningPolicy(
+					policyState, policy(SECOND, MiningLimitMode.LIMITED, 1), BLOCK, ACTION))
+					.hasMessageContaining("at least one block");
+			assertThat(policyState.getValidator(SECOND).getMiningLimitMode()).isEqualTo(MiningLimitMode.UNLIMITED);
+
+			WorldState resizeState = activeState(storage, 2, 1, 1_000);
+			resizeState.addValidator(FIRST, validator(ValidatorStateVersion.V1, MiningLimitMode.UNLIMITED, 0));
+			resizeState.addValidator(SECOND, validator(ValidatorStateVersion.V2, MiningLimitMode.LIMITED, 2_000));
+			service.setMiningPolicy(resizeState, policy(SECOND, MiningLimitMode.LIMITED, 10), BLOCK, ACTION);
+			assertThatThrownBy(() -> service.setNetworkParams(
+					resizeState, networkParams(100L), BLOCK, ACTION, true))
+					.hasMessageContaining("at least one block");
+			assertThat(resizeState.getParams().getValidatorMiningWindowBlocks()).isEqualTo(1_000);
+			assertThat(resizeState.getMiningWindow().getWindowSize()).isEqualTo(1_000);
+		}
+	}
+
 	private WorldState activeState(PersistentWorldStateTestSupport storage, long validatorCount,
 			long unlimitedCount, long window) {
 		WorldState state = storage.createEmpty(false);
@@ -252,6 +307,8 @@ class ValidatorMiningGovernanceServiceTest {
 				.currentAuthorityCount(1)
 				.currentValidatorCount(validatorCount)
 				.currentUnlimitedValidatorCount(unlimitedCount)
+				.limitedValidatorMiningSharesBps(LongStream.range(0, validatorCount - unlimitedCount)
+						.mapToObj(ignored -> 2_000L).toList())
 				.validatorMiningWindowBlocks(window)
 				.updatedAtBlockHeight(10)
 				.updatedAtTimestamp(CREATED)

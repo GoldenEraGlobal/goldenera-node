@@ -28,6 +28,7 @@ import static org.mockito.Mockito.mock;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -79,6 +80,28 @@ class GenesisMiningEconomicsCompatibilityTest {
 		}
 	}
 
+	@Test
+	void freshDevGenesisWithNoValidatorsPersistsCanonicalOpenMiningState() throws Exception {
+		GenesisSettings production = GenesisConfigLoader.loadGenesisSettings(Network.TESTNET, "prod");
+		GenesisSettings genesis = withoutValidators(production);
+		NetworkSettings settings = NetworkSettings.fromGenesisSettings(genesis, Network.TESTNET, "dev");
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(
+				databaseDirectory.resolve("empty-dev"))) {
+			WorldState state = storage.createEmpty(false);
+			initializer(storage).executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
+					Instant.ofEpochMilli(settings.genesisBlockTimestamp()), settings);
+
+			Hash root = storage.persist(state);
+			WorldState reloaded = storage.reload(root, false);
+
+			assertThat(reloaded.getParams().getVersion()).isEqualTo(NetworkParamsStateVersion.V2);
+			assertThat(reloaded.getParams().getCurrentValidatorCount()).isZero();
+			assertThat(reloaded.getParams().getCurrentUnlimitedValidatorCount()).isZero();
+			assertThat(reloaded.getParams().getLimitedValidatorMiningSharesBps()).isEmpty();
+			assertThat(reloaded.getMiningWindow().getOrderedValidatorIdentities()).isEmpty();
+		}
+	}
+
 	private void assertProductionGenesis(Network network, Hash expectedRoot) throws Exception {
 		GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, "prod");
 		NetworkSettings settings = NetworkSettings.fromGenesisSettings(genesis, network, "prod");
@@ -98,5 +121,38 @@ class GenesisMiningEconomicsCompatibilityTest {
 
 	private GenesisInitializer initializer(PersistentWorldStateTestSupport storage) {
 		return new GenesisInitializer(mock(ChainQuery.class), mock(BlockStateTransitions.class), storage.factory());
+	}
+
+	private GenesisSettings withoutValidators(GenesisSettings genesis) {
+		return new GenesisSettings(
+				genesis.maxHeaderSizeInBytes(),
+				genesis.maxTxSizeInBytes(),
+				genesis.maxBlockSizeInBytes(),
+				genesis.maxTxCountPerBlock(),
+				genesis.bipExpirationPeriodMs(),
+				genesis.bipApprovalThresholdBps(),
+				genesis.genesisNetworkBlockReward(),
+				genesis.genesisNetworkBlockRewardPoolAddress(),
+				genesis.genesisNetworkInitialMintForBlockReward(),
+				genesis.genesisNetworkTargetMiningTimeMs(),
+				genesis.genesisNetworkAsertHalfLifeBlocks(),
+				genesis.genesisNetworkMinDifficulty(),
+				genesis.genesisNetworkMinTxBaseFee(),
+				genesis.genesisNetworkMinTxByteFee(),
+				genesis.genesisNetworkValidatorMiningWindowBlocks(),
+				genesis.genesisAuthorityAddresses(),
+				genesis.genesisNetworkInitialMintForAuthority(),
+				List.of(),
+				genesis.genesisBlockTimestamp(),
+				genesis.genesisBlockDifficulty(),
+				genesis.genesisNativeTokenName(),
+				genesis.genesisNativeTokenTicker(),
+				genesis.genesisNativeTokenDecimals(),
+				genesis.genesisNativeTokenWebsite(),
+				genesis.genesisNativeTokenLogo(),
+				genesis.genesisNativeTokenUserBurnable(),
+				genesis.randomXEpochLength(),
+				genesis.randomXGenesisKey(),
+				genesis.randomXBatchSize());
 	}
 }

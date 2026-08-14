@@ -42,6 +42,7 @@ class MiningEconomicsPayloadMapperTest {
 	void mapsValidatorPolicyPayloadWithoutLosingVersionedFields() {
 		Address validator = Address.fromHexString("0x1111111111111111111111111111111111111111");
 		var payload = TxBipValidatorMiningPolicySetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
 				.validatorAddress(validator)
 				.miningLimitMode(MiningLimitMode.LIMITED)
 				.maxMiningShareBps(2_500)
@@ -53,6 +54,7 @@ class MiningEconomicsPayloadMapperTest {
 		assertThat(dto.getValidatorAddress()).isEqualTo(validator);
 		assertThat(dto.getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
 		assertThat(dto.getMaxMiningShareBps()).isEqualTo(2_500);
+		assertThat(dto.getPayloadVersion()).isEqualTo(TxPayloadVersion.V1);
 	}
 
 	@Test
@@ -66,5 +68,17 @@ class MiningEconomicsPayloadMapperTest {
 				(TxPayloadDtoV1.NetworkParamsSet) mapper.mapPayload(payload);
 
 		assertThat(dto.getValidatorMiningWindowBlocks()).isEqualTo(250);
+		assertThat(dto.getPayloadVersion()).isEqualTo(TxPayloadVersion.V2);
+	}
+
+	@Test
+	void exposesImplicitLegacyPayloadVersion() {
+		var payload = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.build();
+
+		TxPayloadDtoV1 dto = mapper.mapPayload(payload);
+
+		assertThat(dto.getPayloadVersion()).isEqualTo(TxPayloadVersion.V1);
 	}
 }

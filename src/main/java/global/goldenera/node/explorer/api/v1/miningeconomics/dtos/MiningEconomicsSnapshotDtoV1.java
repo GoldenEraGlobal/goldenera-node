@@ -21,24 +21,19 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.api.v1.equivocation;
+package global.goldenera.node.explorer.api.v1.miningeconomics.dtos;
 
 import java.time.Instant;
 import java.util.List;
 
-import org.apache.tuweni.bytes.Bytes;
-
-import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.datatypes.Signature;
+import global.goldenera.node.explorer.api.v1.networkparams.dtos.NetworkParamsDtoV1;
+import global.goldenera.node.explorer.api.v1.validator.dtos.ValidatorDtoV1;
 
-public record EquivocationEvidenceDtoV1(
-		long height,
-		Address identity,
-		List<SignedHeaderDtoV1> signedHeaders,
-		Instant firstSeenAt,
-		Instant lastSeenAt) {
-
-	public record SignedHeaderDtoV1(Hash blockHash, Signature signature, Bytes canonicalSignedHeader) {
-	}
+public record MiningEconomicsSnapshotDtoV1(
+		long headHeight,
+		Hash headHash,
+		Instant capturedAt,
+		NetworkParamsDtoV1 networkParams,
+		List<ValidatorDtoV1> validators) {
 }

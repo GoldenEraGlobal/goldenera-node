@@ -23,6 +23,8 @@
  */
 package global.goldenera.node.core.processing;
 
+import java.util.List;
+
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.MiningConsensusRules;
@@ -114,6 +116,19 @@ public class MiningEconomicsActivationService {
 		if (validatorCount < 0 || unlimitedCount < 0 || unlimitedCount > validatorCount
 				|| (validatorCount > 0 && unlimitedCount == 0)) {
 			throw new GEValidationException("Invalid unlimited validator counter in mining economics state");
+		}
+		List<Long> limitedShares = params.getLimitedValidatorMiningSharesBps();
+		if (limitedShares.size() != validatorCount - unlimitedCount) {
+			throw new GEValidationException("LIMITED validator policy summary is inconsistent");
+		}
+		long previousShare = -1;
+		for (long share : limitedShares) {
+			MiningConsensusRules.validateLimitedPolicyForWindow(
+					params.getValidatorMiningWindowBlocks(), share);
+			if (share < previousShare) {
+				throw new GEValidationException("LIMITED validator policy summary is not canonical");
+			}
+			previousShare = share;
 		}
 		MiningWindowState miningWindow = worldState.getMiningWindow();
 		MiningWindowStateValidation.validate(miningWindow);

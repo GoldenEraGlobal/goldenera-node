@@ -34,6 +34,8 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import global.goldenera.cryptoj.common.state.MiningWindowState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.ValidatorState;
@@ -41,7 +43,9 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.state.WorldState;
 import io.micrometer.core.instrument.Gauge;
@@ -55,6 +59,7 @@ import lombok.extern.slf4j.Slf4j;
 public class MiningEconomicsMetricsService {
 
 	private final ChainHeadStateCache chainHeadStateCache;
+	private final ChainQuery chainQuery;
 	private final ValidatorMiningPolicyService policyService;
 	private final AtomicLong activeUnlimited = new AtomicLong();
 	private final AtomicLong activeLimited = new AtomicLong();
@@ -64,9 +69,11 @@ public class MiningEconomicsMetricsService {
 	private final AtomicLong longestIdentityRun = new AtomicLong();
 	private final AtomicReference<Instant> lastBlockTimestamp = new AtomicReference<>();
 
+	@Autowired
 	public MiningEconomicsMetricsService(MeterRegistry registry, ChainHeadStateCache chainHeadStateCache,
-			ValidatorMiningPolicyService policyService) {
+			ChainQuery chainQuery, ValidatorMiningPolicyService policyService) {
 		this.chainHeadStateCache = chainHeadStateCache;
+		this.chainQuery = chainQuery;
 		this.policyService = policyService;
 		registry.gauge("blockchain.mining.active_validators", Tags.of("mode", "unlimited"), activeUnlimited);
 		registry.gauge("blockchain.mining.active_validators", Tags.of("mode", "limited"), activeLimited);
@@ -76,6 +83,24 @@ public class MiningEconomicsMetricsService {
 		registry.gauge("blockchain.mining.same_identity.longest_run", longestIdentityRun);
 		Gauge.builder("blockchain.mining.seconds_since_last_block", this,
 				MiningEconomicsMetricsService::secondsSinceLastBlock).register(registry);
+	}
+
+	/** Test-friendly constructor for direct refresh tests. */
+	public MiningEconomicsMetricsService(MeterRegistry registry, ChainHeadStateCache chainHeadStateCache,
+			ValidatorMiningPolicyService policyService) {
+		this(registry, chainHeadStateCache, null, policyService);
+	}
+
+	@EventListener
+	public void onCoreDbReady(CoreDbReadyEvent event) {
+		try {
+			if (chainQuery != null) {
+				lastBlockTimestamp.set(chainQuery.getLatestStoredBlockOrThrow().getBlock().getHeader().getTimestamp());
+			}
+			refresh(chainHeadStateCache.getHeadState());
+		} catch (Exception e) {
+			log.warn("Unable to initialize mining-economics metrics after core DB readiness: {}", e.getMessage());
+		}
 	}
 
 	@EventListener

@@ -35,6 +35,7 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.BipVoteType;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.TxPayloadType;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
 import io.swagger.v3.oas.annotations.media.DiscriminatorMapping;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
@@ -92,6 +93,9 @@ public abstract sealed class TxPayloadDtoV1 permits
         TxPayloadDtoV1.TokenMint,
         TxPayloadDtoV1.TokenUpdate,
         TxPayloadDtoV1.Vote {
+
+	@Schema(description = "Version of the concrete payload schema", requiredMode = Schema.RequiredMode.REQUIRED)
+	TxPayloadVersion payloadVersion;
 
     @Schema(description = "Payload type discriminator", requiredMode = Schema.RequiredMode.REQUIRED, type = "string", example = "BIP_ADDRESS_ALIAS_ADD")
     public abstract TxPayloadType getPayloadType();

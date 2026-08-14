@@ -40,9 +40,11 @@ import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache.HeadStateSnapshot;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.processing.ValidatorMiningViewService;
 import global.goldenera.node.core.state.WorldState;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.explorer.api.v1.validator.dtos.ValidatorDtoV1;
 import global.goldenera.node.explorer.entities.ExValidator;
 import global.goldenera.node.shared.enums.MiningPolicySource;
@@ -58,14 +60,17 @@ class ValidatorMapperCanonicalStateTest {
 		ValidatorStateImpl canonicalValidator = explicitLimited(4_000);
 		WorldState canonicalState = canonicalState(canonicalValidator, 40);
 		ChainHeadStateCache stateCache = mock(ChainHeadStateCache.class);
-		when(stateCache.getHeadState()).thenReturn(canonicalState);
+		when(stateCache.getHeadSnapshot()).thenReturn(
+				new HeadStateSnapshot(mock(StoredBlock.class), canonicalState));
 		ValidatorMapper mapper = new ValidatorMapper(
 				stateCache,
 				new ValidatorMiningViewService(new ValidatorMiningPolicyService()));
 
 		ValidatorDtoV1 dto = mapper.map(staleExplorerRow);
 
-		assertThat(dto.getMaxMiningShareBps()).isEqualTo(1_000);
+		assertThat(dto.getMaxMiningShareBps()).isEqualTo(4_000);
+		assertThat(dto.getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
+		assertThat(dto.getMiningPolicySource()).isEqualTo(MiningPolicySource.EXPLICIT);
 		assertThat(dto.getMaxBlocksInCurrentWindow()).isEqualTo(40);
 		assertThat(dto.getBlocksMinedInCurrentWindow()).isEqualTo(40);
 		assertThat(dto.getRemainingBlocksInCurrentWindow()).isZero();

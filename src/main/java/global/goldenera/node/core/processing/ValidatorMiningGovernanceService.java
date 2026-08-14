@@ -25,6 +25,10 @@ package global.goldenera.node.core.processing;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.MiningConsensusRules;
@@ -68,13 +72,17 @@ public class ValidatorMiningGovernanceService {
 		}
 
 		MiningConsensusRules.validatePolicy(payload.getMiningLimitMode(), payload.getMaxMiningShareBps());
+		validatePolicyForWindow(oldParams, payload.getMiningLimitMode(), payload.getMaxMiningShareBps());
 		long validatorCount = Math.addExact(oldParams.getCurrentValidatorCount(), 1);
 		long unlimitedCount = oldParams.getCurrentUnlimitedValidatorCount();
+		List<Long> limitedShares = new ArrayList<>(oldParams.getLimitedValidatorMiningSharesBps());
 		if (payload.getMiningLimitMode() == MiningLimitMode.UNLIMITED) {
 			unlimitedCount = Math.addExact(unlimitedCount, 1);
+		} else {
+			addLimitedShare(limitedShares, payload.getMaxMiningShareBps());
 		}
 		NetworkParamsStateImpl newParams = updatedCounts(
-				oldParams, validatorCount, unlimitedCount, bipHash, block);
+				oldParams, validatorCount, unlimitedCount, limitedShares, bipHash, block);
 		assertInvariant(newParams);
 
 		ValidatorStateImpl validator = ValidatorStateImpl.builder()
@@ -109,12 +117,16 @@ public class ValidatorMiningGovernanceService {
 		MiningLimitMode oldMode = resolveEffectiveMode(validator);
 		long validatorCount = Math.subtractExact(oldParams.getCurrentValidatorCount(), 1);
 		long unlimitedCount = oldParams.getCurrentUnlimitedValidatorCount();
+		List<Long> limitedShares = new ArrayList<>(oldParams.getLimitedValidatorMiningSharesBps());
 		if (oldMode == MiningLimitMode.UNLIMITED) {
-			checkArgument(unlimitedCount > 1, "Cannot remove the last unlimited validator");
+			checkArgument(validatorCount == 0 || unlimitedCount > 1,
+					"Cannot remove the last unlimited validator while validators remain");
 			unlimitedCount = Math.subtractExact(unlimitedCount, 1);
+		} else {
+			removeLimitedShare(limitedShares, validator.getMaxMiningShareBps());
 		}
 		NetworkParamsStateImpl newParams = updatedCounts(
-				oldParams, validatorCount, unlimitedCount, bipHash, block);
+				oldParams, validatorCount, unlimitedCount, limitedShares, bipHash, block);
 		assertInvariant(newParams);
 
 		state.removeValidator(payload.getAddress());
@@ -128,8 +140,16 @@ public class ValidatorMiningGovernanceService {
 		MiningConsensusRules.validatePolicy(payload.getMiningLimitMode(), payload.getMaxMiningShareBps());
 		MiningLimitMode oldMode = resolveEffectiveMode(oldValidator);
 		NetworkParamsStateImpl oldParams = requireParams(state, true);
+		validatePolicyForWindow(oldParams, payload.getMiningLimitMode(), payload.getMaxMiningShareBps());
 
 		long unlimitedCount = oldParams.getCurrentUnlimitedValidatorCount();
+		List<Long> limitedShares = new ArrayList<>(oldParams.getLimitedValidatorMiningSharesBps());
+		if (oldMode == MiningLimitMode.LIMITED) {
+			removeLimitedShare(limitedShares, oldValidator.getMaxMiningShareBps());
+		}
+		if (payload.getMiningLimitMode() == MiningLimitMode.LIMITED) {
+			addLimitedShare(limitedShares, payload.getMaxMiningShareBps());
+		}
 		boolean categoryChanged = oldMode != payload.getMiningLimitMode();
 		if (oldMode == MiningLimitMode.UNLIMITED && payload.getMiningLimitMode() == MiningLimitMode.LIMITED) {
 			checkArgument(unlimitedCount > 1, "Cannot limit the last unlimited validator");
@@ -139,8 +159,11 @@ public class ValidatorMiningGovernanceService {
 			unlimitedCount = Math.addExact(unlimitedCount, 1);
 		}
 		NetworkParamsStateImpl newParams = categoryChanged
-				? updatedCounts(oldParams, oldParams.getCurrentValidatorCount(), unlimitedCount, bipHash, block)
-				: oldParams;
+				? updatedCounts(oldParams, oldParams.getCurrentValidatorCount(), unlimitedCount, limitedShares, bipHash, block)
+				: oldParams.toBuilder()
+						.clearLimitedValidatorMiningSharesBps()
+						.limitedValidatorMiningSharesBps(limitedShares)
+						.build();
 		assertInvariant(newParams);
 
 		ValidatorStateImpl validator = ValidatorStateImpl.builder()
@@ -155,9 +178,7 @@ public class ValidatorMiningGovernanceService {
 				.policyUpdatedAtTimestamp(block.getTimestamp())
 				.build();
 		state.addValidator(payload.getValidatorAddress(), validator);
-		if (categoryChanged) {
-			state.setParams(newParams);
-		}
+		state.setParams(newParams);
 	}
 
 	public void setNetworkParams(WorldState state, TxBipNetworkParamsSetPayload payload, SimpleBlock block,
@@ -167,6 +188,9 @@ public class ValidatorMiningGovernanceService {
 		Long requestedWindow = payload.getValidatorMiningWindowBlocks();
 		if (requestedWindow != null) {
 			MiningConsensusRules.validateWindowSize(requestedWindow);
+			for (long bps : oldParams.getLimitedValidatorMiningSharesBps()) {
+				MiningConsensusRules.validateLimitedPolicyForWindow(requestedWindow, bps);
+			}
 		}
 
 		NetworkParamsStateImpl newParams = oldParams.updateParams(
@@ -205,6 +229,15 @@ public class ValidatorMiningGovernanceService {
 				"Unlimited validator counter is inconsistent");
 		checkArgument(validatorCount == 0 || unlimitedCount >= 1,
 				"A non-empty validator set requires an unlimited validator");
+		List<Long> limitedShares = params.getLimitedValidatorMiningSharesBps();
+		checkArgument(limitedShares.size() == validatorCount - unlimitedCount,
+				"LIMITED validator policy summary is inconsistent");
+		long previous = 0;
+		for (long bps : limitedShares) {
+			MiningConsensusRules.validateLimitedPolicyForWindow(params.getValidatorMiningWindowBlocks(), bps);
+			checkArgument(bps >= previous, "LIMITED validator policy summary must be sorted");
+			previous = bps;
+		}
 	}
 
 	private NetworkParamsStateImpl requireParams(WorldState state, boolean forkActive) {
@@ -222,13 +255,32 @@ public class ValidatorMiningGovernanceService {
 	}
 
 	private NetworkParamsStateImpl updatedCounts(NetworkParamsStateImpl oldParams, long validatorCount,
-			long unlimitedCount, Hash bipHash, SimpleBlock block) {
+			long unlimitedCount, List<Long> limitedShares, Hash bipHash, SimpleBlock block) {
 		return oldParams.toBuilder()
 				.currentValidatorCount(validatorCount)
 				.currentUnlimitedValidatorCount(unlimitedCount)
+				.clearLimitedValidatorMiningSharesBps()
+				.limitedValidatorMiningSharesBps(limitedShares)
 				.updatedByTxHash(bipHash)
 				.updatedAtBlockHeight(block.getHeight())
 				.updatedAtTimestamp(block.getTimestamp())
 				.build();
+	}
+
+	private void validatePolicyForWindow(NetworkParamsState params, MiningLimitMode mode, long bps) {
+		if (mode == MiningLimitMode.LIMITED) {
+			MiningConsensusRules.validateLimitedPolicyForWindow(params.getValidatorMiningWindowBlocks(), bps);
+		}
+	}
+
+	private void addLimitedShare(List<Long> limitedShares, long bps) {
+		int index = Collections.binarySearch(limitedShares, bps);
+		limitedShares.add(index < 0 ? -index - 1 : index, bps);
+	}
+
+	private void removeLimitedShare(List<Long> limitedShares, long bps) {
+		int index = Collections.binarySearch(limitedShares, bps);
+		checkArgument(index >= 0, "LIMITED validator policy summary is inconsistent");
+		limitedShares.remove(index);
 	}
 }

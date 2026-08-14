@@ -38,7 +38,7 @@ import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.CoreApiSecurity;
 import lombok.RequiredArgsConstructor;
 
-@RestController
+@RestController("coreEquivocationApiV1")
 @RequiredArgsConstructor
 @RequestMapping("/api/core/v1/equivocation")
 public class EquivocationApiV1 {

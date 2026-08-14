@@ -31,6 +31,7 @@ import static org.mockito.Mockito.mock;
 import java.math.BigInteger;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.List;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -72,9 +73,9 @@ class MiningEconomicsConsensusIntegrationTest {
 			+ "eed694111111111111111111111111111111111111111102"
 			+ "d6942222222222222222222222222222222222222222010c";
 	private static final String NODE_STATE_ROOT_VECTOR =
-			"0x0e82710a9d8d11aba039bde33320d0f6ca1cbf3c632cc204e8ee6adf016bc36d";
+			"0x23fa23c1a14924f0c88a843f6cafefdff579c6a88193f1f5189270c8e1e88f25";
 	private static final String NODE_STATE_ROOT_AFTER_APPEND_VECTOR =
-			"0x3f0b70c06f3f4569caf77c150cdc01ca7bd6cd1dc242e89f591630e6ad755c00";
+			"0xd33bc3b39ad5255eed38d3e96125ada2ef5dec35803cfda290d5acf106de81d1";
 
 	@TempDir
 	Path databaseDirectory;
@@ -295,6 +296,8 @@ class MiningEconomicsConsensusIntegrationTest {
 				.updatedAtTimestamp(TIME);
 		if (version == NetworkParamsStateVersion.V2) {
 			builder.currentUnlimitedValidatorCount(unlimitedCount)
+					.limitedValidatorMiningSharesBps(Collections.nCopies(
+							Math.toIntExact(validatorCount - unlimitedCount), 4_000L))
 					.validatorMiningWindowBlocks(window);
 		}
 		return builder.build();
