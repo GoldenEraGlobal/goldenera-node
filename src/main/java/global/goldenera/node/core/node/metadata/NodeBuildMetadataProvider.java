@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
@@ -43,6 +44,7 @@ public final class NodeBuildMetadataProvider {
 
 	private final NodeBuildMetadata metadata;
 
+	@Autowired
 	public NodeBuildMetadataProvider(Environment environment) {
 		this(loadVersionProperties(), environment);
 	}

@@ -29,9 +29,20 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.Properties;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.mock.env.MockEnvironment;
 
 class NodeBuildMetadataProviderTest {
+
+	@Test
+	void springSelectsTheEnvironmentConstructor() {
+		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+			context.register(NodeBuildMetadataProvider.class);
+			context.refresh();
+
+			assertThat(context.getBean(NodeBuildMetadataProvider.class).metadata()).isNotNull();
+		}
+	}
 
 	@Test
 	void developmentMetadataMayExplicitlyReportUnknown() {
