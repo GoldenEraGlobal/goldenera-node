@@ -1,0 +1,65 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.core.node.metadata;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.Optional;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
+
+import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
+import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
+import global.goldenera.node.shared.properties.GeneralProperties;
+
+class NodeOpenApiGroupsProviderTest {
+
+	@Test
+	void coreOnlyReportsOnlyStableCoreGroupUrl() {
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(false);
+		NodeOpenApiGroupsProvider provider = new NodeOpenApiGroupsProvider(
+				properties,
+				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.MAINNET, Optional.empty()),
+				new MockEnvironment());
+
+		assertThat(provider.groups()).containsExactly(
+				new NodeOpenApiGroup("CORE API", "/v3/api-docs/CORE%20API"));
+	}
+
+	@Test
+	void explorerGroupsAreStableAndSorted() {
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		NodeOpenApiGroupsProvider provider = new NodeOpenApiGroupsProvider(
+				properties,
+				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.MAINNET, Optional.empty()),
+				new MockEnvironment());
+
+		assertThat(provider.groups()).extracting(NodeOpenApiGroup::id)
+				.containsExactly("CORE API", "Explorer API", "Node Admin API", "Shared API");
+	}
+}

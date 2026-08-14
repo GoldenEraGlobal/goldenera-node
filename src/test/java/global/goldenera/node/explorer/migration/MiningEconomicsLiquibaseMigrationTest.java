@@ -71,7 +71,7 @@ class MiningEconomicsLiquibaseMigrationTest {
 			assertLegacyRowsRemainNullable(connection);
 		}
 
-		rollbackLastTwoChangesets();
+		rollbackMiningEconomicsChangesets();
 
 		try (Connection connection = openConnection()) {
 			assertMiningEconomicsColumns(connection, false);
@@ -99,13 +99,15 @@ class MiningEconomicsLiquibaseMigrationTest {
 		}
 	}
 
-	private void rollbackLastTwoChangesets() throws Exception {
+	private void rollbackMiningEconomicsChangesets() throws Exception {
 		Connection connection = openConnection();
 		Database database = DatabaseFactory.getInstance()
 				.findCorrectDatabaseImplementation(new JdbcConnection(connection));
 		try (ClassLoaderResourceAccessor resources = new ClassLoaderResourceAccessor();
 				Liquibase liquibase = new Liquibase(MASTER_CHANGELOG, resources, database)) {
-			liquibase.rollback(2, new Contexts(), new LabelExpression());
+			// Roll back the chain-identity table plus the two mining-economics
+			// changesets that this compatibility test is asserting.
+			liquibase.rollback(3, new Contexts(), new LabelExpression());
 		}
 	}
 

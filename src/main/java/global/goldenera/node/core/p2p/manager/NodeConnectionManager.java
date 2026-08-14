@@ -34,6 +34,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -48,7 +49,6 @@ import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.p2p.services.DirectoryService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
-import jakarta.annotation.PostConstruct;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -71,6 +71,7 @@ public class NodeConnectionManager {
 
 	AtomicInteger connectedPeersGauge = new AtomicInteger(0);
 	AtomicInteger bannedPeersGauge = new AtomicInteger(0);
+	AtomicBoolean started = new AtomicBoolean();
 
 	IdentityService identityService;
 
@@ -89,8 +90,10 @@ public class NodeConnectionManager {
 		registry.gauge("p2p.peers.count", Tags.of("state", "banned"), bannedPeersGauge);
 	}
 
-	@PostConstruct
-	public void init() {
+	public boolean start() {
+		if (!started.compareAndSet(false, true)) {
+			return false;
+		}
 		// Schedule heartbeat loop every 10s
 		coreScheduler.scheduleAtFixedRate(this::heartbeatLoop, Duration.ofMillis(10000));
 		// Schedule maintenance loop every 30s
@@ -98,6 +101,11 @@ public class NodeConnectionManager {
 		log.info("NodeConnectionManager: Scheduled heartbeatLoop (10s) and maintenanceLoop (30s) on coreTaskScheduler");
 		// Run maintenance immediately on startup
 		maintenanceLoop();
+		return true;
+	}
+
+	public boolean isStarted() {
+		return started.get();
 	}
 
 	/**

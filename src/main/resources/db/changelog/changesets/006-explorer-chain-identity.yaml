@@ -1,0 +1,65 @@
+databaseChangeLog:
+  - changeSet:
+      id: 006-explorer-chain-identity
+      author: goldenera
+      changes:
+        - createTable:
+            tableName: explorer_chain_identity
+            columns:
+              - column:
+                  name: id
+                  type: SMALLINT
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: explorer_chain_identity_pk
+                    nullable: false
+              - column:
+                  name: format_version
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: carrier_network_code
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: chain_id
+                  type: VARCHAR(128)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: genesis_hash
+                  type: VARCHAR(66)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: manifest_fingerprint
+                  type: VARCHAR(64)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  defaultValueComputed: CURRENT_TIMESTAMP
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_single_row_ck CHECK (id = 1)
+        - sql:
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_format_ck CHECK (format_version = 1)
+        - sql:
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_carrier_ck CHECK (carrier_network_code BETWEEN 0 AND 255)
+        - sql:
+            dbms: postgresql
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_genesis_hash_ck CHECK (genesis_hash ~ '^0x[0-9a-f]{64}$')
+        - sql:
+            dbms: postgresql
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_manifest_fingerprint_ck CHECK (manifest_fingerprint IS NULL OR manifest_fingerprint ~ '^[0-9a-f]{64}$')
+        - sql:
+            dbms: h2
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_genesis_hash_ck CHECK (REGEXP_LIKE(genesis_hash, '^0x[0-9a-f]{64}$'))
+        - sql:
+            dbms: h2
+            sql: ALTER TABLE explorer_chain_identity ADD CONSTRAINT explorer_chain_identity_manifest_fingerprint_ck CHECK (manifest_fingerprint IS NULL OR REGEXP_LIKE(manifest_fingerprint, '^[0-9a-f]{64}$'))
+      rollback:
+        - dropTable:
+            tableName: explorer_chain_identity

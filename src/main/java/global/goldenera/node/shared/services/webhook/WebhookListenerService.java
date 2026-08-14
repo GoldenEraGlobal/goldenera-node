@@ -29,6 +29,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.util.concurrent.Executor;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
@@ -41,6 +42,7 @@ import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
 import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
 import global.goldenera.node.explorer.events.ExBlockReorgEvent;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
 import lombok.experimental.FieldDefaults;
@@ -58,12 +60,23 @@ import lombok.extern.slf4j.Slf4j;
 public class WebhookListenerService {
 
 	WebhookDispatchService webhookDispatchService;
-	Executor webhookEventExecutor;
+	ExplorerRuntimeReadiness explorerReadiness;
+	ObjectFactory<Executor> webhookEventExecutor;
 
-	public WebhookListenerService(WebhookDispatchService webhookDispatchService,
-			@Qualifier(WEBHOOK_EVENT_EXECUTOR) Executor webhookEventExecutor) {
+	public WebhookListenerService(
+			WebhookDispatchService webhookDispatchService,
+			ExplorerRuntimeReadiness explorerReadiness,
+			@Qualifier(WEBHOOK_EVENT_EXECUTOR) ObjectFactory<Executor> webhookEventExecutor) {
 		this.webhookDispatchService = webhookDispatchService;
+		this.explorerReadiness = explorerReadiness;
 		this.webhookEventExecutor = webhookEventExecutor;
+	}
+
+	WebhookListenerService(
+			WebhookDispatchService webhookDispatchService,
+			ExplorerRuntimeReadiness explorerReadiness,
+			Executor webhookEventExecutor) {
+		this(webhookDispatchService, explorerReadiness, () -> webhookEventExecutor);
 	}
 
 	// ==================== BLOCKCHAIN EVENTS ====================
@@ -192,7 +205,13 @@ public class WebhookListenerService {
 	}
 
 	private void submitWebhookEvent(String eventType, Runnable action) {
-		webhookEventExecutor.execute(() -> {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
+		webhookEventExecutor.getObject().execute(() -> {
+			if (!explorerReadiness.isReady()) {
+				return;
+			}
 			try {
 				action.run();
 			} catch (RuntimeException exception) {

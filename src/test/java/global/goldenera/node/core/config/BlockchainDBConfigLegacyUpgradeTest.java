@@ -25,6 +25,7 @@ package global.goldenera.node.core.config;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -41,6 +42,8 @@ import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 
 import global.goldenera.node.core.properties.BlockchainDbProperties;
+import global.goldenera.node.core.storage.chainidentity.ChainIdentityBootstrapCoordinator;
+import global.goldenera.node.core.storage.chainidentity.ChainIdentityPathPreflight;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
 
 class BlockchainDBConfigLegacyUpgradeTest {
@@ -108,7 +111,9 @@ class BlockchainDBConfigLegacyUpgradeTest {
 		BlockchainDBConfig config = new BlockchainDBConfig(properties);
 		RocksDbColumnFamilies families = config.rocksDbColumnFamilies();
 
-		try (RocksDB database = config.blockchainDB(families)) {
+		ChainIdentityPathPreflight completedPreflight =
+				new ChainIdentityPathPreflight(mock(ChainIdentityBootstrapCoordinator.class));
+		try (RocksDB database = config.blockchainDB(families, completedPreflight)) {
 			assertThat(database.get(families.metadata(), LEGACY_KEY)).isEqualTo(LEGACY_VALUE);
 			assertThat(database.get(families.equivocations(), LEGACY_KEY)).isNull();
 		} finally {

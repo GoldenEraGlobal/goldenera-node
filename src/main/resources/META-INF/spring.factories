@@ -1,0 +1,5 @@
+org.springframework.context.ApplicationContextInitializer=\
+global.goldenera.node.core.sandbox.runtime.SandboxActivationInitializer
+
+org.springframework.boot.env.EnvironmentPostProcessor=\
+global.goldenera.node.config.CoreOnlyPersistenceEnvironmentPostProcessor

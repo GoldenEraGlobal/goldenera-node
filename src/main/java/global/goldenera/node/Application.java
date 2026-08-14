@@ -28,27 +28,20 @@ import java.security.Security;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-
-import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 
 @SpringBootApplication
-@Configuration
-@EnableJpaRepositories(value = {
-        "global.goldenera.node.explorer.repositories",
-        "global.goldenera.node.shared.repositories",
-        "global.goldenera.node.core.webhook.repositories",
-}, repositoryBaseClass = BaseJpaRepositoryImpl.class)
-@EntityScan(basePackages = {
-        "global.goldenera.node.explorer.entities",
-        "global.goldenera.node.explorer.converters",
-        "global.goldenera.node.shared.converters",
-        "global.goldenera.node.shared.entities",
-        "global.goldenera.node.core.webhook.entities",
-        "global.goldenera.node.core.webhook.converters"
-})
+@ComponentScan(excludeFilters = @ComponentScan.Filter(
+        type = FilterType.REGEX,
+        pattern = {
+                "global\\.goldenera\\.node\\.explorer\\..*",
+                "global\\.goldenera\\.node\\.admin\\..*",
+                "global\\.goldenera\\.node\\.shared\\.services\\.core\\..*",
+                "global\\.goldenera\\.node\\.shared\\.services\\.webhook\\..*",
+                "global\\.goldenera\\.node\\.shared\\.api\\.v1\\.webhook\\..*",
+                "global\\.goldenera\\.node\\.shared\\.config\\.Webhook.*"
+        }))
 public class Application {
 
     static {

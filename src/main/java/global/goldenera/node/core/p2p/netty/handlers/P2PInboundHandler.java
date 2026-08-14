@@ -27,7 +27,6 @@ import static global.goldenera.node.core.config.CoreAsyncConfig.P2P_RECEIVE_EXEC
 import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
@@ -40,6 +39,8 @@ import org.springframework.stereotype.Component;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy;
+import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Validation;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesRequestedEvent;
 import global.goldenera.node.core.p2p.events.P2PBlockReceivedEvent;
@@ -103,14 +104,19 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	final PeerRegistry peerRegistry;
 	final PeerReputationService reputationService;
 	final P2PValidation p2pValidation;
+	final P2PChainIdentityPolicy chainIdentityPolicy;
 	final Bucket rateLimitBucket;
 	RemotePeer peer;
+	volatile HandshakeState handshakeState = HandshakeState.AWAITING_STATUS;
+	volatile Validation acceptedChainIdentity;
+	volatile long acceptedProtocolVersion;
 
 	public P2PInboundHandler(ApplicationEventPublisher applicationEventPublisher, PeerRegistry peerRegistry,
 			PeerReputationService reputationService,
 			GeneralProperties generalProperties, IdentityService identityService,
 			ChainQuery chainQueryService, @Qualifier(P2P_RECEIVE_EXECUTOR) Executor p2pReceiveExecutor,
-			P2PValidation p2pValidation, MeterRegistry registry, ThrottlingProperties throttlingProperties) {
+			P2PValidation p2pValidation, P2PChainIdentityPolicy chainIdentityPolicy,
+			MeterRegistry registry, ThrottlingProperties throttlingProperties) {
 		this.applicationEventPublisher = applicationEventPublisher;
 		this.peerRegistry = peerRegistry;
 		this.reputationService = reputationService;
@@ -120,6 +126,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		this.p2pReceiveExecutor = p2pReceiveExecutor;
 		this.registry = registry;
 		this.p2pValidation = p2pValidation;
+		this.chainIdentityPolicy = chainIdentityPolicy;
 
 		this.rateLimitBucket = Bucket.builder()
 				.addLimit(limit -> limit.capacity(throttlingProperties.getP2pCapacity())
@@ -138,30 +145,34 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 
 	@Override
 	public void channelInactive(ChannelHandlerContext ctx) {
+		handshakeState = HandshakeState.REJECTED;
 		peerRegistry.unregister(ctx.channel());
 	}
 
 	@Override
 	public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
 		log.error("Netty Handler Exception for {}: {}", ctx.channel().remoteAddress(), cause.getMessage());
-		if (peer != null && peer.getIdentity() != null) {
-			reputationService.recordFailure(peer.getIdentity());
-		}
-		ctx.close();
+		rejectProtocol(ctx, cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage());
 	}
 
 	@Override
 	protected void channelRead0(ChannelHandlerContext ctx, P2PEnvelope envelope) {
 		if (!rateLimitBucket.tryConsume(1)) {
 			log.warn("Peer {} exceeded rate limit. Closing connection.", getPeerLogInfo());
-			if (peer.getIdentity() != null) {
-				reputationService.recordFailure(peer.getIdentity());
-			}
-			ctx.close();
+			rejectProtocol(ctx, "P2P rate limit exceeded");
 			return;
 		}
 
 		registry.counter("p2p.messages.in", "type", envelope.getMessageType().name()).increment();
+		if (envelope.getMessageType() == P2PMessageType.STATUS) {
+			handleStatusSerially(ctx, envelope);
+			return;
+		}
+		if (requiresCompletedHandshake(envelope.getMessageType())
+				&& handshakeState != HandshakeState.COMPLETED) {
+			rejectProtocol(ctx, "Received " + envelope.getMessageType() + " before a valid STATUS handshake");
+			return;
+		}
 		try {
 			Timer.Sample sample = Timer.start(registry);
 			p2pReceiveExecutor.execute(() -> {
@@ -174,29 +185,24 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		} catch (RejectedExecutionException re) {
 			log.warn("Node Overloaded: Dropping message from {} (Queue full)", getPeerLogInfo());
 		} catch (Exception e) {
-			boolean logAsError = true;
-			if (peer.getIdentity() != null) {
-				if (reputationService.isBanned(peer.getIdentity())) {
-					logAsError = false;
-				} else {
-					reputationService.recordFailure(peer.getIdentity());
-				}
-			}
-
-			if (e.getMessage().toUpperCase().contains("BANNED")) {
-				logAsError = false;
-			}
-
-			if (logAsError) {
-				log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
-			} else {
-				log.debug("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
-			}
-			ctx.close();
+			String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+			log.error("Protocol Error from {}: {}", getPeerLogInfo(), message);
+			rejectProtocol(ctx, message);
 		}
 	}
 
 	public void processData(ChannelHandlerContext ctx, P2PEnvelope envelope) {
+		if (envelope.getMessageType() == P2PMessageType.STATUS) {
+			rejectProtocol(ctx, "STATUS must be handled serially on the channel event loop");
+			return;
+		}
+		if (requiresCompletedHandshake(envelope.getMessageType())
+				&& handshakeState != HandshakeState.COMPLETED) {
+			if (handshakeState != HandshakeState.REJECTED) {
+				rejectProtocol(ctx, "Queued P2P traffic no longer has a valid handshake");
+			}
+			return;
+		}
 		try {
 			P2PMessageType messageType = envelope.getMessageType();
 			switch (messageType) {
@@ -204,13 +210,10 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					peer.sendPong(createCurrentStatus());
 					break;
 				case PONG:
-					peer.updateLatency();
-					if (envelope.getPayload() instanceof P2PStatusDto) {
-						handlePongStatusUpdate((P2PStatusDto) envelope.getPayload());
+					if (!(envelope.getPayload() instanceof P2PStatusDto status)) {
+						throw new GEFailedException("PONG status payload is required");
 					}
-					break;
-				case STATUS:
-					handleStatus((P2PStatusDto) envelope.getPayload(), envelope.getRequestId());
+					handlePongStatusUpdate(status);
 					break;
 				case NEW_BLOCK:
 					P2PBlockDto blockDto = (P2PBlockDto) envelope.getPayload();
@@ -298,27 +301,18 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 			}
 		} catch (ClassCastException cce) {
 			log.error("Payload type mismatch for message {}: {}", envelope.getMessageType(), cce.getMessage());
-			reputationService.recordFailure(peer.getIdentity());
+			rejectProtocol(ctx, "Payload type mismatch for " + envelope.getMessageType());
 		} catch (Exception e) {
-			boolean logAsError = true;
-			if (peer.getIdentity() != null) {
-				if (reputationService.isBanned(peer.getIdentity())) {
-					logAsError = false;
-				} else {
-					reputationService.recordFailure(peer.getIdentity());
-				}
-			}
-
-			if (e.getMessage().toUpperCase().contains("BANNED")) {
-				logAsError = false;
-			}
-
+			String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+			boolean logAsError = peer.getIdentity() == null
+					|| !reputationService.isBanned(peer.getIdentity())
+					&& !message.toUpperCase().contains("BANNED");
 			if (logAsError) {
-				log.error("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
+				log.error("Protocol Error from {}: {}", getPeerLogInfo(), message);
 			} else {
-				log.debug("Protocol Error from {}: {}", getPeerLogInfo(), e.getMessage());
+				log.debug("Protocol Error from {}: {}", getPeerLogInfo(), message);
 			}
-			ctx.close();
+			rejectProtocol(ctx, message);
 		}
 	}
 
@@ -331,13 +325,30 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 				.cumulativeDifficulty(latestBlock.getCumulativeDifficulty())
 				.bestBlockHeader(latestBlock.getBlock().getHeader())
 				.nodeIdentity(identityService.getNodeIdentityAddress())
-				.capabilities(new ArrayList<>())
+				.capabilities(chainIdentityPolicy.localCapabilities())
 				.build();
+	}
+
+	private void handleStatusSerially(ChannelHandlerContext ctx, P2PEnvelope envelope) {
+		if (handshakeState != HandshakeState.AWAITING_STATUS) {
+			rejectProtocol(ctx, "Repeated STATUS handshake");
+			return;
+		}
+		handshakeState = HandshakeState.VALIDATING;
+		try {
+			if (!(envelope.getPayload() instanceof P2PStatusDto status)) {
+				throw new GEFailedException("STATUS payload is required");
+			}
+			handleStatus(status, envelope.getRequestId());
+		} catch (Exception e) {
+			String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+			log.warn("Rejected STATUS from {}: {}", getPeerLogInfo(), message);
+			rejectProtocol(ctx, message);
+		}
 	}
 
 	private void handleStatus(P2PStatusDto status, long requestId) {
 		if (status.getNetwork() != generalProperties.getNetwork()) {
-			reputationService.ban(status.getNodeIdentity());
 			throw new GEFailedException("Wrong Network: " + status.getNetwork());
 		}
 		if (status.getProtocolVersion() < MIN_SUPPORTED_PROTOCOL_VERSION) {
@@ -346,17 +357,30 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		if (reputationService.isBanned(status.getNodeIdentity())) {
 			throw new GEFailedException("Peer is BANNED locally");
 		}
+		Validation validatedChainIdentity = chainIdentityPolicy.validate(status);
+		acceptedChainIdentity = validatedChainIdentity;
+		acceptedProtocolVersion = status.getProtocolVersion();
 		log.info("Handshake Success with {}: Identity={}", peer.getChannel().remoteAddress(), status.getNodeIdentity());
 		reputationService.recordSuccess(status.getNodeIdentity());
 		updatePeerState(status);
 		peerRegistry.updateIdentity(peer.getChannel(), status.getNodeIdentity());
+		handshakeState = HandshakeState.COMPLETED;
 		applicationEventPublisher
 				.publishEvent(new P2PHandshakeCompletedEvent(this, requestId, peer, status));
 	}
 
 	private void handlePongStatusUpdate(P2PStatusDto status) {
+		Validation pongChainIdentity = chainIdentityPolicy.validate(status);
+		if (status.getNetwork() != generalProperties.getNetwork()
+				|| status.getProtocolVersion() != acceptedProtocolVersion
+				|| peer.getIdentity() == null
+				|| !peer.getIdentity().equals(status.getNodeIdentity())
+				|| !pongChainIdentity.equals(acceptedChainIdentity)) {
+			throw new GEFailedException("PONG status identity drift");
+		}
+		peer.updateLatency();
 		if (status.getCumulativeDifficulty().compareTo(peer.getTotalDifficulty()) > 0) {
-			updatePeerState(status);
+			updatePeerHeadState(status);
 		}
 	}
 
@@ -368,8 +392,37 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		peer.setHeadHeight(status.getBestBlockHeader().getHeight());
 	}
 
+	private void updatePeerHeadState(P2PStatusDto status) {
+		peer.setTotalDifficulty(status.getCumulativeDifficulty());
+		peer.setHeadHash(status.getBestBlockHeader().getHash());
+		peer.setHeadHeight(status.getBestBlockHeader().getHeight());
+	}
+
+	private boolean requiresCompletedHandshake(P2PMessageType messageType) {
+		return messageType != P2PMessageType.STATUS;
+	}
+
+	private void rejectProtocol(ChannelHandlerContext ctx, String reason) {
+		handshakeState = HandshakeState.REJECTED;
+		if (peer != null && peer.getIdentity() != null) {
+			reputationService.recordFailure(peer.getIdentity());
+		}
+		log.debug("Closing peer {}: {}", getPeerLogInfo(), reason);
+		ctx.close();
+	}
+
 	private String getPeerLogInfo() {
+		if (peer == null) {
+			return "unregistered-peer";
+		}
 		return peer.getIdentity() != null ? peer.getIdentity().toChecksumAddress()
-				: peer.getChannel().remoteAddress().toString();
+				: String.valueOf(peer.getChannel().remoteAddress());
+	}
+
+	private enum HandshakeState {
+		AWAITING_STATUS,
+		VALIDATING,
+		COMPLETED,
+		REJECTED
 	}
 }

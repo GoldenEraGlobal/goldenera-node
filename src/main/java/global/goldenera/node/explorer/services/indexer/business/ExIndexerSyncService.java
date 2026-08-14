@@ -25,20 +25,17 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import java.util.Optional;
 
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
-import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.explorer.entities.ExBlockHeader;
 import global.goldenera.node.explorer.entities.ExStatus;
 import global.goldenera.node.explorer.repositories.ExBlockHeaderRepository;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
-import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -50,7 +47,6 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExIndexerSyncService {
 
-	GeneralProperties generalProperties;
 	ExBlockHeaderRepository exBlockHeaderRepository;
 	ExIndexerStatusCoreService exStatusCoreService;
 	ExIndexerQueueService exQueueService;
@@ -59,13 +55,8 @@ public class ExIndexerSyncService {
 	ChainQuery chainQuery;
 	ExIndexerEventReconstructionService eventReconstructionService;
 
-	@EventListener(CoreDbReadyEvent.class)
 	@Transactional(rollbackFor = Exception.class)
 	public void syncExplorerOnStartup() {
-		if (!generalProperties.isExplorerEnable()) {
-			log.info("Explorer is disabled. Skipping sync.");
-			return;
-		}
 		log.info("Checking Explorer synchronization status...");
 		long explorerHeight = validateAndRepairStatus();
 

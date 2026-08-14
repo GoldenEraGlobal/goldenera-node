@@ -28,24 +28,28 @@ import static lombok.AccessLevel.PRIVATE;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.EnumSet;
-import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
+import java.util.function.LongFunction;
+import java.util.function.Supplier;
 
 import org.apache.tuweni.bytes.Bytes;
-import org.springframework.stereotype.Service;
-
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.Constants;
+import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.properties.MiningProperties;
+import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
+import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.randomx.RandomXCache;
 import global.goldenera.randomx.RandomXDataset;
 import global.goldenera.randomx.RandomXFlag;
@@ -58,497 +62,503 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Manages RandomX memory and VM lifecycle with thread-safe access.
- * Handles Huge Pages allocation, Fallbacks, and Epoch switching without
- * crashes.
+ * Manages RandomX epoch resources and hands callers idempotent VM leases.
+ * Native cache/dataset memory is retired on an epoch switch and is released
+ * only after the last VM backed by that exact resource has closed.
  */
-@Service
 @Slf4j
 @FieldDefaults(level = PRIVATE)
 public class RandomXManager {
 
-	final ReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
-	final AtomicInteger activeVMs = new AtomicInteger(0);
-	final MiningProperties miningProperties;
-	final ChainQuery chainQuery;
-
-	Set<RandomXFlag> flags;
-
-	// Volatile for double-checked locking, but main access is guarded by locks
-	volatile RandomXDataset miningDataset;
-	volatile RandomXCache verificationCache;
-	volatile byte[] currentSeed;
-
-	volatile boolean isShutdown = false;
-	@Getter
-	private boolean isShuttingDown = false;
-
-	final AtomicBoolean initializationInProgress = new AtomicBoolean(false);
-
-	// Cache for temporary VMs during sync (key = seed bytes as hex string)
-	final Map<Bytes, CachedRandomXVM> epochVMCache = new ConcurrentHashMap<>();
 	private static final int MAX_CACHED_EPOCHS = 3;
 
-	private static class CachedRandomXVM {
-		final RandomXCache cache;
-		final Set<RandomXFlag> flags;
-		final Bytes seed;
-		volatile long lastUsed;
+	final ReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
+	final Object epochCacheLock = new Object();
+	final AtomicInteger activeVMs = new AtomicInteger();
+	final AtomicBoolean initializationInProgress = new AtomicBoolean();
+	final MiningProperties miningProperties;
+	final ChainQuery chainQuery;
+	final SandboxRuntimeContext runtimeContext;
+	final RandomXResourceFactory resourceFactory;
+	final LongFunction<byte[]> testSeedResolver;
+	final Supplier<NetworkSettings> networkSettingsSupplier;
+	final Set<RandomXFlag> recommendedFlags;
+	final Map<Bytes, EpochResources> epochResources = new LinkedHashMap<>(4, 0.75f, true);
 
-		CachedRandomXVM(RandomXCache cache, Set<RandomXFlag> flags, Bytes seed) {
-			this.cache = cache;
-			this.flags = flags;
-			this.seed = seed;
-			this.lastUsed = System.currentTimeMillis();
-		}
+	volatile EpochResources currentResources;
+	volatile byte[] currentSeed;
+	volatile boolean isShutdown;
 
-		void close() {
-			if (cache != null) {
-				try {
-					cache.close();
-				} catch (Exception e) {
-					// ignore
-				}
-			}
+	@Getter
+	volatile boolean isShuttingDown;
+
+	public RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
+			SandboxRuntimeContext runtimeContext) {
+		this(miningProperties, chainQuery, runtimeContext, new NativeRandomXResourceFactory(), null, null,
+				Constants::getSettings);
+	}
+
+	RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
+			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
+			LongFunction<byte[]> testSeedResolver) {
+		this(miningProperties, chainQuery, runtimeContext, resourceFactory, testSeedResolver,
+				Set.of(RandomXFlag.DEFAULT), Constants::getSettings);
+	}
+
+	RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
+			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
+			Supplier<NetworkSettings> networkSettingsSupplier) {
+		this(miningProperties, chainQuery, runtimeContext, resourceFactory, null,
+				Set.of(RandomXFlag.DEFAULT), networkSettingsSupplier);
+	}
+
+	private RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
+			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
+			LongFunction<byte[]> testSeedResolver, Set<RandomXFlag> recommendedFlags,
+			Supplier<NetworkSettings> networkSettingsSupplier) {
+		this.miningProperties = Objects.requireNonNull(miningProperties, "miningProperties");
+		this.chainQuery = Objects.requireNonNull(chainQuery, "chainQuery");
+		this.runtimeContext = Objects.requireNonNull(runtimeContext, "runtimeContext");
+		this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
+		this.testSeedResolver = testSeedResolver;
+		this.networkSettingsSupplier = Objects.requireNonNull(networkSettingsSupplier, "networkSettingsSupplier");
+		validateActivation();
+		this.recommendedFlags = immutableFlags(recommendedFlags == null ? loadRecommendedFlags() : recommendedFlags);
+		log.info("RandomX configured for {} mining memory", miningProperties.getMemoryMode());
+	}
+
+	private void validateActivation() {
+		RandomXMiningMemoryMode memoryMode = Objects.requireNonNull(miningProperties.getMemoryMode(),
+				"ge.core.mining.memory-mode");
+		if (memoryMode == RandomXMiningMemoryMode.LIGHT && !runtimeContext.isSandbox()) {
+			throw new IllegalStateException(
+					"RandomX LIGHT mining is restricted to an activated sandbox execution domain");
 		}
+	}
+
+	@PostConstruct
+	public void init() {
+		log.info("Initializing RandomX with the active epoch seed...");
+		long height = chainQuery.getLatestBlockHeight().orElse(0L);
+		ensureInitializedForHeight(height);
 	}
 
 	public boolean isInitializationInProgress() {
 		return initializationInProgress.get();
 	}
 
-	public RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery) {
-		this.miningProperties = miningProperties;
-		this.chainQuery = chainQuery;
-		this.flags = new HashSet<>(RandomXUtils.getRecommendedFlags());
-		log.debug("RandomX initialized with recommended flags: {}", flags);
+	public int getActiveVmLeaseCount() {
+		return activeVMs.get();
 	}
 
-	@PostConstruct
-	public void init() {
-		log.info("Initializing RandomX with Genesis seed...");
-		// Initial load does not need locks as no other threads are running yet,
-		// but for consistency, we treat it as an update.
-		long height = chainQuery.getLatestBlockHeight().orElse(0L);
-		ensureInitializedForHeight(height);
+	public RandomXMiningMemoryMode getMiningMemoryMode() {
+		return miningProperties.getMemoryMode();
 	}
 
-	/**
-	 * Ensures the RandomX memory is initialized for the specific block height.
-	 * If the epoch changed, it triggers a memory swap.
-	 */
+	/** Ensures mining resources correspond to the canonical RandomX epoch. */
 	public void ensureInitializedForHeight(long height) {
-		if (isShutdown)
-			return;
+		ensureResourcesForHeight(height, false);
+	}
+
+	/** Ensures this epoch has the resources required for an explicit mining attempt. */
+	public void prepareMiningResourcesForHeight(long height) {
+		ensureResourcesForHeight(height, true);
+	}
+
+	private void ensureResourcesForHeight(long height, boolean miningRequested) {
+		assertRunning();
 
 		byte[] requiredSeed = calculateSeedForHeight(height);
-
-		// 1. Fast Path (Read Lock)
 		lifecycleLock.readLock().lock();
 		try {
-			if (Arrays.equals(currentSeed, requiredSeed) && verificationCache != null) {
+			if (isCurrentSeed(requiredSeed) && (!miningRequested || currentResourcesSupportMining())) {
 				return;
 			}
 		} finally {
 			lifecycleLock.readLock().unlock();
 		}
 
-		// 2. Slow Path (Write Lock) - Switch Epoch
 		lifecycleLock.writeLock().lock();
 		try {
-			if (isShutdown)
-				return;
-			// Double check inside write lock
-			if (Arrays.equals(currentSeed, requiredSeed) && verificationCache != null) {
+			assertRunning();
+			if (isCurrentSeed(requiredSeed) && (!miningRequested || currentResourcesSupportMining())) {
 				return;
 			}
-
-			log.info("RandomX epoch switch detected at height {}. Reinitializing memory...", height);
-			updateSeed(requiredSeed, false);
+			log.info("RandomX epoch switch detected at height {}. Initializing replacement resources...", height);
+			replaceCurrentResources(requiredSeed, miningRequested);
 		} finally {
 			lifecycleLock.writeLock().unlock();
 		}
 	}
 
-	/**
-	 * Creates a VM for Mining. Requires Dataset (Full Memory).
-	 * The returned VM MUST be closed by the caller.
-	 */
-	public RandomXVM createMiningVM() {
+	/** Opens a dataset-backed FULL miner or a cache-only LIGHT miner. */
+	public RandomXVmLease createMiningVM() {
 		lifecycleLock.readLock().lock();
 		try {
-			if (isShutdown) {
-				throw new IllegalStateException("Cannot create VM: service is shutting down");
+			assertRunning();
+			EpochResources resources = requireCurrentResources();
+			if (miningProperties.getMemoryMode() == RandomXMiningMemoryMode.FULL
+					&& resources.dataset() == null) {
+				throw new IllegalStateException("RandomX FULL mining dataset is not loaded");
 			}
-			if (verificationCache == null || currentSeed == null) {
-				throw new IllegalStateException("RandomX not initialized. Call ensureInitializedForHeight() first.");
-			}
-			if (miningDataset == null) {
-				throw new IllegalStateException("Mining is DISABLED or Dataset not loaded.");
-			}
-
-			activeVMs.incrementAndGet();
-			try {
-				return new RandomXVM(flags, verificationCache, miningDataset) {
-					@Override
-					public void close() {
-						super.close();
-						activeVMs.decrementAndGet();
-					}
-				};
-			} catch (Exception e) {
-				activeVMs.decrementAndGet(); // Revert increment if creation fails
-				throw e;
-			}
+			return resources.acquire(resourceFactory, activeVMs);
 		} finally {
 			lifecycleLock.readLock().unlock();
 		}
 	}
 
-	/**
-	 * Creates a VM for Verification with a custom seed provider.
-	 * Useful during sync when the seed block might not be in the DB yet.
-	 */
-	public RandomXVM getLightVMForVerification(long height,
-			java.util.function.Function<Long, java.util.Optional<byte[]>> seedBlockProvider) {
-		if (isShutdown)
-			throw new IllegalStateException("Service is shutting down");
-
+	/** Opens a cache-only verifier while preserving the caller's seed resolver. */
+	public RandomXVmLease getLightVMForVerification(long height,
+			Function<Long, Optional<byte[]>> seedBlockProvider) {
+		assertRunning();
 		byte[] requiredSeed = calculateSeedForHeight(height, seedBlockProvider);
 
-		// Scenario 1: Current Epoch (Reuse Global Cache)
 		lifecycleLock.readLock().lock();
 		try {
-			if (Arrays.equals(currentSeed, requiredSeed) && verificationCache != null) {
-				// Ensure we don't pass FULL_MEM for light verification
-				Set<RandomXFlag> lightFlags = EnumSet.copyOf(flags);
-				lightFlags.remove(RandomXFlag.FULL_MEM);
-
-				activeVMs.incrementAndGet();
-				try {
-					return new RandomXVM(lightFlags, verificationCache, null) {
-						@Override
-						public void close() {
-							super.close();
-							activeVMs.decrementAndGet();
-						}
-					};
-				} catch (Exception e) {
-					activeVMs.decrementAndGet();
-					throw e;
-				}
+			assertRunning();
+			if (isCurrentSeed(requiredSeed)) {
+				return requireCurrentResources().acquireLight(resourceFactory, activeVMs);
 			}
 		} finally {
 			lifecycleLock.readLock().unlock();
 		}
 
-		// Scenario 2: Different Epoch (Syncing/Old Block)
-		// Use cached VM if available to avoid expensive re-initialization
-		return getOrCreateCachedVM(requiredSeed, height);
+		return acquireHistoricalEpoch(requiredSeed, height);
 	}
 
-	public RandomXVM getLightVMForVerification(long height) {
-		return getLightVMForVerification(height, h -> chainQuery.getBlockHashByHeight(h).map(Hash::toArray));
+	public RandomXVmLease getLightVMForVerification(long height) {
+		return getLightVMForVerification(height,
+				h -> chainQuery.getBlockHashByHeight(h).map(Hash::toArray));
 	}
 
-	/**
-	 * Get or create a cached RandomX VM for the given seed.
-	 * This dramatically speeds up sync across epochs by reusing the cache.
-	 */
-	private RandomXVM getOrCreateCachedVM(byte[] seed, long height) {
-		Bytes seedKey = Bytes.wrap(seed);
-
-		CachedRandomXVM cached = epochVMCache.computeIfAbsent(seedKey, k -> {
-			log.info("Creating cached RandomX VM for epoch at height {} (will be reused for all blocks in this epoch)",
-					height);
-			Set<RandomXFlag> lightFlags = EnumSet.copyOf(flags);
-			lightFlags.remove(RandomXFlag.FULL_MEM);
-			lightFlags.remove(RandomXFlag.LARGE_PAGES);
-
-			RandomXCache tempCache = new RandomXCache(lightFlags);
-			try {
-				tempCache.init(seed);
-				return new CachedRandomXVM(tempCache, lightFlags, seedKey);
-			} catch (Exception e) {
-				tempCache.close();
-				throw e;
+	private RandomXVmLease acquireHistoricalEpoch(byte[] seed, long height) {
+		Bytes seedKey = Bytes.wrap(seed.clone());
+		synchronized (epochCacheLock) {
+			assertRunning();
+			EpochResources resources = epochResources.get(seedKey);
+			if (resources == null) {
+				log.info("Initializing cache-only RandomX resources for historical epoch at height {}", height);
+				resources = allocateCacheOnly(seed);
+				epochResources.put(seedKey, resources);
 			}
-		});
-
-		cached.lastUsed = System.currentTimeMillis();
-
-		// Evict old caches if we have too many
-		if (epochVMCache.size() > MAX_CACHED_EPOCHS) {
-			evictOldestCache();
-		}
-
-		// Create a VM using the cached cache (VM creation is cheap, cache init is
-		// expensive)
-		activeVMs.incrementAndGet();
-		try {
-			return new RandomXVM(cached.flags, cached.cache, null) {
-				@Override
-				public void close() {
-					super.close();
-					activeVMs.decrementAndGet();
-				}
-			};
-		} catch (Exception e) {
-			activeVMs.decrementAndGet();
-			throw e;
+			RandomXVmLease lease = resources.acquireLight(resourceFactory, activeVMs);
+			evictHistoricalEpochs();
+			return lease;
 		}
 	}
 
-	private void evictOldestCache() {
-		Bytes oldestKey = null;
-		long oldestTime = Long.MAX_VALUE;
-
-		for (Map.Entry<Bytes, CachedRandomXVM> entry : epochVMCache.entrySet()) {
-			if (entry.getValue().lastUsed < oldestTime) {
-				oldestTime = entry.getValue().lastUsed;
-				oldestKey = entry.getKey();
-			}
-		}
-
-		if (oldestKey != null) {
-			CachedRandomXVM removed = epochVMCache.remove(oldestKey);
-			if (removed != null) {
-				log.debug("Evicting old RandomX epoch cache");
-				removed.close();
-			}
+	private void evictHistoricalEpochs() {
+		while (epochResources.size() > MAX_CACHED_EPOCHS) {
+			Iterator<Map.Entry<Bytes, EpochResources>> iterator = epochResources.entrySet().iterator();
+			Map.Entry<Bytes, EpochResources> eldest = iterator.next();
+			iterator.remove();
+			log.debug("Retiring least-recently-used RandomX historical epoch cache");
+			eldest.getValue().retire();
 		}
 	}
 
-	/**
-	 * Core logic to allocate memory, handle Huge Pages, and swap references.
-	 * This method MUST be called under a WriteLock (or during single-threaded
-	 * init).
-	 */
-	private void updateSeed(byte[] newSeed, boolean isInitial) {
+	private void replaceCurrentResources(byte[] requiredSeed, boolean miningRequested) {
 		initializationInProgress.set(true);
 		try {
-			log.info("Starting RandomX memory initialization (initial: {}). Mining Enabled: {}", isInitial,
-					miningProperties.getEnable());
-			long start = System.currentTimeMillis();
-
-			// 1. RELEASE PHASE (Release-First strategy to save RAM)
-			if (!isInitial) {
-				// SAFETY: Wait for all active VMs to release their references
-				int retries = 0;
-				while (activeVMs.get() > 0) {
-					try {
-						log.debug(
-								"Waiting for {} active RandomX VMs to finish before freeing old memory... (Attempt {}/1200)",
-								activeVMs.get(), retries);
-						Thread.sleep(50);
-						retries++;
-						if (retries > 1200) { // 60 seconds
-							log.error("Timed out waiting for active VMs. Force closing (Crash risk!)");
-							break;
-						}
-					} catch (InterruptedException e) {
-						Thread.currentThread().interrupt();
-						log.warn("Interrupted during memory cleanup wait.");
-						break;
-					}
-				}
-
-				if (miningDataset != null) {
-					try {
-						miningDataset.close();
-					} catch (Exception e) {
-						log.error("Error closing miningDataset", e);
-					}
-					miningDataset = null;
-				}
-				if (verificationCache != null) {
-					try {
-						verificationCache.close();
-					} catch (Exception e) {
-						log.error("Error closing verificationCache", e);
-					}
-					verificationCache = null;
-				}
-
-				// Explicit GC to encourage reclaiming native memory wrappers
-				System.gc();
+			long startedAt = System.currentTimeMillis();
+			EpochResources replacement = allocateCurrent(requiredSeed, miningRequested);
+			EpochResources previous = currentResources;
+			currentResources = replacement;
+			currentSeed = requiredSeed.clone();
+			if (previous != null) {
+				previous.retire();
 			}
-
-			RandomXCache newCache = null;
-			RandomXDataset newDataset = null;
-			Set<RandomXFlag> appliedFlags = EnumSet.copyOf(flags);
-
-			String osName = System.getProperty("os.name").toLowerCase();
-			boolean isMac = osName.contains("mac") || osName.contains("darwin");
-			boolean tryHugePages = !isMac && miningProperties.getEnable();
-
-			// 2. ALLOCATION PHASE
-			// Attempt Huge Pages first (if not on Mac)
-			if (tryHugePages) {
-				try {
-					log.debug("Attempting to initialize RandomX with LARGE PAGES...");
-					Set<RandomXFlag> fastFlags = EnumSet.copyOf(flags);
-					fastFlags.add(RandomXFlag.LARGE_PAGES);
-					if (miningProperties.getEnable()) {
-						fastFlags.add(RandomXFlag.FULL_MEM);
-					}
-
-					newCache = new RandomXCache(fastFlags);
-					newCache.init(newSeed);
-
-					if (miningProperties.getEnable()) {
-						newDataset = new RandomXDataset(fastFlags);
-						newDataset.init(newCache);
-					}
-
-					appliedFlags = fastFlags;
-					log.info("SUCCESS: RandomX initialized using LARGE PAGES.");
-
-				} catch (Exception e) {
-					log.warn("Failed to initialize with LARGE PAGES. Falling back to standard memory... (Error: {})",
-							e.getMessage());
-					// Clean up partial allocations
-					if (newDataset != null)
-						try {
-							newDataset.close();
-						} catch (Exception ex) {
-						}
-					if (newCache != null)
-						try {
-							newCache.close();
-						} catch (Exception ex) {
-						}
-					newCache = null;
-					newDataset = null;
-				}
-			}
-
-			// Fallback to Standard Memory
-			if (newCache == null) {
-				try {
-					Set<RandomXFlag> slowFlags = EnumSet.copyOf(flags);
-					slowFlags.remove(RandomXFlag.LARGE_PAGES);
-					if (miningProperties.getEnable()) {
-						slowFlags.add(RandomXFlag.FULL_MEM);
-					}
-
-					newCache = new RandomXCache(slowFlags);
-					newCache.init(newSeed);
-
-					if (miningProperties.getEnable()) {
-						newDataset = new RandomXDataset(slowFlags);
-						newDataset.init(newCache);
-					}
-
-					appliedFlags = slowFlags;
-					log.info("RandomX initialized using STANDARD memory.");
-
-				} catch (Exception fatalError) {
-					log.error("CRITICAL: Failed to initialize RandomX!", fatalError);
-					if (newCache != null)
-						try {
-							newCache.close();
-						} catch (Exception ex) {
-						}
-					if (fatalError instanceof InterruptedException
-							|| fatalError.getCause() instanceof InterruptedException) {
-						Thread.currentThread().interrupt();
-					}
-					throw new RuntimeException("RandomX initialization failed completely", fatalError);
-				}
-			}
-
-			// 3. ASSIGNMENT PHASE
-			this.verificationCache = newCache;
-			this.miningDataset = newDataset;
-			this.currentSeed = newSeed;
-			this.flags = appliedFlags;
-
-			log.info("RandomX memory update finished in {} ms.", System.currentTimeMillis() - start);
+			log.info("RandomX {} memory update finished in {} ms", miningProperties.getMemoryMode(),
+					System.currentTimeMillis() - startedAt);
 		} finally {
 			initializationInProgress.set(false);
 		}
 	}
 
+	private EpochResources allocateCurrent(byte[] seed, boolean miningRequested) {
+		boolean miningEnabled = Boolean.TRUE.equals(miningProperties.getEnable());
+		boolean fullMining = (miningEnabled || miningRequested)
+				&& miningProperties.getMemoryMode() == RandomXMiningMemoryMode.FULL;
+		if (!fullMining) {
+			return allocateCacheOnly(seed);
+		}
+
+		if (supportsHugePagesAttempt()) {
+			Set<RandomXFlag> hugeFlags = miningFlags(true);
+			try {
+				log.debug("Attempting to initialize FULL RandomX resources with large pages");
+				return allocate(seed, hugeFlags, true);
+			} catch (RandomXInitializationException e) {
+				log.warn("RandomX large-page initialization failed; retrying with standard memory: {}",
+						e.getMessage());
+			}
+		}
+		return allocate(seed, miningFlags(false), true);
+	}
+
+	private EpochResources allocateCacheOnly(byte[] seed) {
+		return allocate(seed, lightFlags(), false);
+	}
+
+	private EpochResources allocate(byte[] seed, Set<RandomXFlag> resourceFlags, boolean withDataset) {
+		RandomXCache cache = null;
+		RandomXDataset dataset = null;
+		try {
+			cache = resourceFactory.createCache(resourceFlags);
+			cache.init(seed);
+			if (withDataset) {
+				dataset = resourceFactory.createDataset(resourceFlags);
+				dataset.init(cache);
+			}
+			return new EpochResources(seed, resourceFlags, cache, dataset);
+		} catch (RuntimeException | LinkageError failure) {
+			closePartial(dataset, cache);
+			throw new RandomXInitializationException(
+					"Failed to initialize native RandomX " + (withDataset ? "FULL" : "LIGHT") + " resources",
+					failure);
+		}
+	}
+
+	private void closePartial(RandomXDataset dataset, RandomXCache cache) {
+		if (dataset != null) {
+			try {
+				dataset.close();
+			} catch (RuntimeException | LinkageError e) {
+				log.warn("Failed to release partially initialized RandomX dataset", e);
+			}
+		}
+		if (cache != null) {
+			try {
+				cache.close();
+			} catch (RuntimeException | LinkageError e) {
+				log.warn("Failed to release partially initialized RandomX cache", e);
+			}
+		}
+	}
+
+	private Set<RandomXFlag> lightFlags() {
+		EnumSet<RandomXFlag> light = mutableRecommendedFlags();
+		light.remove(RandomXFlag.FULL_MEM);
+		light.remove(RandomXFlag.LARGE_PAGES);
+		ensureNonEmpty(light);
+		return Set.copyOf(light);
+	}
+
+	private Set<RandomXFlag> miningFlags(boolean largePages) {
+		EnumSet<RandomXFlag> full = mutableRecommendedFlags();
+		full.add(RandomXFlag.FULL_MEM);
+		if (largePages) {
+			full.add(RandomXFlag.LARGE_PAGES);
+		} else {
+			full.remove(RandomXFlag.LARGE_PAGES);
+		}
+		return Set.copyOf(full);
+	}
+
+	private EnumSet<RandomXFlag> mutableRecommendedFlags() {
+		return recommendedFlags.isEmpty()
+				? EnumSet.noneOf(RandomXFlag.class)
+				: EnumSet.copyOf(recommendedFlags);
+	}
+
+	private void ensureNonEmpty(EnumSet<RandomXFlag> resourceFlags) {
+		if (resourceFlags.isEmpty()) {
+			resourceFlags.add(RandomXFlag.DEFAULT);
+		}
+	}
+
+	private static Set<RandomXFlag> immutableFlags(Set<RandomXFlag> resourceFlags) {
+		Objects.requireNonNull(resourceFlags, "RandomX recommended flags");
+		return Set.copyOf(resourceFlags);
+	}
+
+	private static Set<RandomXFlag> loadRecommendedFlags() {
+		try {
+			return RandomXUtils.getRecommendedFlags();
+		} catch (RuntimeException | LinkageError failure) {
+			throw new RandomXInitializationException("Failed to load native RandomX capabilities", failure);
+		}
+	}
+
+	private boolean supportsHugePagesAttempt() {
+		String osName = System.getProperty("os.name", "").toLowerCase();
+		return !osName.contains("mac") && !osName.contains("darwin");
+	}
+
+	private EpochResources requireCurrentResources() {
+		EpochResources resources = currentResources;
+		if (resources == null || currentSeed == null) {
+			throw new IllegalStateException("RandomX is not initialized for the current epoch");
+		}
+		return resources;
+	}
+
+	private boolean isCurrentSeed(byte[] requiredSeed) {
+		return currentResources != null && Arrays.equals(currentSeed, requiredSeed);
+	}
+
+	private boolean currentResourcesSupportMining() {
+		return miningProperties.getMemoryMode() != RandomXMiningMemoryMode.FULL
+				|| requireCurrentResources().dataset() != null;
+	}
+
+	private void assertRunning() {
+		if (isShutdown) {
+			throw new IllegalStateException("RandomX service is shutting down");
+		}
+	}
+
 	private byte[] calculateSeedForHeight(long height) {
-		return calculateSeedForHeight(height, h -> chainQuery.getBlockHashByHeight(h).map(Hash::toArray));
+		if (testSeedResolver != null) {
+			byte[] seed = Objects.requireNonNull(testSeedResolver.apply(height), "test RandomX seed");
+			return seed.clone();
+		}
+		return calculateSeedForHeight(height,
+				h -> chainQuery.getBlockHashByHeight(h).map(Hash::toArray));
 	}
 
 	private byte[] calculateSeedForHeight(long height,
 			Function<Long, Optional<byte[]>> seedBlockProvider) {
-		long epoch = height / Constants.getSettings().randomXEpochLength();
-
+		if (testSeedResolver != null) {
+			byte[] seed = Objects.requireNonNull(testSeedResolver.apply(height), "test RandomX seed");
+			return seed.clone();
+		}
+		NetworkSettings networkSettings = Objects.requireNonNull(networkSettingsSupplier.get(),
+				"active NetworkSettings");
+		long epochLength = networkSettings.randomXEpochLength();
+		if (epochLength <= 0) {
+			throw new IllegalStateException("RandomX epoch length must be positive");
+		}
+		long epoch = height / epochLength;
 		if (epoch == 0) {
-			return Constants.getSettings().randomXGenesisKey().getBytes(StandardCharsets.UTF_8);
+			return networkSettings.randomXGenesisKey().getBytes(StandardCharsets.UTF_8);
 		}
 
-		// Standard approach: Use the hash of the block that started the PREVIOUS epoch.
-		// This ensures the seed is unpredictable until that block is mined, preventing
-		// long-range pre-calculation.
-		long seedBlockHeight = (epoch - 1) * Constants.getSettings().randomXEpochLength();
-
-		// Try the provider first (e.g. batch context)
+		long seedBlockHeight = (epoch - 1) * epochLength;
 		Optional<byte[]> seed = seedBlockProvider.apply(seedBlockHeight);
 		if (seed.isPresent()) {
-			return seed.get();
+			return seed.get().clone();
 		}
-
-		// Fallback to DB
 		return chainQuery.getBlockHashByHeight(seedBlockHeight)
 				.map(Hash::toArray)
 				.orElseThrow(() -> new IllegalStateException(
-						"Cannot calculate RandomX seed: Seed block at height " + seedBlockHeight + " not found."));
+						"Cannot calculate RandomX seed: seed block at height " + seedBlockHeight + " not found."));
 	}
 
 	@PreDestroy
 	public void close() {
 		log.info("Shutting down RandomX service...");
+		EpochResources current;
 		lifecycleLock.writeLock().lock();
 		try {
+			if (isShutdown) {
+				return;
+			}
 			isShuttingDown = true;
 			isShutdown = true;
-
-			// Wait for active VMs to finish to avoid native crash (Use-After-Free)
-			int retry = 0;
-			while (activeVMs.get() > 0 && retry < 50) {
-				try {
-					// We hold the write lock, so no new VMs can be created.
-					// We wait for existing ones to close.
-					Thread.sleep(100);
-					retry++;
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-					break;
-				}
-			}
-
-			if (activeVMs.get() > 0) {
-				log.warn(
-						"RandomX service shutting down with {} active VMs still running! Skipping native memory release to prevent SIGSEGV.",
-						activeVMs.get());
-			} else {
-				if (miningDataset != null) {
-					try {
-						miningDataset.close();
-					} catch (Exception e) {
-						log.error("Error closing miningDataset", e);
-					}
-					miningDataset = null;
-				}
-
-				if (verificationCache != null) {
-					try {
-						verificationCache.close();
-					} catch (Exception e) {
-						log.error("Error closing verificationCache", e);
-					}
-					verificationCache = null;
-				}
-				currentSeed = null;
-				log.info("RandomX native memory released successfully.");
-			}
+			current = currentResources;
+			currentResources = null;
+			currentSeed = null;
 		} finally {
 			lifecycleLock.writeLock().unlock();
+		}
+
+		if (current != null) {
+			current.retire();
+		}
+		synchronized (epochCacheLock) {
+			epochResources.values().forEach(EpochResources::retire);
+			epochResources.clear();
+		}
+		if (activeVMs.get() == 0) {
+			log.info("RandomX native resources released successfully");
+		} else {
+			log.info("RandomX shutdown retired resources; {} active VM lease(s) will release them on close",
+					activeVMs.get());
+		}
+	}
+
+	private static final class EpochResources {
+		private final byte[] seed;
+		private final Set<RandomXFlag> flags;
+		private final RandomXCache cache;
+		private final RandomXDataset dataset;
+		private int leases;
+		private boolean retired;
+		private boolean closed;
+
+		private EpochResources(byte[] seed, Set<RandomXFlag> flags, RandomXCache cache,
+				RandomXDataset dataset) {
+			this.seed = seed.clone();
+			this.flags = Set.copyOf(flags);
+			this.cache = Objects.requireNonNull(cache, "cache");
+			this.dataset = dataset;
+		}
+
+		private RandomXDataset dataset() {
+			return dataset;
+		}
+
+		private synchronized RandomXVmLease acquire(RandomXResourceFactory factory,
+				AtomicInteger totalLeases) {
+			return acquire(factory, totalLeases, flags, dataset);
+		}
+
+		private synchronized RandomXVmLease acquireLight(RandomXResourceFactory factory,
+				AtomicInteger totalLeases) {
+			EnumSet<RandomXFlag> cacheOnlyFlags = EnumSet.copyOf(flags);
+			cacheOnlyFlags.remove(RandomXFlag.FULL_MEM);
+			cacheOnlyFlags.remove(RandomXFlag.LARGE_PAGES);
+			if (cacheOnlyFlags.isEmpty()) {
+				cacheOnlyFlags.add(RandomXFlag.DEFAULT);
+			}
+			return acquire(factory, totalLeases, Set.copyOf(cacheOnlyFlags), null);
+		}
+
+		private RandomXVmLease acquire(RandomXResourceFactory factory, AtomicInteger totalLeases,
+				Set<RandomXFlag> vmFlags, RandomXDataset vmDataset) {
+			if (retired || closed) {
+				throw new IllegalStateException("RandomX epoch resources have been retired");
+			}
+			RandomXVM vm = Objects.requireNonNull(factory.createVM(vmFlags, cache, vmDataset),
+					"RandomX VM factory result");
+			leases++;
+			totalLeases.incrementAndGet();
+			return new RandomXVmLease(vm, () -> release(totalLeases));
+		}
+
+		private synchronized void release(AtomicInteger totalLeases) {
+			if (leases == 0) {
+				log.error("Ignoring duplicate RandomX epoch lease release for seed {}", Bytes.wrap(seed));
+				return;
+			}
+			leases--;
+			totalLeases.decrementAndGet();
+			closeIfRetiredAndUnused();
+		}
+
+		private synchronized void retire() {
+			retired = true;
+			closeIfRetiredAndUnused();
+		}
+
+		private void closeIfRetiredAndUnused() {
+			if (!retired || leases != 0 || closed) {
+				return;
+			}
+			closed = true;
+			if (dataset != null) {
+				try {
+					dataset.close();
+				} catch (RuntimeException | LinkageError e) {
+					log.warn("Failed to release retired RandomX dataset", e);
+				}
+			}
+			try {
+				cache.close();
+			} catch (RuntimeException | LinkageError e) {
+				log.warn("Failed to release retired RandomX cache", e);
+			}
 		}
 	}
 }

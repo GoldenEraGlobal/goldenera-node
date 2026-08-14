@@ -37,6 +37,7 @@ import org.springframework.stereotype.Service;
 
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
@@ -55,6 +56,7 @@ public class ExIndexerQueueService {
 	private static final long OFFER_TIMEOUT_MS = 10; // Max time to wait when queue is full
 
 	GeneralProperties generalProperties;
+	ExplorerRuntimeReadiness explorerReadiness;
 	MeterRegistry registry;
 	Deque<ExIndexerTask> queue = new ArrayDeque<>(MAX_QUEUE_CAPACITY);
 
@@ -64,13 +66,16 @@ public class ExIndexerQueueService {
 
 	@PostConstruct
 	public void initMetrics() {
-		if (!generalProperties.isExplorerEnable()) {
+		if (!enabled()) {
 			return;
 		}
 		registry.gaugeCollectionSize("explorer.queue.size", Tags.empty(), queue);
 	}
 
 	public void pushConnect(BlockConnectedEvent event) {
+		if (!enabled()) {
+			return;
+		}
 		lock.lock();
 		try {
 			// Optimization: Remove immediate Disconnect-Connect flicker
@@ -107,6 +112,9 @@ public class ExIndexerQueueService {
 	}
 
 	public void pushDisconnect(BlockDisconnectedEvent event) {
+		if (!enabled()) {
+			return;
+		}
 		lock.lock();
 		try {
 			// Optimization: Remove immediate Connect-Disconnect flicker
@@ -154,6 +162,10 @@ public class ExIndexerQueueService {
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	private boolean enabled() {
+		return generalProperties.isExplorerEnable() && explorerReadiness.isReady();
 	}
 
 	/**

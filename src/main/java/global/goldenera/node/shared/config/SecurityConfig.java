@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -56,6 +57,11 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Configuration
+@ConditionalOnProperty(
+                prefix = "ge.general",
+                name = "explorer-enable",
+                havingValue = "true",
+                matchIfMissing = true)
 @EnableWebSecurity
 @AllArgsConstructor
 @EnableMethodSecurity(prePostEnabled = true)
@@ -64,6 +70,20 @@ import lombok.extern.slf4j.Slf4j;
 public class SecurityConfig {
 
         GeneralProperties generalProperties;
+
+        @Bean
+        @Order(0)
+        public SecurityFilterChain coreHealthFilterChain(HttpSecurity http) throws Exception {
+                http
+                                .securityMatcher("/api/core/v1/health/**")
+                                .cors(Customizer.withDefaults())
+                                .csrf(csrf -> csrf.disable())
+                                .formLogin(login -> login.disable())
+                                .httpBasic(basic -> basic.disable())
+                                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+                return http.build();
+        }
 
         /**
          * Filter chain for the "master password" admin area.

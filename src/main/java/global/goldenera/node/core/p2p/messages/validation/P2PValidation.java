@@ -23,6 +23,7 @@
  */
 package global.goldenera.node.core.p2p.messages.validation;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -63,7 +64,7 @@ public class P2PValidation {
 			return;
 
 		// Build lookup map for this batch
-		Map<Long, Hash> batchHashes = new java.util.HashMap<>();
+		Map<Long, Hash> batchHashes = new HashMap<>();
 		for (P2PBlockHeaderDto dto : headerDtos) {
 			if (dto.getBlockHeader() != null) {
 				batchHashes.put(dto.getBlockHeader().getHeight(), dto.getBlockHeader().getHash());

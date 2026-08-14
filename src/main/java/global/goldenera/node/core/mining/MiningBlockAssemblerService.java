@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
@@ -52,6 +53,9 @@ import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
+import global.goldenera.node.core.blockchain.time.ChainClock;
+import global.goldenera.node.core.blockchain.time.BlockTimestampReservation;
+import global.goldenera.node.core.blockchain.time.ProductionChainClock;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.node.IdentityService;
@@ -62,7 +66,6 @@ import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.shared.properties.GeneralProperties;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.experimental.FieldDefaults;
@@ -80,7 +83,6 @@ import lombok.extern.slf4j.Slf4j;
  * - High utilization (> 80%): Use full block size
  */
 @Service
-@AllArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MiningBlockAssemblerService {
@@ -93,6 +95,32 @@ public class MiningBlockAssemblerService {
 	DifficultyCalculator difficultyService;
 	IdentityService identityService;
 	ValidatorMiningPolicyService validatorMiningPolicyService;
+	ChainClock chainClock;
+
+	@Autowired
+	public MiningBlockAssemblerService(WorldStateFactory worldStateFactory, MempoolManager mempoolService,
+			MempoolProperties mempoolProperties, GeneralProperties generalConfig, StateProcessor stateProcessor,
+			DifficultyCalculator difficultyService, IdentityService identityService,
+			ValidatorMiningPolicyService validatorMiningPolicyService, ChainClock chainClock) {
+		this.worldStateFactory = worldStateFactory;
+		this.mempoolService = mempoolService;
+		this.mempoolProperties = mempoolProperties;
+		this.generalConfig = generalConfig;
+		this.stateProcessor = stateProcessor;
+		this.difficultyService = difficultyService;
+		this.identityService = identityService;
+		this.validatorMiningPolicyService = validatorMiningPolicyService;
+		this.chainClock = chainClock;
+	}
+
+	/** Test-friendly constructor preserving the former production behavior. */
+	public MiningBlockAssemblerService(WorldStateFactory worldStateFactory, MempoolManager mempoolService,
+			MempoolProperties mempoolProperties, GeneralProperties generalConfig, StateProcessor stateProcessor,
+			DifficultyCalculator difficultyService, IdentityService identityService,
+			ValidatorMiningPolicyService validatorMiningPolicyService) {
+		this(worldStateFactory, mempoolService, mempoolProperties, generalConfig, stateProcessor, difficultyService,
+				identityService, validatorMiningPolicyService, new ProductionChainClock());
+	}
 
 	/**
 	 * Creates a new, mineable block template.
@@ -103,6 +131,21 @@ public class MiningBlockAssemblerService {
 	 *             if assembly fails
 	 */
 	public Optional<AssembledBlock> createBlockTemplate(Block parentBlock) throws Exception {
+		return createBlockTemplateInternal(parentBlock, Optional.empty());
+	}
+
+	/**
+	 * Creates a template using a parent-bound timestamp reserved for this attempt.
+	 */
+	public Optional<AssembledBlock> createBlockTemplate(
+			Block parentBlock,
+			BlockTimestampReservation timestampReservation) throws Exception {
+		return createBlockTemplateInternal(parentBlock, Optional.of(timestampReservation));
+	}
+
+	private Optional<AssembledBlock> createBlockTemplateInternal(
+			Block parentBlock,
+			Optional<BlockTimestampReservation> timestampReservation) throws Exception {
 		log.debug("Creating block template | Parent: {}", parentBlock.getHeight());
 		BlockVersion blockVersion = BlockVersion.V1;
 
@@ -138,9 +181,9 @@ public class MiningBlockAssemblerService {
 		// Dynamic block size based on mempool utilization (height-aware for fork
 		// overrides)
 		long maxBlockSize = calculateDynamicBlockSize(nextHeight);
-		long now = Instant.now().toEpochMilli();
-		long timestamp = (now / 1000) * 1000;
-		timestamp = Math.max(timestamp, parentBlock.getHeader().getTimestamp().toEpochMilli() + 1);
+		Instant timestamp = timestampReservation
+				.map(reservation -> reservation.consume(parentBlock.getHeader()))
+				.orElseGet(() -> chainClock.nextBlockTimestamp(parentBlock.getHeader()));
 
 		long startSelect = System.currentTimeMillis();
 		List<Tx> txs = getExecutableTransactions(maxBlockSize - 512, worldState);
@@ -153,7 +196,7 @@ public class MiningBlockAssemblerService {
 				worldState,
 				SimpleBlock.builder()
 						.height(nextHeight)
-						.timestamp(Instant.ofEpochMilli(timestamp))
+						.timestamp(timestamp)
 						.coinbase(beneficiaryAddress)
 						.identity(minerIdentity)
 						.build(),
@@ -169,7 +212,7 @@ public class MiningBlockAssemblerService {
 		BlockHeaderTemplate template = BlockHeaderTemplate.builder()
 				.version(blockVersion)
 				.height(nextHeight)
-				.timestamp(Instant.ofEpochMilli(timestamp))
+				.timestamp(timestamp)
 				.previousHash(parentBlock.getHash())
 				.difficulty(difficulty)
 				.txRootHash(txRootHash)

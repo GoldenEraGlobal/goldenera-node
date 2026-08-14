@@ -9,3 +9,5 @@ databaseChangeLog:
                   file: db/changelog/changesets/004-transfer-covering-indexes.yaml
         - include:
                   file: db/changelog/changesets/005-mining-economics-explorer.yaml
+        - include:
+                  file: db/changelog/changesets/006-explorer-chain-identity.yaml

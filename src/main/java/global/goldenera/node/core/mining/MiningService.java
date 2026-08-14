@@ -29,20 +29,31 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
@@ -53,17 +64,23 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
-import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
-import global.goldenera.node.core.blockchain.events.BlockMinedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkMiningException;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkTarget;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.time.BlockTimestampReservation;
+import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
 import global.goldenera.node.core.exceptions.GETxValidationFailedException;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
-import global.goldenera.randomx.RandomXVM;
+import global.goldenera.node.core.sync.BlockIngestionOutcome;
+import global.goldenera.node.core.sync.BlockIngestionService;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PreDestroy;
 import lombok.experimental.FieldDefaults;
@@ -74,88 +91,123 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class MiningService {
 
+	private static final Duration SHUTDOWN_INITIALIZATION_GRACE = Duration.ofSeconds(1);
+	private static final Duration SHUTDOWN_TERMINATION_GRACE = Duration.ofSeconds(1);
+
 	final ReentrantLock masterChainLock;
 	final AtomicBoolean isMining = new AtomicBoolean(false);
+	final ReentrantLock coordinationLock = new ReentrantLock();
+	final Condition coordinationChanged = coordinationLock.newCondition();
+	final EnumSet<MiningSuspensionReason> suspensions = EnumSet.noneOf(MiningSuspensionReason.class);
+	final AtomicBoolean shutdown = new AtomicBoolean(false);
+	final AtomicBoolean autonomousDesired = new AtomicBoolean(true);
 	final int hashingThreads;
 
 	final MeterRegistry registry;
-	final ApplicationEventPublisher applicationEventPublisher;
 	final ExecutorService blockMiningExecutor;
+	final ScheduledExecutorService exactOneDeadlineExecutor;
 
 	// Worker pool for parallel hashing (re-used)
 	volatile ExecutorService blockHashingWorker;
+	final Object hashingWorkerLock = new Object();
 	// Reference to the main mining loop thread for interruption
 	volatile Thread miningThread;
+	volatile ActiveWork activeWork = ActiveWork.NONE;
+	volatile MiningAttemptContext activeAttempt;
+	ExactOneOperation exactOneOperation;
+	volatile boolean proofOfWorkInitializationActive;
 
 	final MiningBlockAssemblerService miningBlockAssemblerService;
 	final IdentityService identityService;
 	final MempoolManager mempoolService;
 	final ChainQuery chainQueryService;
 	final MiningProperties miningConfig;
-	final RandomXManager randomXService;
+	final ProofOfWorkProvider proofOfWorkProvider;
+	final ChainClock chainClock;
+	final BlockIngestionService blockIngestionService;
 	final ThreadFactory minerThreadFactory;
 
 	public MiningService(
 			MeterRegistry registry,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
-			ApplicationEventPublisher applicationEventPublisher,
 			@Qualifier(BLOCK_MINING_EXECUTOR) ExecutorService blockMiningExecutor,
 			MiningBlockAssemblerService miningBlockAssemblerService,
 			IdentityService identityService,
 			MempoolManager mempoolService,
 			ChainQuery chainQueryService,
 			MiningProperties miningConfig,
-			RandomXManager randomXService,
+			ProofOfWorkProvider proofOfWorkProvider,
+			ChainClock chainClock,
+			BlockIngestionService blockIngestionService,
 			@Qualifier(MINER_THREAD_FACTORY) ThreadFactory minerThreadFactory) {
 		this.registry = registry;
 		this.masterChainLock = masterChainLock;
-		this.applicationEventPublisher = applicationEventPublisher;
 		this.blockMiningExecutor = blockMiningExecutor;
 		this.miningBlockAssemblerService = miningBlockAssemblerService;
 		this.identityService = identityService;
 		this.mempoolService = mempoolService;
 		this.chainQueryService = chainQueryService;
 		this.miningConfig = miningConfig;
-		this.randomXService = randomXService;
+		this.proofOfWorkProvider = proofOfWorkProvider;
+		this.chainClock = chainClock;
+		this.blockIngestionService = blockIngestionService;
 		this.minerThreadFactory = minerThreadFactory;
+		this.exactOneDeadlineExecutor =
+				Executors.newSingleThreadScheduledExecutor(MiningService::newDeadlineThread);
 		this.hashingThreads = getHashingThreads();
 		log.info("Mining initialized with {} hashing threads", this.hashingThreads);
 	}
 
 	@PreDestroy
 	public void stopMining() {
-		if (isMining.compareAndSet(true, false)) {
+		coordinationLock.lock();
+		try {
+			if (!shutdown.compareAndSet(false, true)) {
+				return;
+			}
 			log.info("Stopping mining service...");
-
-			// Interrupt main loop
-			if (miningThread != null) {
-				if (randomXService.isInitializationInProgress()) {
-					log.info("RandomX initialization in progress. Waiting for it to complete to avoid native crash...");
-				} else {
-					miningThread.interrupt();
-				}
+			autonomousDesired.set(false);
+			isMining.set(false);
+			if (exactOneOperation != null && exactOneOperation.state != OperationState.SUBMITTING) {
+				ExactOneOperation operation = exactOneOperation;
+				operation.context.cancelled.set(true);
+				terminalizeOperationLocked(operation,
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_SHUTDOWN));
+				exactOneOperation = null;
 			}
-
-			// Shutdown hashing workers
-			if (blockHashingWorker != null) {
-				blockHashingWorker.shutdownNow();
+			if (activeAttempt != null && !isExactOneSubmittingLocked()) {
+				activeAttempt.cancelled.set(true);
 			}
-
-			// Shutdown orchestration executor
-			blockMiningExecutor.shutdownNow();
-
-			try {
-				if (!blockMiningExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-					log.warn("Mining executor did not terminate in time.");
-				}
-				if (blockHashingWorker != null && !blockHashingWorker.awaitTermination(5, TimeUnit.SECONDS)) {
-					log.warn("Hashing workers did not terminate in time.");
-				}
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
-			}
-			log.info("Mining service stopped gracefully.");
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
 		}
+
+		requestActiveAttemptCancellation(false);
+		ExecutorService hashingWorker = shutdownHashingWorker();
+		exactOneDeadlineExecutor.shutdownNow();
+		boolean nonInterruptibleWorkFinished = awaitNonInterruptibleWork(SHUTDOWN_INITIALIZATION_GRACE);
+		if (nonInterruptibleWorkFinished) {
+			blockMiningExecutor.shutdownNow();
+		} else {
+			log.warn("Non-interruptible mining work is still active; mining executor will terminate cooperatively");
+			blockMiningExecutor.shutdown();
+		}
+
+		try {
+			if (!blockMiningExecutor.awaitTermination(
+					SHUTDOWN_TERMINATION_GRACE.toNanos(), TimeUnit.NANOSECONDS)) {
+				log.warn("Mining executor termination deferred; no native initialization was interrupted");
+			}
+			if (hashingWorker != null && !hashingWorker.awaitTermination(
+					SHUTDOWN_TERMINATION_GRACE.toNanos(), TimeUnit.NANOSECONDS)) {
+				log.warn("Hashing workers did not terminate in time.");
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+		signalCoordinationChanged();
+		log.info("Mining service stopped gracefully.");
 	}
 
 	/**
@@ -163,19 +215,8 @@ public class MiningService {
 	 * Used during synchronization.
 	 */
 	public void pauseMining() {
-		if (isMining.compareAndSet(true, false)) {
-			log.info("Pausing mining service...");
-
-			// Interrupt main loop
-			if (miningThread != null) {
-				miningThread.interrupt();
-			}
-
-			// Shutdown hashing workers to free up CPU for Sync
-			if (blockHashingWorker != null) {
-				blockHashingWorker.shutdownNow();
-			}
-			// We do NOT shutdown blockMiningExecutor here, so it can be reused.
+		if (!suspendAutonomousMining(MiningSuspensionReason.SYNC, Duration.ofSeconds(30))) {
+			log.warn("Mining remains safely suspended while proof-of-work initialization finishes; sync will continue");
 		}
 	}
 
@@ -184,28 +225,76 @@ public class MiningService {
 	 * Used during synchronization.
 	 */
 	public void resumeMining() {
-		startMining();
+		resumeAutonomousMining(MiningSuspensionReason.SYNC);
 	}
 
 	public void startMining() {
-		if (!miningConfig.getEnable()) {
-			return;
-		}
+		autonomousDesired.set(true);
+		scheduleAutonomousMiningIfAllowed();
+	}
 
-		if (isMining.compareAndSet(false, true)) {
-			log.info("Mining started");
-			// Initialize worker pool if needed
-			if (blockHashingWorker == null || blockHashingWorker.isShutdown()) {
-				blockHashingWorker = Executors.newFixedThreadPool(hashingThreads, minerThreadFactory);
-			}
+	public boolean pauseAutonomousMining(Duration timeout) {
+		return suspendAutonomousMining(MiningSuspensionReason.SANDBOX_CONTROL, timeout);
+	}
 
-			blockMiningExecutor.submit(() -> {
-				try {
-					runMiningLoop();
-				} catch (Exception e) {
-					log.error("Mining loop crashed fatally", e);
+	public void resumeAutonomousMining() {
+		resumeAutonomousMining(MiningSuspensionReason.SANDBOX_CONTROL);
+	}
+
+	public boolean suspendAutonomousMining(MiningSuspensionReason reason, Duration timeout) {
+		validateWaitTimeout(timeout);
+		coordinationLock.lock();
+		try {
+			suspensions.add(reason);
+			long remaining = timeout.toNanos();
+			while (!isQuiescentFor(reason) && remaining > 0) {
+				if (activeWork == ActiveWork.AUTONOMOUS
+						|| reason == MiningSuspensionReason.SYNC && activeWork == ActiveWork.EXACT_ONE) {
+					requestActiveAttemptCancellation(false);
 				}
-			});
+				try {
+					remaining = coordinationChanged.awaitNanos(remaining);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return false;
+				}
+			}
+			return isQuiescentFor(reason);
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private boolean isQuiescentFor(MiningSuspensionReason reason) {
+		if (activeWork == ActiveWork.AUTONOMOUS || isMining.get()) {
+			return false;
+		}
+		return reason != MiningSuspensionReason.SYNC
+				|| activeWork != ActiveWork.EXACT_ONE && exactOneOperation == null;
+	}
+
+	public void resumeAutonomousMining(MiningSuspensionReason reason) {
+		coordinationLock.lock();
+		try {
+			suspensions.remove(reason);
+		} finally {
+			coordinationLock.unlock();
+		}
+		scheduleAutonomousMiningIfAllowed();
+	}
+
+	public AutonomousMiningState getAutonomousMiningState() {
+		coordinationLock.lock();
+		try {
+			return new AutonomousMiningState(
+					miningConfig.getEnable(),
+					autonomousDesired.get(),
+					isMining.get() && activeWork != ActiveWork.AUTONOMOUS,
+					activeWork == ActiveWork.AUTONOMOUS,
+					shutdown.get(),
+					Set.copyOf(suspensions));
+		} finally {
+			coordinationLock.unlock();
 		}
 	}
 
@@ -213,132 +302,434 @@ public class MiningService {
 	 * Interrupts the current PoW search when a new block is received via P2P.
 	 */
 	public void stopCurrentNonceSearch() {
-		if (isMining.get() && miningThread != null) {
-			// CRITICAL: Do NOT interrupt during RandomX initialization!
-			// This can cause SIGSEGV as native memory is being allocated.
-			if (randomXService.isInitializationInProgress()) {
-				log.debug("RandomX init in progress - skipping interrupt to avoid native crash");
-				return;
-			}
-			log.debug("Interrupting current mining job (New Block / Event)");
-			miningThread.interrupt();
-		}
+		requestActiveAttemptCancellation(true);
 	}
 
 	private void runMiningLoop() {
-		miningThread = Thread.currentThread();
-
-		while (isMining.get()) {
-			try {
-				// 0. Check Interrupt Status
-				if (Thread.currentThread().isInterrupted()) {
-					if (!isMining.get())
-						break; // Shutdown
-					Thread.interrupted(); // Clear status for new job
-				}
-
-				// 1. Get Latest Block (Parent)
-				Block parentBlock;
-				masterChainLock.lock();
-				try {
-					parentBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
-				} finally {
-					masterChainLock.unlock();
-				}
-
-				// 2. Assemble Block Candidate
-				var assembledBlockOpt = miningBlockAssemblerService.createBlockTemplate(parentBlock);
-
-				// Skip if not a validator
-				if (assembledBlockOpt.isEmpty()) {
-					// Not a validator - sleep and retry later
-					Thread.sleep(10000); // Check again in 10 seconds
-					continue;
-				}
-
-				MiningBlockAssemblerService.AssembledBlock assembledBlock = assembledBlockOpt.get();
-
-				// Cleanup invalid TXs from mempool if assembler found them
-				if (assembledBlock.getInvalidTxs() != null && !assembledBlock.getInvalidTxs().isEmpty()) {
-					List<Hash> invalidHashes = assembledBlock.getInvalidTxs().stream()
-							.map(Tx::getHash)
-							.collect(Collectors.toList());
-					mempoolService.removeTransactions(invalidHashes);
-				}
-
-				MiningBlockAssemblerService.BlockHeaderTemplate template = assembledBlock.getBlockTemplate();
-
-				// 3. Ensure RandomX is ready for this height
-				// This might throw InterruptedException if shutdown occurs during dataset init
-				randomXService.ensureInitializedForHeight(template.getHeight());
-
-				if (!isMining.get())
+		beginActiveWork(ActiveWork.AUTONOMOUS, MiningAttemptContext.autonomous());
+		try {
+			while (autonomousMiningAllowed()) {
+				Thread.interrupted();
+				MiningAttemptContext context = MiningAttemptContext.autonomous();
+				activeAttempt = context;
+				ExactOneMiningOutcome outcome = runMiningAttempt(Optional.empty(), context);
+				if (outcome.code() == ExactOneMiningOutcome.Code.FAILED) {
+					log.error("Fatal mining attempt failure. Autonomous mining stopped.");
+					autonomousDesired.set(false);
 					break;
-
-				// 4. Calculate Target
-				BigInteger target = DifficultyUtil.calculateTargetFromDifficulty(template.getDifficulty());
-
-				log.debug("Mining block {} | Diff: {} | TargetPrefix: {}...",
-						template.getHeight(),
-						template.getDifficulty(),
-						target.toString(16).substring(0, Math.min(10, target.toString(16).length())));
-
-				// 5. Start Hashing
-				long nonceStart = System.currentTimeMillis();
-				Long foundNonce = findNonce(template, target);
-				long nonceEnd = System.currentTimeMillis();
-
-				// 6. Process Result
-				registry.timer("mining.cycle_time").record(Duration.ofMillis(nonceEnd - nonceStart));
-
-				if (foundNonce != null) {
-					registry.counter("mining.blocks_found").increment();
-					processMinedBlock(template, assembledBlock, foundNonce, nonceEnd - nonceStart);
-				} else {
-					log.debug("Nonce search stopped (interrupted or no result).");
 				}
-
-			} catch (GETxValidationFailedException e) {
-				log.warn("Tx validation failed during mining: {}", e.getMessage());
-				mempoolService.removeTransaction(e.getFailedTx().getHash());
-			} catch (InterruptedException e) {
-				log.info("Mining loop interrupted.");
-				Thread.currentThread().interrupt();
-				if (!isMining.get())
-					break;
-			} catch (Exception e) {
-				if (!isMining.get())
-					break;
-
-				log.error("Error in mining loop, pausing 5s:", e);
-				try {
-					Thread.sleep(5000);
-				} catch (InterruptedException ie) {
-					Thread.currentThread().interrupt();
-					break;
+				if (outcome.code() == ExactOneMiningOutcome.Code.RETRYABLE && context.retryDelayMillis > 0
+						&& autonomousMiningAllowed()) {
+					try {
+						Thread.sleep(context.retryDelayMillis);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
+				}
+				if (outcome.code() == ExactOneMiningOutcome.Code.NOT_ELIGIBLE && autonomousMiningAllowed()) {
+					try {
+						Thread.sleep(10_000);
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+					}
 				}
 			}
+		} finally {
+			activeAttempt = null;
+			isMining.set(false);
+			endActiveWork();
 		}
-		miningThread = null;
+	}
+
+	public CompletableFuture<ExactOneMiningOutcome> mineExactlyOne(ExactOneMiningRequest request) {
+		Objects.requireNonNull(request, "request");
+		MiningAttemptContext context = MiningAttemptContext.exactOne(request.deadline());
+		CompletableFuture<ExactOneMiningOutcome> result = new CompletableFuture<>();
+		ExactOneOperation operation = new ExactOneOperation(request, context, result);
+		coordinationLock.lock();
+		try {
+			if (shutdown.get()) {
+				return CompletableFuture.completedFuture(
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_SHUTDOWN));
+			}
+			if (suspensions.contains(MiningSuspensionReason.SYNC)) {
+				return CompletableFuture.completedFuture(
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_SYNCING));
+			}
+			if (miningConfig.getEnable() && !suspensions.contains(MiningSuspensionReason.SANDBOX_CONTROL)) {
+				return CompletableFuture.completedFuture(
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_NOT_PAUSED));
+			}
+			if (activeWork != ActiveWork.NONE || exactOneOperation != null) {
+				return CompletableFuture.completedFuture(
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_BUSY));
+			}
+			exactOneOperation = operation;
+			result.whenComplete((ignored, failure) -> {
+				if (result.isCancelled()) {
+					cancelExactOneOperation(operation);
+				}
+			});
+			try {
+				operation.deadlineTask = exactOneDeadlineExecutor.schedule(
+						() -> expireExactOneOperation(operation),
+						operation.context.remainingNanos(),
+						TimeUnit.NANOSECONDS);
+				blockMiningExecutor.submit(() -> runExactOne(operation));
+			} catch (RejectedExecutionException e) {
+				exactOneOperation = null;
+				terminalizeOperationLocked(operation,
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_SHUTDOWN));
+				coordinationChanged.signalAll();
+			}
+			return result;
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void runExactOne(ExactOneOperation operation) {
+		if (!beginExactOne(operation)) {
+			return;
+		}
+		try {
+			completeExactOneOperation(operation, runMiningAttempt(
+					operation.request.scheduledTimestamp(), operation.context));
+		} catch (RuntimeException | LinkageError failure) {
+			log.error("Exact-one mining attempt failed", failure);
+			completeExactOneOperation(operation,
+					ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.FAILED));
+		} finally {
+			completeExactOneOperation(operation,
+					ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.FAILED));
+			finishExactOne(operation);
+			scheduleAutonomousMiningIfAllowed();
+		}
+	}
+
+	private boolean beginExactOne(ExactOneOperation operation) {
+		coordinationLock.lock();
+		try {
+			if (exactOneOperation != operation) {
+				return false;
+			}
+			if (operation.state == OperationState.TERMINAL) {
+				exactOneOperation = null;
+				coordinationChanged.signalAll();
+				return false;
+			}
+			ExactOneMiningOutcome.Code rejection = null;
+			if (shutdown.get()) {
+				rejection = ExactOneMiningOutcome.Code.REJECTED_SHUTDOWN;
+			} else if (suspensions.contains(MiningSuspensionReason.SYNC)) {
+				rejection = ExactOneMiningOutcome.Code.REJECTED_SYNCING;
+			} else if (operation.context.isCancelled()) {
+				rejection = operation.context.deadlineExceeded()
+						? ExactOneMiningOutcome.Code.TIMED_OUT
+						: ExactOneMiningOutcome.Code.CANCELLED;
+			}
+			if (rejection != null) {
+				exactOneOperation = null;
+				terminalizeOperationLocked(operation, ExactOneMiningOutcome.of(rejection));
+				coordinationChanged.signalAll();
+				return false;
+			}
+			operation.state = OperationState.RUNNING;
+			activeWork = ActiveWork.EXACT_ONE;
+			activeAttempt = operation.context;
+			miningThread = Thread.currentThread();
+			coordinationChanged.signalAll();
+			return true;
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void finishExactOne(ExactOneOperation operation) {
+		coordinationLock.lock();
+		try {
+			if (exactOneOperation == operation) {
+				exactOneOperation = null;
+			}
+			if (activeAttempt == operation.context) {
+				activeAttempt = null;
+				activeWork = ActiveWork.NONE;
+				miningThread = null;
+			}
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void cancelExactOneOperation(ExactOneOperation operation) {
+		boolean active;
+		coordinationLock.lock();
+		try {
+			if (operation.state == OperationState.SUBMITTING
+					|| operation.state == OperationState.TERMINAL) {
+				return;
+			}
+			operation.context.cancelled.set(true);
+			terminalizeOperationLocked(operation,
+					ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.CANCELLED));
+			active = activeAttempt == operation.context;
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+		if (active) {
+			requestActiveAttemptCancellation(false);
+		}
+	}
+
+	private void expireExactOneOperation(ExactOneOperation operation) {
+		boolean active;
+		coordinationLock.lock();
+		try {
+			if (exactOneOperation != operation
+					|| operation.state == OperationState.SUBMITTING
+					|| operation.state == OperationState.TERMINAL) {
+				return;
+			}
+			operation.context.cancelled.set(true);
+			terminalizeOperationLocked(operation,
+					cancelledOutcome(operation.context, null));
+			active = activeAttempt == operation.context;
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+		if (active) {
+			requestActiveAttemptCancellation(false);
+		}
+	}
+
+	private void completeExactOneOperation(
+			ExactOneOperation operation,
+			ExactOneMiningOutcome outcome) {
+		coordinationLock.lock();
+		try {
+			terminalizeOperationLocked(operation, outcome);
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void terminalizeOperationLocked(
+			ExactOneOperation operation,
+			ExactOneMiningOutcome outcome) {
+		if (operation.state == OperationState.TERMINAL) {
+			return;
+		}
+		operation.state = OperationState.TERMINAL;
+		ScheduledFuture<?> deadlineTask = operation.deadlineTask;
+		if (deadlineTask != null) {
+			deadlineTask.cancel(false);
+		}
+		operation.result.complete(outcome);
+	}
+
+	private ExactOneMiningOutcome runMiningAttempt(
+			Optional<Instant> requestedTimestamp,
+			MiningAttemptContext context) {
+		if (context.isCancelled()) {
+			return cancelledOutcome(context, null);
+		}
+		Block parentBlock;
+		masterChainLock.lock();
+		try {
+			parentBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
+			context.parentHash = parentBlock.getHash();
+		} finally {
+			masterChainLock.unlock();
+		}
+
+		try {
+			if (context.isCancelled()) {
+				return cancelledOutcome(context, null);
+			}
+			Optional<MiningBlockAssemblerService.AssembledBlock> assembledBlockOptional = assembleBlock(
+					parentBlock, requestedTimestamp, context);
+			if (context.isCancelled()) {
+				return cancelledOutcome(context, null);
+			}
+			if (assembledBlockOptional.isEmpty()) {
+				return outcome(ExactOneMiningOutcome.Code.NOT_ELIGIBLE, context, null, null);
+			}
+
+			MiningBlockAssemblerService.AssembledBlock assembledBlock = assembledBlockOptional.orElseThrow();
+			removeInvalidTransactions(assembledBlock);
+			MiningBlockAssemblerService.BlockHeaderTemplate template = assembledBlock.getBlockTemplate();
+
+			if (context.isCancelled()) {
+				return cancelledOutcome(context, template.getHeight());
+			}
+			prepareProofOfWorkForMining(template.getHeight(), context);
+			if (context.isCancelled()) {
+				return cancelledOutcome(context, template.getHeight());
+			}
+
+			BigInteger target = DifficultyUtil.calculateTargetFromDifficulty(template.getDifficulty());
+			log.debug("Mining block {} | Diff: {} | TargetPrefix: {}...",
+					template.getHeight(), template.getDifficulty(),
+					target.toString(16).substring(0, Math.min(10, target.toString(16).length())));
+
+			long nonceStart = System.currentTimeMillis();
+			Long foundNonce = findNonce(template, target, context);
+			long durationMs = System.currentTimeMillis() - nonceStart;
+			registry.timer("mining.cycle_time").record(Duration.ofMillis(durationMs));
+			if (foundNonce == null) {
+				return cancelledOutcome(context, template.getHeight());
+			}
+			if (context.isCancelled()) {
+				shutdownHashingWorker();
+				return cancelledOutcome(context, template.getHeight());
+			}
+
+			registry.counter("mining.blocks_found").increment();
+			return processMinedBlock(template, assembledBlock, foundNonce, durationMs, context);
+		} catch (GETxValidationFailedException e) {
+			mempoolService.removeTransaction(e.getFailedTx().getHash());
+			log.warn("Tx validation failed during mining: {}", e.getMessage());
+			return outcome(context.exactOne ? ExactOneMiningOutcome.Code.FAILED : ExactOneMiningOutcome.Code.RETRYABLE,
+					context, null, null);
+		} catch (ProofOfWorkMiningException e) {
+			shutdownHashingWorker();
+			log.error("Proof-of-work mining attempt failed", e);
+			return outcome(ExactOneMiningOutcome.Code.FAILED, context, null, null);
+		} catch (Exception e) {
+			log.error("Mining attempt failed", e);
+			if (!context.exactOne) {
+				context.retryDelayMillis = 5_000;
+			}
+			return outcome(context.exactOne ? ExactOneMiningOutcome.Code.FAILED : ExactOneMiningOutcome.Code.RETRYABLE,
+					context, null, null);
+		}
+	}
+
+	private Optional<MiningBlockAssemblerService.AssembledBlock> assembleBlock(
+			Block parentBlock,
+			Optional<Instant> requestedTimestamp,
+			MiningAttemptContext context) throws Exception {
+		if (!context.exactOne) {
+			return miningBlockAssemblerService.createBlockTemplate(parentBlock);
+		}
+		try (BlockTimestampReservation timestamp = chainClock.reserveNextBlockTimestamp(
+				parentBlock.getHeader(), requestedTimestamp)) {
+			return miningBlockAssemblerService.createBlockTemplate(parentBlock, timestamp);
+		}
+	}
+
+	private void removeInvalidTransactions(MiningBlockAssemblerService.AssembledBlock assembledBlock) {
+		if (assembledBlock.getInvalidTxs() == null || assembledBlock.getInvalidTxs().isEmpty()) {
+			return;
+		}
+		List<Hash> invalidHashes = assembledBlock.getInvalidTxs().stream()
+				.map(Tx::getHash)
+				.collect(Collectors.toList());
+		mempoolService.removeTransactions(invalidHashes);
+	}
+
+	private ExactOneMiningOutcome cancelledOutcome(MiningAttemptContext context, Long height) {
+		ExactOneMiningOutcome.Code code;
+		if (context.parentChanged.get()) {
+			code = ExactOneMiningOutcome.Code.STALE_PARENT;
+		} else if (context.deadlineExceeded()) {
+			code = ExactOneMiningOutcome.Code.TIMED_OUT;
+		} else {
+			code = ExactOneMiningOutcome.Code.CANCELLED;
+		}
+		return outcome(code, context, height, null);
+	}
+
+	private ExactOneMiningOutcome outcome(
+			ExactOneMiningOutcome.Code code,
+			MiningAttemptContext context,
+			Long height,
+			Hash blockHash) {
+		return new ExactOneMiningOutcome(code, context.parentHash, height, blockHash, null);
+	}
+
+	private void prepareProofOfWorkForMining(long height, MiningAttemptContext context) {
+		coordinationLock.lock();
+		try {
+			if (context.isCancelled() || shutdown.get()) {
+				context.cancelled.set(true);
+				return;
+			}
+			proofOfWorkInitializationActive = true;
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+		try {
+			proofOfWorkProvider.prepareForMining(height);
+		} catch (ProofOfWorkMiningException failure) {
+			throw failure;
+		} catch (RuntimeException | LinkageError failure) {
+			throw new ProofOfWorkMiningException(
+					"Proof-of-work provider initialization failed for height " + height,
+					failure);
+		} finally {
+			coordinationLock.lock();
+			try {
+				proofOfWorkInitializationActive = false;
+				coordinationChanged.signalAll();
+			} finally {
+				coordinationLock.unlock();
+			}
+		}
+	}
+
+	private ExecutorService shutdownHashingWorker() {
+		synchronized (hashingWorkerLock) {
+			ExecutorService worker = blockHashingWorker;
+			blockHashingWorker = null;
+			if (worker != null) {
+				worker.shutdownNow();
+			}
+			return worker;
+		}
+	}
+
+	private ExecutorService hashingWorkerFor(MiningAttemptContext context) {
+		synchronized (hashingWorkerLock) {
+			if (context.isCancelled() || shutdown.get()) {
+				return null;
+			}
+			if (blockHashingWorker == null || blockHashingWorker.isShutdown()) {
+				blockHashingWorker = Executors.newFixedThreadPool(hashingThreads, minerThreadFactory);
+			}
+			if (context.isCancelled() || shutdown.get()) {
+				blockHashingWorker.shutdownNow();
+				blockHashingWorker = null;
+				return null;
+			}
+			return blockHashingWorker;
+		}
 	}
 
 	private Long findNonce(MiningBlockAssemblerService.BlockHeaderTemplate template, BigInteger target) {
+		MiningAttemptContext context = activeAttempt;
+		if (context == null) {
+			context = MiningAttemptContext.autonomous();
+		}
+		return findNonce(template, target, context);
+	}
 
-		if (blockHashingWorker == null || blockHashingWorker.isShutdown()) {
-			blockHashingWorker = Executors.newFixedThreadPool(hashingThreads, minerThreadFactory);
+	private Long findNonce(MiningBlockAssemblerService.BlockHeaderTemplate template, BigInteger target,
+			MiningAttemptContext context) {
+
+		ExecutorService hashingWorker = hashingWorkerFor(context);
+		if (hashingWorker == null) {
+			return null;
 		}
 
-		// Optimization: Convert target to byte array once to avoid BigInteger creation
-		// in loop
-		final byte[] targetBytes = new byte[32];
-		byte[] rawTarget = target.toByteArray();
-		if (rawTarget.length > 32) {
-			System.arraycopy(rawTarget, rawTarget.length - 32, targetBytes, 0, 32);
-		} else {
-			System.arraycopy(rawTarget, 0, targetBytes, 32 - rawTarget.length, rawTarget.length);
-		}
+		ProofOfWorkTarget proofOfWorkTarget = ProofOfWorkTarget.of(target);
 
 		AtomicReference<Long> foundNonce = new AtomicReference<>();
+		AtomicReference<Throwable> workerFailure = new AtomicReference<>();
 		List<Callable<Void>> tasks = new ArrayList<>(hashingThreads);
 		// Range splitting
 		final long chunkSize = (Long.MAX_VALUE / hashingThreads);
@@ -351,8 +742,7 @@ public class MiningService {
 			final byte[] baseHeader = BlockHeaderUtil.powInput(template.toBlockHeader());
 
 			tasks.add(() -> {
-				// Each thread gets its own VM
-				try (RandomXVM vm = randomXService.createMiningVM()) {
+				try (ProofOfWorkHasher hasher = proofOfWorkProvider.openMiningHasher()) {
 					// Optimization: Direct buffer manipulation
 					byte[] workBuffer = new byte[baseHeader.length];
 					System.arraycopy(baseHeader, 0, workBuffer, 0, baseHeader.length);
@@ -362,9 +752,13 @@ public class MiningService {
 					int batchCounter = 0;
 
 					while (currentNonce < end) {
+						if (workerFailure.get() != null) {
+							return null;
+						}
 						// Optimization: Bitwise check is faster than modulo
-						if ((++batchCounter & 0xFFF) == 0) {
-							if (foundNonce.get() != null || Thread.currentThread().isInterrupted())
+						if ((++batchCounter & 0xFF) == 0) {
+							if (foundNonce.get() != null || Thread.currentThread().isInterrupted()
+									|| context.isCancelled())
 								return null;
 						}
 
@@ -378,55 +772,67 @@ public class MiningService {
 						workBuffer[nonceOffset + 6] = (byte) (currentNonce >>> 8);
 						workBuffer[nonceOffset + 7] = (byte) (currentNonce);
 
-						byte[] hashBytes = vm.calculateHash(workBuffer);
+						byte[] hashBytes = hasher.hash(workBuffer);
 
-						// Optimization: Byte comparison instead of BigInteger
-						if (isHashLessThanOrEqual(hashBytes, targetBytes)) {
+						if (proofOfWorkTarget.accepts(hashBytes)) {
 							foundNonce.set(currentNonce);
 							return null;
 						}
 
 						currentNonce++;
 					}
-				} catch (Exception e) {
-					log.error("Worker error: {}", e.getMessage());
+				} catch (RuntimeException | Error failure) {
+					workerFailure.compareAndSet(null, failure);
+					throw failure;
 				}
 				return null;
 			});
 		}
 
 		try {
-			// Optimization: invokeAll allows threads to finish gracefully via shared flag
-			blockHashingWorker.invokeAll(tasks);
+			List<Future<Void>> futures;
+			if (context.exactOne) {
+				long remaining = context.remainingNanos();
+				if (remaining <= 0) {
+					return null;
+				}
+				futures = hashingWorker.invokeAll(tasks, remaining, TimeUnit.NANOSECONDS);
+			} else {
+				futures = hashingWorker.invokeAll(tasks);
+			}
+			for (Future<Void> future : futures) {
+				if (future.isCancelled()) {
+					return null;
+				}
+				future.get();
+			}
 		} catch (InterruptedException e) {
 			// Main thread interrupted (e.g. new block found)
+			Thread.currentThread().interrupt();
 			return null;
-		} catch (java.util.concurrent.RejectedExecutionException e) {
+		} catch (ExecutionException e) {
+			throw new ProofOfWorkMiningException("Proof-of-work worker failed", e.getCause());
+		} catch (RejectedExecutionException e) {
 			// Executor shutdown
 			return null;
+		} finally {
+			if (context.isCancelled() || Thread.currentThread().isInterrupted()) {
+				shutdownHashingWorker();
+			}
 		}
 
 		return foundNonce.get();
 	}
 
-	private static boolean isHashLessThanOrEqual(byte[] hash, byte[] target) {
-		for (int i = 0; i < 32; i++) {
-			int h = hash[i] & 0xFF;
-			int t = target[i] & 0xFF;
-			if (h < t)
-				return true;
-			if (h > t)
-				return false;
-		}
-		return true;
-	}
-
-	private void processMinedBlock(MiningBlockAssemblerService.BlockHeaderTemplate template,
+	private ExactOneMiningOutcome processMinedBlock(MiningBlockAssemblerService.BlockHeaderTemplate template,
 			MiningBlockAssemblerService.AssembledBlock assembledBlock,
-			Long nonce, double durationMs) {
+			Long nonce, double durationMs, MiningAttemptContext context) {
 
 		masterChainLock.lock();
 		try {
+			if (context.isCancelled()) {
+				return cancelledOutcome(context, template.getHeight());
+			}
 			StoredBlock currentTipStored = chainQueryService.getLatestStoredBlockOrThrow();
 
 			// Check if we are still on the correct parent - use StoredBlock.getHash()
@@ -457,30 +863,290 @@ public class MiningService {
 						.txs(assembledBlock.getTxs())
 						.build();
 
-				// 4. Publish
-				applicationEventPublisher.publishEvent(new BlockMinedEvent(this, foundBlock));
+				context.submittedHash = foundBlock.getHash();
+				if (!beginBlockSubmission(context)) {
+					return cancelledOutcome(context, template.getHeight());
+				}
+				BlockIngestionOutcome ingestionOutcome = blockIngestionService.processBlock(
+						foundBlock,
+						ConnectedSource.MINER,
+						identityService.getNodeIdentityAddress(),
+						foundBlock.getHeader().getTimestamp());
+				ExactOneMiningOutcome.Code code = mapIngestionOutcome(ingestionOutcome);
+				return new ExactOneMiningOutcome(code, context.parentHash, template.getHeight(), foundBlock.getHash(),
+						ingestionOutcome.code());
 			} else {
 				log.warn("STALE: Block mined but chain moved (Target: {} -> Tip: {})",
 						template.getPreviousHash().toShortLogString(),
 						currentTipStored.getHash().toShortLogString());
+				return outcome(ExactOneMiningOutcome.Code.STALE_PARENT, context, template.getHeight(), null);
 			}
 		} finally {
 			masterChainLock.unlock();
 		}
 	}
 
+	private boolean beginBlockSubmission(MiningAttemptContext context) {
+		coordinationLock.lock();
+		try {
+			if (!context.exactOne) {
+				return !shutdown.get() && !context.isCancelled();
+			}
+			ExactOneOperation operation = exactOneOperation;
+			if (operation == null || operation.context != context
+					|| operation.state != OperationState.RUNNING
+					|| shutdown.get() || context.isCancelled()) {
+				return false;
+			}
+			operation.state = OperationState.SUBMITTING;
+			ScheduledFuture<?> deadlineTask = operation.deadlineTask;
+			if (deadlineTask != null) {
+				deadlineTask.cancel(false);
+			}
+			coordinationChanged.signalAll();
+			return true;
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	/** Retained for focused legacy tests of stale-parent suppression. */
+	@SuppressWarnings("unused")
+	private void processMinedBlock(MiningBlockAssemblerService.BlockHeaderTemplate template,
+			MiningBlockAssemblerService.AssembledBlock assembledBlock,
+			Long nonce, double durationMs) {
+		MiningAttemptContext context = MiningAttemptContext.autonomous();
+		context.parentHash = template.getPreviousHash();
+		processMinedBlock(template, assembledBlock, nonce, durationMs, context);
+	}
+
+	private ExactOneMiningOutcome.Code mapIngestionOutcome(BlockIngestionOutcome outcome) {
+		return switch (outcome.code()) {
+			case ACCEPTED, ALREADY_EXISTS -> ExactOneMiningOutcome.Code.ACCEPTED;
+			case ORPHAN_BUFFERED, GAP_DETECTED -> ExactOneMiningOutcome.Code.STALE_PARENT;
+			case REJECTED_STATELESS, REJECTED_CONTEXTUAL, REJECTED_CONSENSUS_POLICY,
+					REJECTED_EXECUTION, REJECTED_STATE_ROOT -> ExactOneMiningOutcome.Code.REJECTED_BY_INGESTION;
+			case INTERNAL_FAILURE -> ExactOneMiningOutcome.Code.FAILED;
+		};
+	}
+
 	@EventListener
 	public void onNewBlockConnected(BlockConnectedEvent event) {
-		// Stop current job immediately to start working on the new block
-		if (!isMining.get())
+		MiningAttemptContext context = activeAttempt;
+		if (context == null) {
+			if (isMining.get()) {
+				stopCurrentNonceSearch();
+			}
 			return;
+		}
+		if (context.submittedHash != null && context.submittedHash.equals(event.getBlock().getHash())) {
+			return;
+		}
+		context.parentChanged.set(true);
 		stopCurrentNonceSearch();
 	}
 
+	private void scheduleAutonomousMiningIfAllowed() {
+		coordinationLock.lock();
+		try {
+			if (!autonomousMiningAllowed() || exactOneOperation != null || activeWork != ActiveWork.NONE
+					|| !isMining.compareAndSet(false, true)) {
+				return;
+			}
+			try {
+				blockMiningExecutor.submit(this::runMiningLoop);
+				log.info("Mining started");
+			} catch (RejectedExecutionException e) {
+				isMining.set(false);
+			}
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private boolean autonomousMiningAllowed() {
+		coordinationLock.lock();
+		try {
+			return miningConfig.getEnable() && autonomousDesired.get() && !shutdown.get() && suspensions.isEmpty();
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void beginActiveWork(ActiveWork work, MiningAttemptContext context) {
+		coordinationLock.lock();
+		try {
+			activeWork = work;
+			activeAttempt = context;
+			miningThread = Thread.currentThread();
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void endActiveWork() {
+		coordinationLock.lock();
+		try {
+			activeWork = ActiveWork.NONE;
+			miningThread = null;
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private void requestActiveAttemptCancellation(boolean parentChanged) {
+		Thread activeThread;
+		boolean initializationActive;
+		coordinationLock.lock();
+		try {
+			MiningAttemptContext context = activeAttempt;
+			if (context != null && context.exactOne && isExactOneSubmittingLocked()) {
+				return;
+			}
+			if (context != null) {
+				context.cancelled.set(true);
+				if (parentChanged) {
+					context.parentChanged.set(true);
+				}
+			}
+			activeThread = miningThread;
+			initializationActive = proofOfWorkInitializationActive
+					|| proofOfWorkProvider.isInitializationInProgress();
+		} finally {
+			coordinationLock.unlock();
+		}
+		if (activeThread == null || initializationActive) {
+			return;
+		}
+		activeThread.interrupt();
+		shutdownHashingWorker();
+	}
+
+	private void signalCoordinationChanged() {
+		coordinationLock.lock();
+		try {
+			coordinationChanged.signalAll();
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private boolean awaitNonInterruptibleWork(Duration timeout) {
+		long now = System.nanoTime();
+		long timeoutNanos = timeout.toNanos();
+		long deadline = now > Long.MAX_VALUE - timeoutNanos ? Long.MAX_VALUE : now + timeoutNanos;
+		coordinationLock.lock();
+		try {
+			long remaining = Math.max(0, deadline - System.nanoTime());
+			while ((proofOfWorkInitializationActive || proofOfWorkProvider.isInitializationInProgress()
+					|| isExactOneSubmittingLocked())
+					&& remaining > 0) {
+				try {
+					coordinationChanged.awaitNanos(
+							Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(25)));
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return false;
+				}
+				remaining = Math.max(0, deadline - System.nanoTime());
+			}
+			return !proofOfWorkInitializationActive && !proofOfWorkProvider.isInitializationInProgress()
+					&& !isExactOneSubmittingLocked();
+		} finally {
+			coordinationLock.unlock();
+		}
+	}
+
+	private boolean isExactOneSubmittingLocked() {
+		return exactOneOperation != null && exactOneOperation.state == OperationState.SUBMITTING;
+	}
+
+	private void validateWaitTimeout(Duration timeout) {
+		if (timeout == null || timeout.isNegative()) {
+			throw new IllegalArgumentException("Mining quiescence timeout cannot be null or negative");
+		}
+	}
+
 	private int getHashingThreads() {
-		Integer configured = miningConfig.getHashingThreads();
-		if (configured != null && configured > 0)
-			return configured;
-		return Math.max(1, Runtime.getRuntime().availableProcessors() - 2);
+		return miningConfig.resolveHashingThreads(Runtime.getRuntime().availableProcessors());
+	}
+
+	private static Thread newDeadlineThread(Runnable task) {
+		Thread thread = new Thread(task, "exact-one-mining-deadline");
+		thread.setDaemon(true);
+		return thread;
+	}
+
+	private enum ActiveWork {
+		NONE,
+		AUTONOMOUS,
+		EXACT_ONE
+	}
+
+	private enum OperationState {
+		QUEUED,
+		RUNNING,
+		SUBMITTING,
+		TERMINAL
+	}
+
+	private static final class ExactOneOperation {
+		private final ExactOneMiningRequest request;
+		private final MiningAttemptContext context;
+		private final CompletableFuture<ExactOneMiningOutcome> result;
+		private OperationState state = OperationState.QUEUED;
+		private ScheduledFuture<?> deadlineTask;
+
+		private ExactOneOperation(
+				ExactOneMiningRequest request,
+				MiningAttemptContext context,
+				CompletableFuture<ExactOneMiningOutcome> result) {
+			this.request = request;
+			this.context = context;
+			this.result = result;
+		}
+	}
+
+	private static final class MiningAttemptContext {
+		private final AtomicBoolean cancelled = new AtomicBoolean();
+		private final AtomicBoolean parentChanged = new AtomicBoolean();
+		private final long deadlineNanos;
+		private final boolean exactOne;
+		private volatile Hash parentHash;
+		private volatile Hash submittedHash;
+		private volatile long retryDelayMillis;
+
+		private MiningAttemptContext(long deadlineNanos, boolean exactOne) {
+			this.deadlineNanos = deadlineNanos;
+			this.exactOne = exactOne;
+		}
+
+		private static MiningAttemptContext autonomous() {
+			return new MiningAttemptContext(Long.MAX_VALUE, false);
+		}
+
+		private static MiningAttemptContext exactOne(Duration deadline) {
+			long now = System.nanoTime();
+			long nanos = deadline.toNanos();
+			long end = now > Long.MAX_VALUE - nanos ? Long.MAX_VALUE : now + nanos;
+			return new MiningAttemptContext(end, true);
+		}
+
+		private boolean deadlineExceeded() {
+			return deadlineNanos != Long.MAX_VALUE && System.nanoTime() - deadlineNanos >= 0;
+		}
+
+		private long remainingNanos() {
+			if (deadlineNanos == Long.MAX_VALUE) {
+				return Long.MAX_VALUE;
+			}
+			return Math.max(0, deadlineNanos - System.nanoTime());
+		}
+
+		private boolean isCancelled() {
+			return cancelled.get() || deadlineExceeded();
+		}
 	}
 }

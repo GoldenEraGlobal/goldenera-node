@@ -35,8 +35,19 @@ echo "$GITHUB_TOKEN" > "$TEMP_TOKEN_FILE"
 
 trap "rm -f $TEMP_TOKEN_FILE" EXIT
 
+BUILD_GIT_COMMIT="${BUILD_GIT_COMMIT:-$(git rev-parse HEAD | tr '[:upper:]' '[:lower:]')}"
+CRYPTOJ_VERSION="$(./mvnw help:evaluate -Dexpression=goldenera-cryptoj.version -q -DforceStdout)"
+CRYPTOJ_JAR="${HOME}/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar"
+if [ ! -f "$CRYPTOJ_JAR" ]; then
+    echo "ERROR: CryptoJ artifact is not installed locally: $CRYPTOJ_JAR"
+    exit 1
+fi
+CRYPTOJ_SHA256="${CRYPTOJ_SHA256:-$(shasum -a 256 "$CRYPTOJ_JAR" | awk '{print $1}')}"
+
 docker build \
   --build-arg GITHUB_ACTOR="$GITHUB_USER" \
+  --build-arg BUILD_GIT_COMMIT="$BUILD_GIT_COMMIT" \
+  --build-arg CRYPTOJ_SHA256="$CRYPTOJ_SHA256" \
   --secret id=github_token,src="$TEMP_TOKEN_FILE" \
   -t "$IMAGE_TAG" .
 

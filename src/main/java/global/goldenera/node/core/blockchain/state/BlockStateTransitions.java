@@ -45,12 +45,15 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.reorg.ChainSwitchService;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.chainidentity.VerifiedGenesisPlan;
+import global.goldenera.node.core.storage.chainidentity.VerifiedGenesisPlan.ClaimedGenesis;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
@@ -86,10 +89,35 @@ public class BlockStateTransitions {
 		this.blockEventExtractor = blockEventExtractor;
 	}
 
-	public void connectBlock(
-			@NonNull Block block,
+	public void connectValidatedBlock(
+			@NonNull StatelessValidatedBlock validatedBlock,
 			@NonNull WorldState worldState,
 			@NonNull ConnectedSource source,
+			StateProcessor.ExecutionResult executionResult,
+			Address receivedFrom,
+			Instant receivedAt) {
+		if (source == ConnectedSource.GENESIS) {
+			throw new IllegalArgumentException("Validated non-genesis path cannot use GENESIS source");
+		}
+		connectBlock(validatedBlock.block(), worldState, source, executionResult, receivedFrom, receivedAt);
+	}
+
+	public void connectVerifiedGenesis(@NonNull VerifiedGenesisPlan plan) {
+		ClaimedGenesis genesis = plan.claimForPersistence();
+		Hash calculatedStateRoot = genesis.worldState().calculateRootHash();
+		if (!calculatedStateRoot.equals(genesis.block().getHeader().getStateRootHash())) {
+			throw new IllegalArgumentException(
+					"Verified genesis world state changed before persistence");
+		}
+		connectBlock(
+				genesis.block(), genesis.worldState(), ConnectedSource.GENESIS, null,
+				genesis.receivedFrom(), genesis.receivedAt());
+	}
+
+	private void connectBlock(
+			Block block,
+			WorldState worldState,
+			ConnectedSource source,
 			StateProcessor.ExecutionResult executionResult,
 			Address receivedFrom,
 			Instant receivedAt) {
@@ -187,8 +215,7 @@ public class BlockStateTransitions {
 					Collections.reverse(forkChain); // Now it's Ancestor -> ... -> NewBlock
 
 					// 2. Execute Switch
-					chainSwitchService.executeAtomicReorgSwap(commonAncestor, forkChain, true,
-							ChainSwitchService.SwitchType.REORG);
+					chainSwitchService.executeAtomicReorgSwap(new ValidatedReorgPlan(commonAncestor, forkChain));
 					return; // Done, reorg service handled everything
 
 				} catch (Exception e) {

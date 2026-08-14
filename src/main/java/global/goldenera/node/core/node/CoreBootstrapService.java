@@ -26,7 +26,6 @@ package global.goldenera.node.core.node;
 import static lombok.AccessLevel.PRIVATE;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
@@ -35,9 +34,14 @@ import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.blockchain.genesis.GenesisInitializer;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.node.readiness.CoreReadinessFailureReason;
+import global.goldenera.node.core.node.readiness.CoreMilestonePublisher;
+import global.goldenera.node.core.node.readiness.CoreRuntimeReadinessTracker;
 import global.goldenera.node.core.p2p.manager.NodeConnectionManager;
+import global.goldenera.node.core.p2p.netty.NettyP2PServer;
 import global.goldenera.node.core.p2p.services.DirectoryService;
 import global.goldenera.node.core.processing.MiningEconomicsActivationService;
+import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.sync.BlockSyncManagerService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -49,62 +53,85 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class CoreBootstrapService {
 
-	ApplicationEventPublisher applicationEventPublisher;
+	CoreMilestonePublisher milestonePublisher;
 	DirectoryService p2pClientService;
 	ChainHeadStateCache chainHeadStateCache;
 	BlockSyncManagerService syncManagerService;
 	GenesisInitializer blockGenesisService;
 	NodeConnectionManager nodeConnectionManager;
+	NettyP2PServer p2pServer;
 	ChainQuery chainQuery;
 	MiningEconomicsActivationService miningEconomicsActivationService;
+	AuthoritativeChainIdentityProvider chainIdentityProvider;
+	CoreRuntimeReadinessTracker readiness;
 
 	@EventListener
 	public void onApplicationReady(ApplicationReadyEvent event) {
 		log.info("CORE: Starting core initialization...");
-		if (!initializationDbSuccessful()) {
-			log.error("CORE DB: Core initialization failed: Database initialization failed");
-			System.exit(1);
-		}
+		verifyChainIdentity();
+		initializationDb();
 
-		applicationEventPublisher.publishEvent(new CoreDbReadyEvent(this));
+		milestonePublisher.publish(new CoreDbReadyEvent(this));
 
-		if (initializationSuccessful()) {
-			log.info("CORE: Core initialization successful. Publishing CoreReadyEvent.");
-			applicationEventPublisher.publishEvent(new CoreReadyEvent(this));
-		} else {
-			System.exit(1);
+		int boundPort = initializeRuntime();
+		readiness.coreReady();
+		startDirectory(boundPort);
+		log.info("CORE: Core initialization successful. Publishing CoreReadyEvent.");
+		milestonePublisher.publish(new CoreReadyEvent(this));
+	}
+
+	private void verifyChainIdentity() {
+		try {
+			chainIdentityProvider.identity();
+			readiness.chainIdentityBound();
+		} catch (Exception e) {
+			readiness.failed(CoreReadinessFailureReason.CHAIN_IDENTITY);
+			log.error("CORE IDENTITY: Authoritative chain identity verification failed: {}", e.getMessage());
+			throw new CoreBootstrapException("Core chain identity initialization failed", e);
 		}
 	}
 
-	private boolean initializationDbSuccessful() {
+	private void initializationDb() {
 		try {
 			blockGenesisService.checkAndInitGenesisBlock();
 			chainHeadStateCache.init();
 			miningEconomicsActivationService.assertHeadReady(
 					chainHeadStateCache.getHeadState(), chainQuery.getLatestStoredBlockOrThrow().getHeight());
+			readiness.genesisHeadReady();
 		} catch (Exception e) {
-			e.printStackTrace();
+			readiness.failed(CoreReadinessFailureReason.GENESIS_HEAD);
 			log.error("CORE DB: Core initialization failed: {}", e.getMessage());
-			return false;
+			throw new CoreBootstrapException("Core database initialization failed", e);
 		}
-		return true;
 	}
 
-	private boolean initializationSuccessful() {
-		// Ignore errors from ping directory
+	private int initializeRuntime() {
+		int boundPort;
 		try {
-			p2pClientService.pingDirectory();
+			boundPort = p2pServer.start();
+			readiness.p2pListenerBound();
 		} catch (Exception e) {
+			readiness.failed(CoreReadinessFailureReason.P2P_BIND);
+			log.error("CORE P2P: Listener bind failed: {}", e.getMessage());
+			throw new CoreBootstrapException("Core P2P listener initialization failed", e);
 		}
 		try {
-			nodeConnectionManager.init();
+			nodeConnectionManager.start();
 			syncManagerService.start();
 		} catch (Exception e) {
-			e.printStackTrace();
+			readiness.failed(CoreReadinessFailureReason.CORE_RUNTIME);
 			log.error("CORE: Core initialization failed: {}", e.getMessage());
-			return false;
+			throw new CoreBootstrapException("Core runtime initialization failed", e);
 		}
-		return true;
+		return boundPort;
+	}
+
+	private void startDirectory(int boundPort) {
+		try {
+			p2pClientService.start(boundPort);
+		} catch (Exception e) {
+			log.warn("CORE DIRECTORY: Optional directory lifecycle failed: {}", e.getMessage());
+		}
 	}
 
 }

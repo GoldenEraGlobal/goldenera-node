@@ -66,7 +66,7 @@ class GenesisMiningEconomicsCompatibilityTest {
 		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(
 				databaseDirectory.resolve("dev"))) {
 			WorldState state = storage.createEmpty(false);
-			initializer(storage).executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
+			GenesisInitializer.executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
 					Instant.ofEpochMilli(settings.genesisBlockTimestamp()), settings);
 
 			assertThat(state.getParams().getVersion()).isEqualTo(NetworkParamsStateVersion.V2);
@@ -88,7 +88,7 @@ class GenesisMiningEconomicsCompatibilityTest {
 		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(
 				databaseDirectory.resolve("empty-dev"))) {
 			WorldState state = storage.createEmpty(false);
-			initializer(storage).executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
+			GenesisInitializer.executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
 					Instant.ofEpochMilli(settings.genesisBlockTimestamp()), settings);
 
 			Hash root = storage.persist(state);
@@ -108,7 +108,7 @@ class GenesisMiningEconomicsCompatibilityTest {
 		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(
 				databaseDirectory.resolve(network.name()))) {
 			WorldState state = storage.createEmpty(false);
-			initializer(storage).executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
+			GenesisInitializer.executeGenesisStateExplicitly(state, settings.genesisAuthorityAddresses(),
 					Instant.ofEpochMilli(settings.genesisBlockTimestamp()), settings);
 
 			assertThat(state.getParams().getVersion()).isEqualTo(NetworkParamsStateVersion.V1);
@@ -117,10 +117,6 @@ class GenesisMiningEconomicsCompatibilityTest {
 					.isEqualTo(ValidatorStateVersion.V1));
 			assertThat(state.calculateRootHash()).isEqualTo(expectedRoot);
 		}
-	}
-
-	private GenesisInitializer initializer(PersistentWorldStateTestSupport storage) {
-		return new GenesisInitializer(mock(ChainQuery.class), mock(BlockStateTransitions.class), storage.factory());
 	}
 
 	private GenesisSettings withoutValidators(GenesisSettings genesis) {

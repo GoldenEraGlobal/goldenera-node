@@ -49,7 +49,6 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
-import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.p2p.events.P2PHeadersReceivedEvent;
@@ -172,7 +171,6 @@ class BlockSyncManagerBroadcastHeaderSecurityTest {
 				mock(MiningService.class),
 				mock(IdentityService.class),
 				validator,
-				mock(TxValidator.class),
 				chainQuery,
 				mock(BlockReorgs.class),
 				peerRegistry,

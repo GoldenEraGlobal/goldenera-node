@@ -54,6 +54,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 
 import global.goldenera.node.core.properties.BlockchainDbProperties;
+import global.goldenera.node.core.storage.chainidentity.ChainIdentityPathPreflight;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -92,7 +93,10 @@ public class BlockchainDBConfig {
 
 	@Bean(destroyMethod = "close")
 	@Primary
-	public RocksDB blockchainDB(RocksDbColumnFamilies columnFamiliesHolder) throws RocksDBException, IOException {
+	public RocksDB blockchainDB(
+			RocksDbColumnFamilies columnFamiliesHolder,
+			ChainIdentityPathPreflight chainIdentityPathPreflight)
+			throws RocksDBException, IOException {
 		String dbPath = props.getPath();
 		Files.createDirectories(Paths.get(dbPath));
 		RocksDB.loadLibrary();

@@ -29,12 +29,15 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -50,6 +53,7 @@ import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent.RemoveReason;
 import global.goldenera.node.core.config.CoreAsyncConfig;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -82,7 +86,7 @@ class WebhookListenerServiceTest {
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
 		when(event.getBlock()).thenReturn(block);
 		when(event.getEvents()).thenReturn(List.of());
-		WebhookListenerService listener = new WebhookListenerService(dispatch, executor);
+		WebhookListenerService listener = new WebhookListenerService(dispatch, readyExplorer(), executor);
 
 		try {
 			listener.handleBlockConnected(event);
@@ -102,7 +106,7 @@ class WebhookListenerServiceTest {
 	@EnumSource(value = RemoveReason.class, names = { "EVICTED_FULL", "INSUFFICIENT_FUNDS" })
 	void capacityAndBalanceEvictionsProduceDroppedWebhookStatus(RemoveReason reason) {
 		WebhookDispatchService dispatch = mock(WebhookDispatchService.class);
-		WebhookListenerService listener = new WebhookListenerService(dispatch, Runnable::run);
+		WebhookListenerService listener = new WebhookListenerService(dispatch, readyExplorer(), Runnable::run);
 		Tx tx = mock(Tx.class);
 		MempoolEntry entry = mock(MempoolEntry.class);
 		when(entry.getTx()).thenReturn(tx);
@@ -115,5 +119,51 @@ class WebhookListenerServiceTest {
 
 		verify(dispatch).processAddressActivityEvent(
 				null, tx, WebhookTxStatus.DROPPED, null, WebhookType.BLOCKCHAIN);
+	}
+
+	@Test
+	void notReadyExplorerDoesNotResolveExecutorOrEnqueueWebhookWork() {
+		WebhookDispatchService dispatch = mock(WebhookDispatchService.class);
+		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
+		ExecutorResolutionProbe executor = new ExecutorResolutionProbe();
+		WebhookListenerService listener = new WebhookListenerService(dispatch, readiness, executor::resolve);
+		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
+
+		listener.handleBlockConnected(event);
+
+		assertThat(executor.resolved).isFalse();
+		verify(dispatch, never()).processNewBlockEvent(any(), anyList(), any());
+	}
+
+	@Test
+	void queuedWebhookWorkRechecksReadinessBeforeProcessing() {
+		WebhookDispatchService dispatch = mock(WebhookDispatchService.class);
+		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
+		when(readiness.isReady()).thenReturn(true, false);
+		AtomicReference<Runnable> queued = new AtomicReference<>();
+		WebhookListenerService listener = new WebhookListenerService(dispatch, readiness, queued::set);
+
+		listener.handleBlockConnected(mock(BlockConnectedEvent.class));
+		assertThat(queued.get()).isNotNull();
+
+		queued.get().run();
+
+		verify(dispatch, never()).processNewBlockEvent(any(), anyList(), any());
+	}
+
+	private ExplorerRuntimeReadiness readyExplorer() {
+		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
+		when(readiness.isReady()).thenReturn(true);
+		return readiness;
+	}
+
+	private static final class ExecutorResolutionProbe {
+
+		private boolean resolved;
+
+		private Executor resolve() {
+			resolved = true;
+			return Runnable::run;
+		}
 	}
 }

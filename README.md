@@ -138,8 +138,9 @@ SPRING_PROFILES_ACTIVE="prod"
 # Admin PORT & Explorer PORT
 LISTEN_PORT=8080
 
-# Explorer enable (if false, explorer will not sync and will not be available)
-EXPLORER_ENABLE=false
+# Explorer/SQL runtime is enabled by default.
+# Set false for an explicit core-only node; PostgreSQL, JPA and Liquibase are then not initialized.
+EXPLORER_ENABLE=true
 
 # Node
 NODE_IDENTITY_FILE="./node_data/.node_identity"
@@ -256,6 +257,7 @@ MEMPOOL_MAX_NONCE_GAP_PER_SENDER=64
 # Mining
 MINING_ENABLE=false
 MINING_HASHING_THREADS=-1
+MINING_MEMORY_MODE=FULL
 
 # PostgreSQL
 POSTGRESQL_HOST="localhost"
@@ -322,6 +324,7 @@ Before running the node, you must adjust specific `.env` variables to match your
 | **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |
 | **`P2P_HOST`** | **Must be your Public IP Address.**<br>Do not use a domain name here. This is used for peer discovery. |
 | **`MINING_HASHING_THREADS`** | Number of CPU cores dedicated to mining. <br>`-1` = Auto (Leaves ~3 cores free for system/node). <br>Ensure at least 1 core remains free for system tasks. |
+| **`MINING_MEMORY_MODE`** | RandomX mining memory mode: `FULL` (production default) or cache-only `LIGHT` (sandbox execution only, capped at 4 hashing threads). |
 | **`SECURITY_HMAC_SECRET`** | **MANDATORY.** Generate a secure key using the command below. |
 | **`SECURITY_AES_GCM_SECRET`** | **MANDATORY.** Generate a secure key using the command below. |
 | **`ADMIN_USERNAME`** | Change this immediately for security. |
@@ -350,6 +353,14 @@ Check the logs to ensure everything is running correctly:
 ```bash
 docker compose logs -f node
 ```
+
+---
+
+## P2P chain identity security
+
+The protocol-v1 `STATUS` message carries a claimed node address and chain capabilities, but it is unsigned and is not cryptographically bound to the connection. The chain capability prevents accidental cross-chain peering; it is not peer authentication. Rejected, unbound STATUS claims must never create a persistent reputation ban for the claimed address.
+
+Patched nodes should always advertise and require the versioned `ge.chain.v1` capability in sandbox networks. The legacy sandbox peer allowlist is only a short-lived wire-compatibility mechanism, not authentication or an authorization boundary. Enable it only for an isolated, disposable Docker sandbox with directory discovery disabled, no publicly reachable P2P listener, and an explicitly bounded migration window for exact known old-node addresses. Remove the allowlist as soon as those peers have been upgraded; the capability-bearing baseline is the supported default.
 
 ---
 

@@ -24,6 +24,8 @@
 package global.goldenera.node;
 
 import java.math.BigInteger;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -78,6 +80,9 @@ public record NetworkSettings(
         // Genesis validators
         List<Address> genesisValidatorAddresses,
 
+		// Explicit native-token allocations applied at genesis
+		Map<Address, Wei> genesisInitialBalances,
+
         // Genesis block configuration
         long genesisBlockTimestamp,
         BigInteger genesisBlockDifficulty,
@@ -110,6 +115,10 @@ public record NetworkSettings(
         Map<Long, Long> maxTxSizeOverrides,
         Map<Long, Long> maxTxCountOverrides,
         Map<Long, Long> maxHeaderSizeOverrides) {
+
+	public NetworkSettings {
+		genesisInitialBalances = Collections.unmodifiableMap(new LinkedHashMap<>(genesisInitialBalances));
+	}
 
     // =============================================
     // HEIGHT-AWARE GETTERS (for fork-based changes)
@@ -207,6 +216,7 @@ public record NetworkSettings(
                 genesis.genesisAuthorityAddresses(),
                 genesis.genesisNetworkInitialMintForAuthority(),
                 genesis.genesisValidatorAddresses(),
+				productionInitialBalances(genesis),
                 genesis.genesisBlockTimestamp(),
                 genesis.genesisBlockDifficulty(),
                 genesis.genesisNativeTokenName(),
@@ -225,4 +235,19 @@ public record NetworkSettings(
                 consensus.maxTxCountOverrides(),
                 consensus.maxHeaderSizeOverrides());
     }
+
+	private static Map<Address, Wei> productionInitialBalances(GenesisSettings genesis) {
+		Map<Address, Wei> balances = new LinkedHashMap<>();
+		if (!genesis.genesisAuthorityAddresses().isEmpty()) {
+			balances.merge(
+					genesis.genesisAuthorityAddresses().get(0),
+					genesis.genesisNetworkInitialMintForAuthority(),
+					Wei::addExact);
+		}
+		balances.merge(
+				genesis.genesisNetworkBlockRewardPoolAddress(),
+				genesis.genesisNetworkInitialMintForBlockReward(),
+				Wei::addExact);
+		return balances;
+	}
 }

@@ -35,10 +35,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.env.Environment;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -49,6 +50,7 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.node.readiness.CoreRuntimeReadiness;
 import global.goldenera.node.core.p2p.directory.DirectoryApiV1Client;
 import global.goldenera.node.core.p2p.directory.DirectoryApiV1Serializer;
 import global.goldenera.node.core.p2p.directory.v1.NodeInfoResponse;
@@ -59,8 +61,8 @@ import global.goldenera.node.core.properties.P2PProperties;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.utils.ValidatorUtil;
-import jakarta.annotation.PostConstruct;
 import lombok.AllArgsConstructor;
+import lombok.AccessLevel;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NonNull;
@@ -73,8 +75,11 @@ import lombok.extern.log4j.Log4j2;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class DirectoryService {
 
-	Environment env;
 	ConcurrentHashMap<Address, P2PClient> clients = new ConcurrentHashMap<>();
+	@Getter(AccessLevel.NONE)
+	AtomicBoolean started = new AtomicBoolean();
+	@Getter(AccessLevel.NONE)
+	AtomicInteger advertisedP2pPort = new AtomicInteger(-1);
 
 	Address selfAddress;
 	ThreadPoolTaskScheduler coreScheduler;
@@ -86,17 +91,17 @@ public class DirectoryService {
 	P2PProperties p2pProperties;
 	GeneralProperties generalProperties;
 	DirectoryProperties directoryProperties;
+	CoreRuntimeReadiness coreReadiness;
 
 	public DirectoryService(
-			Environment env,
 			DirectoryApiV1Client directoryApiV1Client,
 			DirectoryApiV1Serializer directoryApiV1Serializer,
 			IdentityService identityService, GeneralProperties generalProperties,
 			P2PProperties p2pProperties,
 			ChainQuery chainQuery,
 			DirectoryProperties directoryProperties,
+			CoreRuntimeReadiness coreReadiness,
 			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
-		this.env = env;
 		this.selfAddress = identityService.getNodeIdentityAddress();
 		this.directoryApiV1Client = directoryApiV1Client;
 		this.directoryApiV1Serializer = directoryApiV1Serializer;
@@ -105,30 +110,49 @@ public class DirectoryService {
 		this.chainQuery = chainQuery;
 		this.p2pProperties = p2pProperties;
 		this.directoryProperties = directoryProperties;
+		this.coreReadiness = coreReadiness;
 		this.coreScheduler = coreScheduler;
 	}
 
-	@PostConstruct
-	public void init() {
-		if (directoryProperties.isDisable()) {
-			loadManualPeers();
-			return;
+	public boolean start(int boundP2pPort) {
+		if (boundP2pPort <= 0 || boundP2pPort > 65535) {
+			throw new IllegalArgumentException("Bound P2P port must be in range 1..65535");
 		}
-		// Schedule with initial delay and fixed delay
-		final long pingIntervalMs = directoryProperties.getPingIntervalInMs();
-		coreScheduler.schedule(
-				this::pingDirectory,
-				triggerContext -> {
-					var lastCompletion = triggerContext.lastCompletion();
-					if (lastCompletion == null) {
-						// First execution - use initial delay
-						return Instant.now().plus(Duration.ofMillis(10000));
-					}
-					// Subsequent executions - use fixed delay
-					return lastCompletion.plus(Duration.ofMillis(pingIntervalMs));
-				});
-		log.info("DirectoryService: Scheduled pingDirectory on coreTaskScheduler (initial 10s, then {}ms)",
-				pingIntervalMs);
+		if (!started.compareAndSet(false, true)) {
+			return false;
+		}
+		advertisedP2pPort.set(boundP2pPort);
+		try {
+			if (directoryProperties.isDisable()) {
+				loadManualPeers();
+				return true;
+			}
+			final long pingIntervalMs = directoryProperties.getPingIntervalInMs();
+			coreScheduler.schedule(
+					this::pingDirectory,
+					triggerContext -> {
+						var lastCompletion = triggerContext.lastCompletion();
+						if (lastCompletion == null) {
+							return Instant.now().plus(Duration.ofMillis(10000));
+						}
+						return lastCompletion.plus(Duration.ofMillis(pingIntervalMs));
+					});
+			log.info("DirectoryService: Scheduled pingDirectory on coreTaskScheduler (initial 10s, then {}ms)",
+					pingIntervalMs);
+			return true;
+		} catch (RuntimeException e) {
+			advertisedP2pPort.set(-1);
+			started.set(false);
+			throw e;
+		}
+	}
+
+	public boolean isStarted() {
+		return started.get();
+	}
+
+	public int advertisedP2pPort() {
+		return advertisedP2pPort.get();
 	}
 
 	/**
@@ -173,7 +197,7 @@ public class DirectoryService {
 	 * Scheduled via coreTaskScheduler in init().
 	 */
 	public void pingDirectory() {
-		if (directoryProperties.isDisable()) {
+		if (directoryProperties.isDisable() || !started.get() || !coreReadiness.isReady()) {
 			return;
 		}
 		StoredBlock block = chainQuery.getLatestStoredBlockOrThrow();
@@ -183,7 +207,7 @@ public class DirectoryService {
 
 		NodePingRequest request = new NodePingRequest();
 		request.setP2pListenHost(p2pProperties.getHost());
-		request.setP2pListenPort(p2pProperties.getPort());
+		request.setP2pListenPort(advertisedP2pPort.get());
 		request.setP2pProtocolVersion(Constants.P2P_PROTOCOL_VERSION);
 		request.setSoftwareVersion(Constants.NODE_VERSION);
 		request.setTimestamp(Instant.now().getEpochSecond());

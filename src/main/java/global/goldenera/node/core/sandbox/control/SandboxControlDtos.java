@@ -1,0 +1,110 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.core.sandbox.control;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Set;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+final class SandboxControlDtos {
+
+	private SandboxControlDtos() {
+	}
+
+	record Capabilities(
+			String apiVersion,
+			String executionDomain,
+			String incarnationId,
+			String chainId,
+			String genesisHash,
+			String manifestFingerprint,
+			String chainIdentitySource,
+			boolean disposable,
+			boolean controlApi,
+			String proofOfWork,
+			String clock,
+			String coreReadiness,
+			List<String> actions,
+			int maxRequestBodyBytes,
+			int maxConcurrentRequests,
+			long rateBurst,
+			long rateRefillPerSecond,
+			int maxOperationEntries,
+			long operationTtlSeconds,
+			long maxExactOneDeadlineMs,
+			int maxAuditPageSize) {
+	}
+
+	record AutonomousState(
+			boolean configured,
+			boolean desired,
+			boolean scheduled,
+			boolean active,
+			boolean shutdown,
+			boolean controlPaused,
+			boolean syncing,
+			Set<String> suspensions) {
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = false)
+	record AutonomousRequest(Boolean enabled) {
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = false)
+	record ExactOneRequest(Instant scheduledTimestamp, Long deadlineMs) {
+	}
+
+	record Operation(
+			String operationId,
+			String status,
+			Instant createdAt,
+			Instant completedAt,
+			Outcome outcome) {
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	record Outcome(
+			String code,
+			String parentHash,
+			Long blockHeight,
+			String blockHash,
+			String ingestionCode) {
+	}
+
+	@JsonInclude(JsonInclude.Include.NON_NULL)
+	record Error(String code, String message, String operationId) {
+		Error(String code, String message) {
+			this(code, message, null);
+		}
+	}
+
+	record AuditPage(
+			List<SandboxControlAuditLog.Event> events,
+			boolean hasMore,
+			Long nextAfter) {
+	}
+}

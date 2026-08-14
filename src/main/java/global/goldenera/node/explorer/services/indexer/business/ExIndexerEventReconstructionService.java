@@ -214,27 +214,16 @@ public class ExIndexerEventReconstructionService {
                 Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs = new LinkedHashMap<>();
                 NetworkSettings settings = Constants.getSettings();
 
-                // First authority balance
-                Address firstAuthority = authorityAddresses.get(0);
-                Wei authorityMint = settings.genesisNetworkInitialMintForAuthority();
-                if (authorityMint.compareTo(Wei.ZERO) > 0) {
-                        BalanceKey authorityKey = new BalanceKey(firstAuthority, Address.NATIVE_TOKEN);
-                        AccountBalanceState authorityBalance = genesisState.getBalance(firstAuthority,
-                                        Address.NATIVE_TOKEN);
-                        balanceDiffs.put(authorityKey,
-                                        new WorldStateDiff<>(AccountBalanceStateImpl.ZERO, authorityBalance));
-                }
-
-                // Block reward pool balance
-                Address blockRewardPool = settings.genesisNetworkBlockRewardPoolAddress();
-                Wei blockRewardMint = settings.genesisNetworkInitialMintForBlockReward();
-                if (blockRewardMint.compareTo(Wei.ZERO) > 0) {
-                        BalanceKey rewardPoolKey = new BalanceKey(blockRewardPool, Address.NATIVE_TOKEN);
-                        AccountBalanceState rewardPoolBalance = genesisState.getBalance(blockRewardPool,
-                                        Address.NATIVE_TOKEN);
-                        balanceDiffs.put(rewardPoolKey,
-                                        new WorldStateDiff<>(AccountBalanceStateImpl.ZERO, rewardPoolBalance));
-                }
+				for (Map.Entry<Address, Wei> allocation : settings.genesisInitialBalances().entrySet()) {
+						if (allocation.getValue().compareTo(Wei.ZERO) <= 0) {
+								continue;
+						}
+						BalanceKey key = new BalanceKey(allocation.getKey(), Address.NATIVE_TOKEN);
+						AccountBalanceState balance = genesisState.getBalance(
+								allocation.getKey(), Address.NATIVE_TOKEN);
+						balanceDiffs.put(key,
+								new WorldStateDiff<>(AccountBalanceStateImpl.ZERO, balance));
+				}
 
                 // Genesis has no nonce changes, bip changes, or aliases
                 Map<Address, StateDiff<AccountNonceState>> nonceDiffs = Collections.emptyMap();

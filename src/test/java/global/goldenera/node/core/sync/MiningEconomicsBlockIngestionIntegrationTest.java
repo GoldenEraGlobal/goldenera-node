@@ -26,6 +26,7 @@ package global.goldenera.node.core.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -76,15 +77,17 @@ import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
-import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
 import global.goldenera.node.core.blockchain.reorg.ChainSwitchService;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.state.BlockStateTransitions;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
+import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.processing.MiningEconomicsActivationService;
 import global.goldenera.node.core.processing.StateProcessor;
@@ -123,10 +126,10 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		try (Fixture fixture = new Fixture(databaseDirectory)) {
 			StoredBlock base = fixture.seedLegacyCanonicalBlock();
 			Block activation = fixture.buildValidChild(base.getBlock(), MINER_A_KEY);
-			assertThat(fixture.ingest(activation)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(activation)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			Block firstTracked = fixture.buildValidChild(activation, MINER_B_KEY);
-			assertThat(fixture.ingest(firstTracked)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(firstTracked)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			StoredBlock head = fixture.chainQuery.getLatestStoredBlockOrThrow();
 			WorldState persisted = fixture.worldStateFactory.createForValidation(
@@ -150,10 +153,10 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			Block forkActivation = fixture.buildValidChild(base.getBlock(), MINER_B_KEY);
 			Block orphanChild = fixture.buildValidChild(forkActivation, MINER_B_KEY);
 			assertThat(fixture.ingest(orphanChild))
-					.isEqualTo(BlockIngestionService.IngestionResult.ORPHAN_BUFFERED);
+					.isEqualTo(BlockIngestionOutcome.Code.ORPHAN_BUFFERED);
 			assertThat(fixture.ingestionService.isOrphan(orphanChild.getHash())).isTrue();
 
-			assertThat(fixture.ingest(forkActivation)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(forkActivation)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			StoredBlock head = fixture.chainQuery.getLatestStoredBlockOrThrow();
 			WorldState reorged = fixture.worldStateFactory.createForValidation(
@@ -173,10 +176,10 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			Block activation = fixture.buildValidChild(base.getBlock(), MINER_A_KEY);
 			Block firstTracked = fixture.buildValidChild(activation, MINER_B_KEY);
 			Block secondTracked = fixture.buildValidChild(firstTracked, MINER_A_KEY);
-			List<StoredBlock> batch = fixture.asSyncBatch(base,
+			ValidatedSyncBatch batch = fixture.asSyncBatch(base,
 					List.of(activation, firstTracked, secondTracked));
 
-			fixture.blockReorgs.executeAtomicReorgSwap(base, batch);
+			fixture.blockReorgs.executeAtomicReorgSwap(batch);
 
 			StoredBlock head = fixture.chainQuery.getLatestStoredBlockOrThrow();
 			WorldState synced = fixture.worldStateFactory.createForValidation(
@@ -241,9 +244,9 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 				blocks.add(child);
 				parent = child;
 			}
-			List<StoredBlock> batch = fixture.asSyncBatch(base, blocks);
+			ValidatedSyncBatch batch = fixture.asSyncBatch(base, blocks);
 
-			assertThatThrownBy(() -> fixture.blockReorgs.executeAtomicReorgSwap(base, batch))
+			assertThatThrownBy(() -> fixture.blockReorgs.executeAtomicReorgSwap(batch))
 					.hasMessageContaining("candidate count 41 exceeds maximum 40");
 
 			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(base.getHash());
@@ -257,11 +260,11 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			StoredBlock base = fixture.seedActiveCanonicalBlock();
 			Tx proposal = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
 			Block create = fixture.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(proposal));
-			assertThat(fixture.ingest(create)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(create)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			Tx approval = approve(proposal.getHash(), 1);
 			Block execution = fixture.buildValidChild(create, MINER_B_KEY, List.of(approval));
-			assertThat(fixture.ingest(execution)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(execution)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			WorldState executed = fixture.stateAt(execution);
 			assertThat(executed.getBip(proposal.getHash()).getStatus()).isEqualTo(BipStatus.APPROVED);
@@ -270,7 +273,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			assertThat(executed.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(2);
 
 			Block hPlusOne = fixture.buildValidChild(execution, MINER_A_KEY);
-			assertThat(fixture.ingest(hPlusOne)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(hPlusOne)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			assertThat(fixture.stateAt(hPlusOne).getMiningWindow().getOrderedValidatorIdentities())
 					.containsExactly(MINER_B, MINER_B, MINER_A);
 
@@ -283,7 +286,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			fixture.ingest(forkThirteen);
 			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(hPlusOne.getHash());
 
-			assertThat(fixture.ingest(forkFourteen)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(forkFourteen)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			WorldState reorged = fixture.stateAt(forkFourteen);
 			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(forkFourteen.getHash());
 			assertThat(reorged.getValidator(MINER_A).getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
@@ -302,13 +305,13 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			StoredBlock base = fixture.seedActiveCanonicalBlock();
 			Tx proposal = resize(250, 0);
 			Block create = fixture.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(proposal));
-			assertThat(fixture.ingest(create)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(create)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			assertThat(fixture.stateAt(create).getMiningWindow().getOrderedValidatorIdentities())
 					.containsExactly(MINER_B);
 
 			Block execution = fixture.buildValidChild(
 					create, MINER_B_KEY, List.of(approve(proposal.getHash(), 1)));
-			assertThat(fixture.ingest(execution)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(execution)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			WorldState resized = fixture.stateAt(execution);
 			assertThat(resized.getParams().getValidatorMiningWindowBlocks()).isEqualTo(250);
 			assertThat(resized.getMiningWindow().getWindowSize()).isEqualTo(250);
@@ -316,7 +319,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			assertThat(resized.getMiningWindow().getLastUpdatedBlockHeight()).isEqualTo(execution.getHeight());
 
 			Block firstAfterResize = fixture.buildValidChild(execution, MINER_A_KEY);
-			assertThat(fixture.ingest(firstAfterResize)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(firstAfterResize)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			assertThat(fixture.stateAt(firstAfterResize).getMiningWindow().getOrderedValidatorIdentities())
 					.containsExactly(MINER_A);
 		}
@@ -329,11 +332,11 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			Tx promote = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
 			Tx demote = policy(MINER_B, MiningLimitMode.LIMITED, 4_000, 1);
 			Block creates = valid.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(promote, demote));
-			assertThat(valid.ingest(creates)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(valid.ingest(creates)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			Block ordered = valid.buildValidChild(creates, MINER_B_KEY,
 					List.of(approve(promote.getHash(), 2), approve(demote.getHash(), 3)));
-			assertThat(valid.ingest(ordered)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(valid.ingest(ordered)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			WorldState state = valid.stateAt(ordered);
 			assertThat(state.getValidator(MINER_A).getMiningLimitMode()).isEqualTo(MiningLimitMode.UNLIMITED);
 			assertThat(state.getValidator(MINER_B).getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
@@ -345,11 +348,11 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			Tx promote = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
 			Tx demote = policy(MINER_B, MiningLimitMode.LIMITED, 4_000, 1);
 			Block creates = invalid.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(promote, demote));
-			assertThat(invalid.ingest(creates)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(invalid.ingest(creates)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			List<Tx> wrongOrder = List.of(approve(demote.getHash(), 2), approve(promote.getHash(), 3));
 			Block rejected = invalid.buildUncheckedChild(creates, MINER_B_KEY, wrongOrder);
-			assertThat(invalid.ingest(rejected)).isEqualTo(BlockIngestionService.IngestionResult.FAILED);
+			assertThat(invalid.ingest(rejected)).isEqualTo(BlockIngestionOutcome.Code.REJECTED_EXECUTION);
 			assertThat(invalid.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(creates.getHash());
 			assertThat(invalid.chainQuery.getStoredBlockByHeight(rejected.getHeight())).isEmpty();
 			WorldState state = invalid.stateAt(creates);
@@ -369,18 +372,18 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			Tx validProposal = resize(250, 2);
 			Block creates = fixture.buildValidChild(
 					base.getBlock(), MINER_B_KEY, List.of(staleProposal, removeProposal, validProposal));
-			assertThat(fixture.ingest(creates)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(creates)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 
 			Block removal = fixture.buildValidChild(
 					creates, MINER_B_KEY, List.of(approve(removeProposal.getHash(), 3)));
-			assertThat(fixture.ingest(removal)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.ingest(removal)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
 			assertThat(fixture.stateAt(removal).getValidator(MINER_A).exists()).isFalse();
 
 			List<Tx> votes = List.of(
 					approve(validProposal.getHash(), 4),
 					approve(staleProposal.getHash(), 5));
 			Block rejected = fixture.buildUncheckedChild(removal, MINER_B_KEY, votes);
-			assertThat(fixture.ingest(rejected)).isEqualTo(BlockIngestionService.IngestionResult.FAILED);
+			assertThat(fixture.ingest(rejected)).isEqualTo(BlockIngestionOutcome.Code.REJECTED_EXECUTION);
 
 			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(removal.getHash());
 			assertThat(fixture.chainQuery.getStoredBlockByHash(rejected.getHash())).isEmpty();
@@ -476,6 +479,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		private final ChainQuery chainQuery;
 		private final WorldStateFactory worldStateFactory;
 		private final StateProcessor stateProcessor;
+		private final BlockValidator blockValidator;
 		private final BlockIngestionService ingestionService;
 		private final ChainSwitchService chainSwitchService;
 		private final BlockReorgs blockReorgs;
@@ -543,10 +547,15 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			TxValidator txValidator = mock(TxValidator.class);
 			DifficultyCalculator difficulty = mock(DifficultyCalculator.class);
 			when(difficulty.calculateNextDifficulty(any(), any())).thenReturn(BigInteger.ONE);
-			BlockValidator blockValidator = new BlockValidator(
-					mock(RandomXManager.class),
+			ProofOfWorkProvider proofOfWorkProvider = mock(ProofOfWorkProvider.class);
+			when(proofOfWorkProvider.openVerificationHasher(anyLong(), any()))
+					.thenAnswer(invocation -> new ProofOfWorkHasher(input -> new byte[32], () -> { }));
+			CheckpointRegistry checkpointRegistry = mock(CheckpointRegistry.class);
+			when(checkpointRegistry.verifyCheckpoint(anyLong(), any(Hash.class))).thenReturn(true);
+			blockValidator = new BlockValidator(
+					proofOfWorkProvider,
 					difficulty,
-					mock(CheckpointRegistry.class),
+					checkpointRegistry,
 					txValidator,
 					policyService);
 			ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
@@ -580,7 +589,6 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					meterRegistry,
 					chainQuery,
 					blockValidator,
-					txValidator,
 					stateProcessor,
 					worldStateFactory,
 					transitions,
@@ -670,19 +678,21 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			state.addValidator(MINER_B, explicitValidator(MiningLimitMode.UNLIMITED, 0));
 		}
 
-		private BlockIngestionService.IngestionResult ingest(Block block) {
+		private BlockIngestionOutcome.Code ingest(Block block) {
 			return ingestionService.processBlock(
-					block, ConnectedSource.BROADCAST, MINER_A, Instant.now());
+					block, ConnectedSource.BROADCAST, MINER_A, Instant.now()).code();
 		}
 
-		private List<StoredBlock> asSyncBatch(StoredBlock parent, List<Block> blocks) {
-			List<StoredBlock> stored = new ArrayList<>();
+		private ValidatedSyncBatch asSyncBatch(StoredBlock parent, List<Block> blocks) {
+			List<ValidatedSyncBlock> stored = new ArrayList<>();
 			BigInteger cumulativeDifficulty = parent.getCumulativeDifficulty();
 			for (Block block : blocks) {
 				cumulativeDifficulty = cumulativeDifficulty.add(block.getHeader().getDifficulty());
-				stored.add(stored(block, cumulativeDifficulty));
+				StatelessValidatedBlock validatedBlock = blockValidator.validateFullBlock(block);
+				StoredBlock storedBlock = stored(validatedBlock.block(), cumulativeDifficulty);
+				stored.add(new ValidatedSyncBlock(storedBlock, validatedBlock));
 			}
-			return stored;
+			return new ValidatedSyncBatch(parent, stored);
 		}
 
 		private StoredBlock stored(Block block, BigInteger cumulativeDifficulty) {

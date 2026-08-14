@@ -61,6 +61,7 @@ import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeade
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.components.AESGCMComponent;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.entities.WebhookEvent;
@@ -109,6 +110,7 @@ public class WebhookDispatchService {
 	final WebhookCoreService webhookCoreService;
 	final MeterRegistry registry;
 	final AESGCMComponent aesGCMComponent;
+	final ExplorerRuntimeReadiness explorerReadiness;
 
 	final BlockchainTxMapper blockchainTxMapper;
 	final BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
@@ -123,7 +125,8 @@ public class WebhookDispatchService {
 			ObjectMapper objectMapper,
 			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
 			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent,
-			BlockchainTxMapper blockchainTxMapper, BlockchainBlockHeaderMapper blockchainBlockHeaderMapper) {
+			BlockchainTxMapper blockchainTxMapper, BlockchainBlockHeaderMapper blockchainBlockHeaderMapper,
+			ExplorerRuntimeReadiness explorerReadiness) {
 		this.okHttpClient = webhookOkHttpClient;
 		this.objectMapper = objectMapper;
 		this.explorerScheduler = explorerScheduler;
@@ -132,21 +135,31 @@ public class WebhookDispatchService {
 		this.aesGCMComponent = aesGCMComponent;
 		this.blockchainTxMapper = blockchainTxMapper;
 		this.blockchainBlockHeaderMapper = blockchainBlockHeaderMapper;
+		this.explorerReadiness = explorerReadiness;
 	}
 
 	@EventListener(CoreReadyEvent.class)
 	public void loadIndexOnStartup() {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		log.info("Core is ready. Loading all webhook filters...");
 		loadAllFiltersIntoIndex();
 	}
 
 	@PostConstruct
 	public void init() {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		explorerScheduler.scheduleWithFixedDelay(this::dispatchPendingBatches, Duration.ofMillis(3000));
 	}
 
 	@PreDestroy
 	public void onShutdown() {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		log.info("Shutting down Webhook Dispatcher...");
 		dispatchPendingBatches();
 	}
@@ -183,6 +196,9 @@ public class WebhookDispatchService {
 
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void handleApiKeyUpdate(ApiKeyUpdatedEvent event) {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		Long apiKeyId = event.getApiKeyId();
 		ApiKeyUpdatedEvent.UpdateType type = event.getType();
 		log.info("Handling ApiKey update: {} for Key ID: {}", type, apiKeyId);
@@ -203,6 +219,9 @@ public class WebhookDispatchService {
 
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void handleWebhookUpdate(WebhookUpdateEvent event) {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		UUID webhookId = event.getWebhookId();
 		removeWebhookFromIndex(webhookId);
 		apiKeyToWebhookIds.values().forEach(set -> set.remove(webhookId));
@@ -227,6 +246,9 @@ public class WebhookDispatchService {
 
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void handleWebhookEventsUpdate(WebhookEventsUpdateEvent event) {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		UUID webhookId = event.getWebhookId();
 		if (!webhookConfigs.containsKey(webhookId))
 			return;
@@ -312,6 +334,9 @@ public class WebhookDispatchService {
 	// --- PROCESSING LOGIC ---
 
 	public void processNewBlockEvent(Block block, List<BlockEvent> events, WebhookType targetType) {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		for (WebhookSubscription sub : newBlockSubscriptions) {
 			// Filter by webhook type (BLOCKCHAIN vs EXPLORER)
 			if (sub.getWebhookType() != targetType) {
@@ -330,6 +355,9 @@ public class WebhookDispatchService {
 	}
 
 	public void processReorgEvent(Long oldHeight, Hash oldHash, Long newHeight, Hash newHash, WebhookType targetType) {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		for (WebhookSubscription sub : newBlockSubscriptions) {
 			// Filter by webhook type (BLOCKCHAIN vs EXPLORER)
 			if (sub.getWebhookType() != targetType) {
@@ -348,6 +376,9 @@ public class WebhookDispatchService {
 
 	public void processAddressActivityEvent(Block block, Tx tx, WebhookTxStatus status, Integer index,
 			WebhookType targetType) {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		Set<Address> involvedAddresses = getAddressesFromTx(tx);
 		Set<UUID> targetWebhookIds = new HashSet<>();
 
@@ -404,6 +435,9 @@ public class WebhookDispatchService {
 	// --- DISPATCH LOGIC ---
 
 	public void dispatchPendingBatches() {
+		if (!explorerReadiness.isReady()) {
+			return;
+		}
 		for (Map.Entry<UUID, java.util.Queue<Object>> entry : pendingBatches.entrySet()) {
 			UUID webhookId = entry.getKey();
 			java.util.Queue<Object> queue = entry.getValue();

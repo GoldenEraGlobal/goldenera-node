@@ -45,8 +45,8 @@ import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
-import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.exceptions.GEValidationException;
@@ -74,7 +74,7 @@ class BlockValidatorMiningPolicyTest {
 	private Fixture fixture(int existingBlocks) {
 		DifficultyCalculator difficulty = mock(DifficultyCalculator.class);
 		BlockValidator validator = new BlockValidator(
-				mock(RandomXManager.class), difficulty, mock(CheckpointRegistry.class), mock(TxValidator.class),
+				mock(ProofOfWorkProvider.class), difficulty, mock(CheckpointRegistry.class), mock(TxValidator.class),
 				new ValidatorMiningPolicyService());
 		BlockHeader parent = mock(BlockHeader.class);
 		BlockHeader child = mock(BlockHeader.class);

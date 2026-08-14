@@ -50,6 +50,7 @@ public class CoreAsyncConfig {
 	public static final String P2P_RECEIVE_EXECUTOR = "p2pReceiveExecutor";
 	public static final String P2P_SEND_EXECUTOR = "p2pSendExecutor";
 	public static final String CORE_TASK_EXECUTOR = "coreTaskExecutor";
+	public static final String CORE_MILESTONE_EXECUTOR = "coreMilestoneExecutor";
 	public static final String MEMPOOL_EVENT_EXECUTOR = "mempoolEventExecutor";
 	public static final String WEBHOOK_EVENT_EXECUTOR = "webhookEventExecutor";
 	public static final String CORE_SCHEDULER = "coreTaskScheduler";
@@ -91,6 +92,19 @@ public class CoreAsyncConfig {
 		executor.setQueueCapacity(10000);
 		executor.setThreadNamePrefix("Core-Worker-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+		executor.initialize();
+		return executor;
+	}
+
+	@Bean(name = CORE_MILESTONE_EXECUTOR)
+	public ThreadPoolTaskExecutor coreMilestoneExecutor() {
+		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(1);
+		executor.setMaxPoolSize(1);
+		executor.setQueueCapacity(8);
+		executor.setThreadNamePrefix("Core-Milestone-");
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+		executor.setWaitForTasksToCompleteOnShutdown(false);
 		executor.initialize();
 		return executor;
 	}

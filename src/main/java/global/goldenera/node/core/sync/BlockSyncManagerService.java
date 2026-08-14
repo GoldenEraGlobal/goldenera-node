@@ -56,14 +56,13 @@ import global.goldenera.cryptoj.common.BlockImpl;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
-import global.goldenera.node.core.blockchain.events.BlockMinedEvent;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
-import global.goldenera.node.core.blockchain.validation.TxValidator;
+import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
+import global.goldenera.node.core.blockchain.validation.StatelessValidatedHeader;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
@@ -136,7 +135,6 @@ public class BlockSyncManagerService {
 	final IdentityService identityService;
 
 	final BlockValidator blockValidationService;
-	final TxValidator txValidationService;
 
 	final ChainQuery chainQueryService;
 	final BlockReorgs blockReorgService;
@@ -151,7 +149,6 @@ public class BlockSyncManagerService {
 			MiningService miningService,
 			IdentityService identityService,
 			BlockValidator blockValidationService,
-			TxValidator txValidationService,
 			ChainQuery chainQueryService,
 			BlockReorgs blockReorgService,
 			PeerRegistry peerRegistry,
@@ -163,7 +160,6 @@ public class BlockSyncManagerService {
 		this.miningService = miningService;
 		this.identityService = identityService;
 		this.blockValidationService = blockValidationService;
-		this.txValidationService = txValidationService;
 		this.chainQueryService = chainQueryService;
 		this.blockReorgService = blockReorgService;
 		this.peerRegistry = peerRegistry;
@@ -282,14 +278,15 @@ public class BlockSyncManagerService {
 			// Validate headers in parallel AND warm up lazy getters (hash, size)
 			// BlockHeaderImpl caches these values internally after first call
 			long validateStart = System.currentTimeMillis();
-			validateBatch(headersToSync);
+			Map<Hash, StatelessValidatedHeader> validatedHeaders = validateBatch(headersToSync);
 			long validateTime = System.currentTimeMillis() - validateStart;
 			log.info("Validated {} headers in {}ms", headersToSync.size(), validateTime);
 
 			// Download bodies and persist in batches to limit RAM usage
 			miningService.pauseMining();
 			long bodyStart = System.currentTimeMillis();
-			int totalBlocksProcessed = downloadAndPersistBodiesInBatches(peer, headersToSync);
+			int totalBlocksProcessed = downloadAndPersistBodiesInBatches(
+					peer, headersToSync, validatedHeaders);
 			long bodyTime = System.currentTimeMillis() - bodyStart;
 
 			log.info("Sync completed: {} blocks downloaded and persisted in {}ms (headers: {}ms, validation: {}ms)",
@@ -322,12 +319,13 @@ public class BlockSyncManagerService {
 	 * 
 	 * @return Total number of blocks processed
 	 */
-	private int downloadAndPersistBodiesInBatches(RemotePeer peer, List<BlockHeader> headers) throws Exception {
+	private int downloadAndPersistBodiesInBatches(RemotePeer peer, List<BlockHeader> headers,
+			Map<Hash, StatelessValidatedHeader> validatedHeaders) throws Exception {
 		if (headers.isEmpty())
 			return 0;
 
 		int totalProcessed = 0;
-		List<StoredBlock> currentBatch = new ArrayList<>(PERSIST_BATCH_SIZE);
+		List<ValidatedSyncBlock> currentBatch = new ArrayList<>(PERSIST_BATCH_SIZE);
 
 		Hash firstParentHash = headers.get(0).getPreviousHash();
 		StoredBlock commonAncestor = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash);
@@ -378,19 +376,21 @@ public class BlockSyncManagerService {
 					Long height = header.getHeight();
 					List<Tx> txs = bodies.get(j);
 
-					txs.parallelStream().forEach(tx -> txValidationService.validateStateless(tx));
-
-					Hash calculatedRoot = TxRootUtil.txRootHash(txs);
-					if (!calculatedRoot.equals(header.getTxRootHash())) {
-						throw new GEValidationException("Invalid Merkle Root at height " + height);
-					}
-
-					currentCumulativeDifficulty = currentCumulativeDifficulty.add(header.getDifficulty());
-
 					Block block = BlockImpl.builder()
 							.header(header)
 							.txs(txs)
 							.build();
+					// Header PoW/signature/structure was validated in validateBatch(); the
+					// body must still pass the shared size/count/Merkle/TX gate.
+					StatelessValidatedHeader validatedHeader = Optional
+							.ofNullable(validatedHeaders.get(header.getHash()))
+							.orElseThrow(() -> new GEValidationException(
+									"Missing stateless header proof at height " + height));
+					StatelessValidatedBlock validatedBlock = blockValidationService
+							.validateBlockBody(block, validatedHeader);
+					block = validatedBlock.block();
+
+					currentCumulativeDifficulty = currentCumulativeDifficulty.add(header.getDifficulty());
 
 					Address minerIdentity = block.getHeader().getIdentity();
 					if (minerIdentity == null) {
@@ -411,14 +411,14 @@ public class BlockSyncManagerService {
 							.computeIndexes()
 							.build();
 
-					currentBatch.add(storedBlock);
+					currentBatch.add(new ValidatedSyncBlock(storedBlock, validatedBlock));
 
 					// Persist batch when full
 					if (currentBatch.size() >= PERSIST_BATCH_SIZE) {
 						persistBatch(commonAncestor, currentBatch);
 						totalProcessed += currentBatch.size();
 						// Update ancestor for next batch
-						commonAncestor = currentBatch.get(currentBatch.size() - 1);
+						commonAncestor = currentBatch.get(currentBatch.size() - 1).storedBlock();
 						currentBatch.clear();
 					}
 				}
@@ -444,19 +444,19 @@ public class BlockSyncManagerService {
 	/**
 	 * Persists a batch of blocks atomically.
 	 */
-	private void persistBatch(StoredBlock commonAncestor, List<StoredBlock> blocks) throws Exception {
+	private void persistBatch(StoredBlock commonAncestor, List<ValidatedSyncBlock> blocks) throws Exception {
 		if (blocks.isEmpty())
 			return;
 
 		masterChainLock.lock();
 		try {
 			long start = System.currentTimeMillis();
-			blockReorgService.executeAtomicReorgSwap(commonAncestor, blocks);
+			blockReorgService.executeAtomicReorgSwap(new ValidatedSyncBatch(commonAncestor, blocks));
 			long elapsed = System.currentTimeMillis() - start;
 			log.info("Persisted batch of {} blocks (heights {}-{}) in {}ms",
 					blocks.size(),
-					blocks.get(0).getHeight(),
-					blocks.get(blocks.size() - 1).getHeight(),
+					blocks.get(0).storedBlock().getHeight(),
+					blocks.get(blocks.size() - 1).storedBlock().getHeight(),
 					elapsed);
 		} finally {
 			masterChainLock.unlock();
@@ -557,19 +557,26 @@ public class BlockSyncManagerService {
 	 * BlockHeaderImpl caches these values internally after first call,
 	 * so subsequent calls to getHash()/getSize() are O(1).
 	 */
-	private void validateBatch(List<BlockHeader> headers) {
+	private Map<Hash, StatelessValidatedHeader> validateBatch(List<BlockHeader> headers) {
 		// Build contextMap - this also warms up getHash() for each header
 		Map<Long, Hash> contextMap = new ConcurrentHashMap<>();
 
-		// Parallel: compute hash AND size for each header (warms up lazy cache)
-		// Also validate PoW in parallel
+		// First populate the entire batch seed map. Building and consuming this map in
+		// one parallel pass allowed seed availability to depend on scheduling order.
 		headers.parallelStream().forEach(h -> {
 			h.getHash(); // Warm up hash cache
 			h.getSize(); // Warm up size cache
 			h.getIdentity(); // Warm up identity cache
 			contextMap.put(h.getHeight(), h.getHash()); // Now cached, O(1)
-			blockValidationService.validateHeader(h, contextMap);
 		});
+
+		// Then validate PoW in parallel against the complete immutable-in-practice map.
+		Map<Hash, StatelessValidatedHeader> validatedHeaders = new ConcurrentHashMap<>();
+		headers.parallelStream().forEach(h -> {
+			StatelessValidatedHeader validatedHeader = blockValidationService.validateHeader(h, contextMap);
+			validatedHeaders.put(h.getHash(), validatedHeader);
+		});
+		return Map.copyOf(validatedHeaders);
 	}
 
 	private record PendingBodyRequest(long reqId, List<BlockHeader> batchHeaders,
@@ -625,7 +632,7 @@ public class BlockSyncManagerService {
 
 			// Run expensive PoW only after cheap age, parent, duplicate and global-cap
 			// checks. Evidence is recorded only by the contextual validation below.
-			blockValidationService.validateHeader(header);
+			StatelessValidatedHeader validatedHeader = blockValidationService.validateHeader(header);
 			blockIngestionService.validateBroadcastHeaderContext(header, parent.orElseThrow().getBlock());
 
 			// At this point: either block extends tip with valid parent,
@@ -650,23 +657,23 @@ public class BlockSyncManagerService {
 						}
 
 						List<Tx> txs = bodies.get(0);
-						if (!TxRootUtil.txRootHash(txs).equals(header.getTxRootHash())) {
-							log.warn("Invalid Merkle Root for broadcast block #{} from {}", header.getHeight(),
-									peer.getIdentity());
-							peerReputationService.recordFailure(peer.getIdentity());
-							return;
-						}
-
 						Block block = BlockImpl.builder()
 								.header(header)
 								.txs(txs)
 								.build();
+						StatelessValidatedBlock validatedBlock = blockValidationService
+								.validateBlockBody(block, validatedHeader);
 
-						blockIngestionService.processBlock(
-								block,
+						BlockIngestionOutcome outcome = blockIngestionService.processValidatedBlock(
+								validatedBlock,
 								ConnectedSource.BROADCAST,
 								peer.getIdentity(),
 								Instant.now());
+						if (isPeerFaultRejection(outcome)) {
+							log.debug("Rejected broadcast body for block #{} with outcome {}",
+									header.getHeight(), outcome.code());
+							peerReputationService.recordFailure(peer.getIdentity());
+						}
 
 					}, coreTaskExecutor)
 					.exceptionally(e -> {
@@ -712,24 +719,22 @@ public class BlockSyncManagerService {
 
 	@EventListener
 	public void onNewBlock(P2PBlockReceivedEvent event) {
-		blockValidationService.validateFullBlock(event.getBlock());
-		// TX already validated in validateFullBlock(), skip re-validation
-		BlockIngestionService.IngestionResult result = blockIngestionService.processBlock(
-				event.getBlock(), ConnectedSource.BROADCAST, event.getPeer().getIdentity(), Instant.now(), true);
+		BlockIngestionOutcome outcome = blockIngestionService.processBlock(
+				event.getBlock(), ConnectedSource.BROADCAST, event.getPeer().getIdentity(), Instant.now());
 
-		if (result == BlockIngestionService.IngestionResult.GAP_DETECTED) {
+		if (outcome.code() == BlockIngestionOutcome.Code.GAP_DETECTED) {
 			log.debug("Gap detected from broadcast, triggering sync");
 			signalQueue.offer(new Object());
+		} else if (isPeerFaultRejection(outcome)) {
+			peerReputationService.recordFailure(event.getPeer().getIdentity());
 		}
 	}
 
-	@EventListener
-	public void onBlockMined(BlockMinedEvent event) {
-		long startTime = System.currentTimeMillis();
-		blockIngestionService.processBlock(event.getBlock(), ConnectedSource.MINER,
-				identityService.getNodeIdentityAddress(),
-				event.getBlock().getHeader().getTimestamp());
-		log.debug("Block mined and processed | Time: {}s",
-				String.format("%.2f", (System.currentTimeMillis() - startTime) / 1000.0));
+	private boolean isPeerFaultRejection(BlockIngestionOutcome outcome) {
+		return switch (outcome.code()) {
+			case REJECTED_STATELESS, REJECTED_CONTEXTUAL, REJECTED_CONSENSUS_POLICY,
+					REJECTED_EXECUTION, REJECTED_STATE_ROOT -> true;
+			case ACCEPTED, ORPHAN_BUFFERED, GAP_DETECTED, ALREADY_EXISTS, INTERNAL_FAILURE -> false;
+		};
 	}
 }

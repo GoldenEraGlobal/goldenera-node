@@ -4,6 +4,8 @@
 FROM eclipse-temurin:21-jdk-jammy AS app-builder
 
 ARG GITHUB_ACTOR
+ARG BUILD_GIT_COMMIT
+ARG CRYPTOJ_SHA256
 
 WORKDIR /app
 
@@ -30,12 +32,27 @@ COPY src ./src
 
 RUN --mount=type=secret,id=github_token \
     export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    ./mvnw clean package -DskipTests -s settings.xml
+    printf '%s' "${BUILD_GIT_COMMIT}" | grep -Eq '^[0-9a-f]{40,64}$' && \
+    printf '%s' "${CRYPTOJ_SHA256}" | grep -Eq '^[0-9a-f]{64}$' && \
+    CRYPTOJ_VERSION=$(./mvnw help:evaluate -Dexpression=goldenera-cryptoj.version -q -DforceStdout -s settings.xml) && \
+    CRYPTOJ_JAR="${HOME}/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar" && \
+    test -f "${CRYPTOJ_JAR}" && \
+    test "$(sha256sum "${CRYPTOJ_JAR}" | cut -d ' ' -f 1)" = "${CRYPTOJ_SHA256}" && \
+    ./mvnw clean package -Prelease-artifact -DskipTests \
+      -Dgoldenera.git.commit="${BUILD_GIT_COMMIT}" \
+      -Dgoldenera.cryptoj.sha256="${CRYPTOJ_SHA256}" \
+      -s settings.xml
 
 # ==============================================================================
 # STAGE 2: Production Runtime (Ubuntu 24.04 + RandomX JIT)
 # ==============================================================================
 FROM ubuntu:24.04
+
+ARG BUILD_GIT_COMMIT
+ARG CRYPTOJ_SHA256
+
+LABEL org.opencontainers.image.revision="${BUILD_GIT_COMMIT}" \
+      global.goldenera.cryptoj.sha256="${CRYPTOJ_SHA256}"
 
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"

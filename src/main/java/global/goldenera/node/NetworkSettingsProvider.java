@@ -33,6 +33,8 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.core.sandbox.genesis.SandboxNetworkSettingsAdapter;
+import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -64,6 +66,7 @@ public class NetworkSettingsProvider {
 
     private final GeneralProperties generalProperties;
     private final Environment environment;
+    private final SandboxRuntimeContext sandboxRuntimeContext;
 
     private static Network activeNetwork;
     private static String activeProfile;
@@ -78,8 +81,9 @@ public class NetworkSettingsProvider {
 
         log.info("Initializing NetworkSettingsProvider for network: {}, profile: {}", activeNetwork, activeProfile);
 
-        // Load and combine settings for active network
-        activeSettings = loadAndCacheSettings(activeNetwork, activeProfile);
+        activeSettings = sandboxRuntimeContext.isSandbox()
+                ? loadSandboxSettings()
+                : loadAndCacheSettings(activeNetwork, activeProfile);
 
         initialized = true;
         log.info("NetworkSettingsProvider initialized successfully");
@@ -93,6 +97,10 @@ public class NetworkSettingsProvider {
         String[] profiles = environment.getActiveProfiles();
         if (profiles.length == 0) {
             profiles = environment.getDefaultProfiles();
+        }
+
+        if (Arrays.asList(profiles).contains("sandbox")) {
+            return "sandbox";
         }
 
         // Check for dev profile
@@ -114,6 +122,16 @@ public class NetworkSettingsProvider {
             GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
             return NetworkSettings.fromGenesisSettings(genesis, network, profile);
         });
+    }
+
+    private NetworkSettings loadSandboxSettings() {
+        if (activeNetwork != Network.TESTNET) {
+            throw new IllegalStateException("Sandbox NetworkSettings require the TESTNET legacy carrier");
+        }
+        return new SandboxNetworkSettingsAdapter().adapt(
+                sandboxRuntimeContext.manifestContext().orElseThrow(() ->
+                        new IllegalStateException("Sandbox NetworkSettings require a validated manifest")))
+                .networkSettings();
     }
 
     /**
@@ -150,13 +168,8 @@ public class NetworkSettingsProvider {
      */
     public static NetworkSettings getSettings() {
         if (!initialized) {
-            // Fallback for very early initialization
-            Network network = getActiveNetwork();
-            String profile = getActiveProfile();
-            log.warn("NetworkSettingsProvider not yet initialized, loading settings directly for {}-{}",
-                    network, profile);
-            GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
-            return NetworkSettings.fromGenesisSettings(genesis, network, profile);
+			throw new IllegalStateException(
+					"NetworkSettingsProvider is not initialized; refusing an unverified classpath fallback");
         }
         return activeSettings;
     }
@@ -166,6 +179,17 @@ public class NetworkSettingsProvider {
      * Uses the current profile for loading genesis settings.
      */
     public static NetworkSettings getSettings(Network network) {
+		if (!initialized) {
+			throw new IllegalStateException(
+					"NetworkSettingsProvider is not initialized; refusing an unverified classpath fallback");
+		}
+		if (initialized && "sandbox".equals(activeProfile)) {
+			if (network != activeNetwork) {
+				throw new IllegalArgumentException(
+						"Sandbox runtime cannot load classpath settings for another network");
+			}
+			return activeSettings;
+		}
         String profile = getActiveProfile();
         String cacheKey = network.name() + "-" + profile;
 
@@ -188,6 +212,14 @@ public class NetworkSettingsProvider {
         return initialized;
     }
 
+	public NetworkSettings currentSettings() {
+		return getSettings();
+	}
+
+	public String currentProfile() {
+		return getActiveProfile();
+	}
+
     /**
      * Clear the settings cache.
      * Useful for testing or hot-reloading configurations.
@@ -196,4 +228,12 @@ public class NetworkSettingsProvider {
         settingsCache.clear();
         log.info("NetworkSettings cache cleared");
     }
+
+	static void resetForTesting() {
+		settingsCache.clear();
+		activeNetwork = null;
+		activeProfile = null;
+		activeSettings = null;
+		initialized = false;
+	}
 }

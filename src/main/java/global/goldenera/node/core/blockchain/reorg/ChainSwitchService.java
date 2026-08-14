@@ -43,6 +43,7 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.Connecte
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
+import global.goldenera.node.core.blockchain.state.ValidatedReorgPlan;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
 import global.goldenera.node.core.processing.StateProcessor;
@@ -104,7 +105,17 @@ public class ChainSwitchService {
         this.blockEventExtractor = blockEventExtractor;
     }
 
-    public void executeAtomicReorgSwap(
+    void executeAtomicSyncSwap(
+            @NonNull StoredBlock commonAncestor,
+            @NonNull List<StoredBlock> newChainHeaders) throws Exception {
+        executeAtomicReorgSwap(commonAncestor, newChainHeaders, false, SwitchType.SYNC);
+    }
+
+    public void executeAtomicReorgSwap(@NonNull ValidatedReorgPlan plan) throws Exception {
+        executeAtomicReorgSwap(plan.commonAncestor(), plan.blocks(), true, SwitchType.REORG);
+    }
+
+    private void executeAtomicReorgSwap(
             @NonNull StoredBlock commonAncestor,
             @NonNull List<StoredBlock> newChainHeaders,
             boolean saveTipData,
@@ -300,4 +311,5 @@ public class ChainSwitchService {
             masterChainLock.unlock();
         }
     }
+
 }

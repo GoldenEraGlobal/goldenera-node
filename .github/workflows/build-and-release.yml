@@ -53,7 +53,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify and build with Maven
-        run: mvn clean verify -B -T 1C -s ~/.m2/settings.xml
+        run: |
+          CRYPTOJ_VERSION=$(mvn help:evaluate -Dexpression=goldenera-cryptoj.version -q -DforceStdout -s ~/.m2/settings.xml)
+          mvn dependency:get -B -Dartifact="global.goldenera.cryptoj:goldenera-cryptoj:${CRYPTOJ_VERSION}" -s ~/.m2/settings.xml
+          CRYPTOJ_JAR="$HOME/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar"
+          CRYPTOJ_SHA256=$(sha256sum "$CRYPTOJ_JAR" | cut -d ' ' -f 1)
+          BUILD_GIT_COMMIT=$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]')
+          mvn clean verify -B -T 1C -Prelease-artifact \
+            -Dgoldenera.git.commit="$BUILD_GIT_COMMIT" \
+            -Dgoldenera.cryptoj.sha256="$CRYPTOJ_SHA256" \
+            -s ~/.m2/settings.xml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -137,6 +146,29 @@ jobs:
         with:
           driver-opts: image=moby/buildkit:latest
 
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Resolve release build metadata
+        id: release_meta
+        run: |
+          mkdir -p ~/.m2
+          echo "<settings><servers>" > ~/.m2/settings.xml
+          echo "<server><id>github-cryptoj</id><username>${GITHUB_ACTOR}</username><password>${GITHUB_TOKEN}</password></server>" >> ~/.m2/settings.xml
+          echo "<server><id>github-merkletrie</id><username>${GITHUB_ACTOR}</username><password>${GITHUB_TOKEN}</password></server>" >> ~/.m2/settings.xml
+          echo "<server><id>github-rlp</id><username>${GITHUB_ACTOR}</username><password>${GITHUB_TOKEN}</password></server>" >> ~/.m2/settings.xml
+          echo "</servers></settings>" >> ~/.m2/settings.xml
+          CRYPTOJ_VERSION=$(mvn help:evaluate -Dexpression=goldenera-cryptoj.version -q -DforceStdout -s ~/.m2/settings.xml)
+          mvn dependency:get -B -Dartifact="global.goldenera.cryptoj:goldenera-cryptoj:${CRYPTOJ_VERSION}" -s ~/.m2/settings.xml
+          CRYPTOJ_JAR="$HOME/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar"
+          echo "cryptoj_sha256=$(sha256sum "$CRYPTOJ_JAR" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "git_commit=$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -155,6 +187,8 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             GITHUB_ACTOR=${{ github.actor }}
+            BUILD_GIT_COMMIT=${{ steps.release_meta.outputs.git_commit }}
+            CRYPTOJ_SHA256=${{ steps.release_meta.outputs.cryptoj_sha256 }}
           secrets: |
             github_token=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha,scope=build-${{ matrix.arch }}

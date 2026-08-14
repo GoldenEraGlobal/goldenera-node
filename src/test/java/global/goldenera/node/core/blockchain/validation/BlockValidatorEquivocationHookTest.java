@@ -53,13 +53,13 @@ import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
-import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.monitoring.EquivocationDetectionService;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.exceptions.GEValidationException;
-import global.goldenera.randomx.RandomXVM;
 
 class BlockValidatorEquivocationHookTest {
 
@@ -125,14 +125,14 @@ class BlockValidatorEquivocationHookTest {
 	}
 
 	private Fixture fixture(byte[] proofOfWorkHash, boolean activeValidator) {
-		RandomXManager randomX = mock(RandomXManager.class);
-		RandomXVM vm = mock(RandomXVM.class);
+		ProofOfWorkProvider proofOfWorkProvider = mock(ProofOfWorkProvider.class);
+		ProofOfWorkHasher hasher = mock(ProofOfWorkHasher.class);
 		CheckpointRegistry checkpoints = mock(CheckpointRegistry.class);
 		EquivocationDetectionService evidence = mock(EquivocationDetectionService.class);
 		DifficultyCalculator difficulty = mock(DifficultyCalculator.class);
 		when(checkpoints.verifyCheckpoint(anyLong(), any(Hash.class))).thenReturn(true);
-		when(randomX.getLightVMForVerification(anyLong(), any())).thenReturn(vm);
-		when(vm.calculateHash(any(byte[].class))).thenReturn(proofOfWorkHash);
+		when(proofOfWorkProvider.openVerificationHasher(anyLong(), any())).thenReturn(hasher);
+		when(hasher.hash(any(byte[].class))).thenReturn(proofOfWorkHash);
 		BlockHeader parent = header(11, Hash.ZERO, BigInteger.TWO, 6);
 		BlockHeader child = header(12, parent.getHash(), BigInteger.TWO, 7);
 		when(difficulty.calculateNextDifficulty(any(), any())).thenReturn(BigInteger.TWO);
@@ -151,7 +151,7 @@ class BlockValidatorEquivocationHookTest {
 				? ValidatorStateImpl.builder().version(ValidatorStateVersion.V1).build()
 				: ValidatorStateImpl.ZERO);
 
-		BlockValidator validator = new BlockValidator(randomX, difficulty, checkpoints,
+		BlockValidator validator = new BlockValidator(proofOfWorkProvider, difficulty, checkpoints,
 				mock(TxValidator.class), new ValidatorMiningPolicyService(), evidence);
 		return new Fixture(validator, evidence, parent, child, state);
 	}

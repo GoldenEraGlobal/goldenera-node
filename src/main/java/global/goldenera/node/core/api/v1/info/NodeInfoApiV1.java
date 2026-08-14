@@ -42,9 +42,18 @@ import global.goldenera.node.Constants;
 import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockHeaderDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockHeaderMapper;
+import global.goldenera.node.core.api.v1.info.dtos.BuildMetadataDtoV1;
+import global.goldenera.node.core.api.v1.info.dtos.ChainIdentityDtoV1;
 import global.goldenera.node.core.api.v1.info.dtos.NodeInfoDtoV1;
+import global.goldenera.node.core.api.v1.info.dtos.OpenApiGroupDtoV1;
+import global.goldenera.node.core.api.v1.info.dtos.SnapshotAnchorDtoV1;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.node.capabilities.NodeCapabilitiesProvider;
+import global.goldenera.node.core.node.capabilities.NodeCapabilitiesSnapshot;
+import global.goldenera.node.core.node.metadata.NodeBuildMetadata;
+import global.goldenera.node.core.node.metadata.NodeBuildMetadataProvider;
+import global.goldenera.node.core.node.metadata.NodeOpenApiGroupsProvider;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
@@ -61,6 +70,9 @@ public class NodeInfoApiV1 {
 	IdentityService identityService;
 	PeerRegistry peerRegistry;
 	BlockHeaderMapper blockHeaderMapper;
+	NodeCapabilitiesProvider capabilitiesProvider;
+	NodeBuildMetadataProvider buildMetadataProvider;
+	NodeOpenApiGroupsProvider openApiGroupsProvider;
 
 	@GetMapping
 	public ResponseEntity<NodeInfoDtoV1> getNodeInfo() {
@@ -96,6 +108,8 @@ public class NodeInfoApiV1 {
 
 		// Map block header to DTO
 		BlockHeaderDtoV1 blockHeaderDto = blockHeader != null ? blockHeaderMapper.map(blockHeader) : null;
+		NodeCapabilitiesSnapshot capabilities = capabilitiesProvider.snapshot();
+		NodeBuildMetadata build = buildMetadataProvider.metadata();
 
 		return ResponseEntity.ok(NodeInfoDtoV1.builder()
 				.version(Constants.NODE_VERSION)
@@ -109,6 +123,33 @@ public class NodeInfoApiV1 {
 				.syncProgress(syncProgress)
 				.connectedPeers(connectedPeers)
 				.activeFork(activeFork)
+				.executionDomain(capabilities.executionDomain())
+				.capabilityContractVersion(capabilities.contractVersion())
+				.chainIdentity(new ChainIdentityDtoV1(
+						capabilities.chainIdentity().formatVersion(),
+						capabilities.chainIdentity().carrierNetworkCode(),
+						capabilities.chainIdentity().chainId(),
+						capabilities.chainIdentity().genesisHash(),
+						capabilities.chainIdentity().manifestFingerprint()))
+				.proofOfWorkMode(capabilities.proofOfWorkMode())
+				.capabilities(capabilities.capabilityIds())
+				.anchor(blockHeader == null ? null : new SnapshotAnchorDtoV1(
+						blockHeader.getHeight(),
+						blockHeader.getHash().toHexString(),
+						blockHeader.getStateRootHash().toHexString()))
+				.buildMetadata(new BuildMetadataDtoV1(
+						build.applicationVersion(),
+						build.gitCommit(),
+						build.cryptoJVersion(),
+						build.cryptoJSha256(),
+						build.javaVersion(),
+						build.javaVendor(),
+						build.vmName(),
+						build.osName(),
+						build.osArch()))
+				.openApiGroups(openApiGroupsProvider.groups().stream()
+						.map(group -> new OpenApiGroupDtoV1(group.id(), group.url()))
+						.toList())
 				.build());
 	}
 }
