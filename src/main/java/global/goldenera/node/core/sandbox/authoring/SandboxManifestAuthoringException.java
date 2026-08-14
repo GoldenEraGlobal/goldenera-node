@@ -21,23 +21,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.chainidentity;
+package global.goldenera.node.core.sandbox.authoring;
 
-import global.goldenera.node.NetworkSettings;
-import global.goldenera.node.core.blockchain.genesis.GenesisCandidateFactory;
-import global.goldenera.node.core.state.IsolatedWorldStateStorage;
+/** Failure of the explicit offline sandbox-manifest authoring operation. */
+public final class SandboxManifestAuthoringException extends RuntimeException {
 
-/** Calculates a development genesis hash without opening the target RocksDB. */
-public final class DevelopmentGenesisIdentityCalculator {
+	public SandboxManifestAuthoringException(String message) {
+		super(message);
+	}
 
-	public String calculate(NetworkSettings settings) {
-		try (IsolatedWorldStateStorage storage =
-				IsolatedWorldStateStorage.temporary("goldenera-genesis-preflight-")) {
-			return new GenesisCandidateFactory(storage.worldStateFactory())
-					.create(settings, 0L).block().getHash().toHexString();
-		} catch (Exception e) {
-			throw new ChainStorageGuardException(
-					"Failed to calculate development genesis in isolated storage", e);
-		}
+	public SandboxManifestAuthoringException(String message, Throwable cause) {
+		super(message, cause);
 	}
 }

@@ -60,6 +60,7 @@ public final class NodeBuildMetadataProvider {
 				property(properties, "git.commit"),
 				property(properties, "cryptoj.version"),
 				property(properties, "cryptoj.sha256"),
+				property(properties, "randomx.source.commit"),
 				System.getProperty("java.version", UNKNOWN),
 				System.getProperty("java.vendor", UNKNOWN),
 				System.getProperty("java.vm.name", UNKNOWN),
@@ -77,6 +78,10 @@ public final class NodeBuildMetadataProvider {
 			}
 			if (!SHA_256.matcher(metadata.cryptoJSha256()).matches()) {
 				throw new IllegalStateException("Release CryptoJ checksum must be an exact lowercase SHA-256");
+			}
+			if (!GIT_COMMIT.matcher(metadata.randomXSourceCommit()).matches()
+					|| metadata.randomXSourceCommit().length() != 40) {
+				throw new IllegalStateException("Release RandomX source commit must be exact lowercase 40-char hexadecimal");
 			}
 		}
 	}
@@ -99,7 +104,7 @@ public final class NodeBuildMetadataProvider {
 	}
 
 	private static List<String> requiredMetadata() {
-		return List.of("app.version", "git.commit", "cryptoj.version", "cryptoj.sha256");
+		return List.of("app.version", "git.commit", "cryptoj.version", "cryptoj.sha256", "randomx.source.commit");
 	}
 
 	private static String property(Properties properties, String key) {

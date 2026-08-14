@@ -142,6 +142,7 @@ public class NodeInfoApiV1 {
 						build.gitCommit(),
 						build.cryptoJVersion(),
 						build.cryptoJSha256(),
+						build.randomXSourceCommit(),
 						build.javaVersion(),
 						build.javaVendor(),
 						build.vmName(),

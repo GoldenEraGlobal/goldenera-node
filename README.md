@@ -38,6 +38,20 @@ Before proceeding with the installation, ensure that **Docker** and the **Docker
 
 ## 🚀 Installation & Setup
 
+### Reproducible local sandbox image
+
+The sandbox test platform builds an image from a clean committed worktree with
+the project `mise` toolchain and locally installed Maven artifacts:
+
+```bash
+./scripts/build-sandbox-image.sh
+```
+
+The image is tagged `goldenera-node:sandbox-local` by default. Its OCI metadata
+records the exact node commit, CryptoJ SHA-256, and the Maven-pinned RandomX
+source commit. The build fails if the worktree is dirty or those inputs do not
+match; the published release-image path remains the default Docker target.
+
 ### 1. Optimize Linux Kernel (Recommended)
 
 For optimal mining performance (RandomX), huge pages must be enabled on the host machine.

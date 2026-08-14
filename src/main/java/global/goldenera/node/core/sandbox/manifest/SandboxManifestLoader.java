@@ -78,6 +78,8 @@ import global.goldenera.node.core.sandbox.manifest.SandboxManifest.RandomX;
 public final class SandboxManifestLoader {
 
 	public static final int MAX_MANIFEST_BYTES = 1024 * 1024;
+	public static final String AUTHORING_GENESIS_HASH_PLACEHOLDER =
+			"0x0000000000000000000000000000000000000000000000000000000000000000";
 
 	private static final int MAX_COLLECTION_ENTRIES = 1024;
 	private static final BigInteger MAX_UINT_256 = BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE);
@@ -105,7 +107,31 @@ public final class SandboxManifestLoader {
 	private static final ObjectMapper CANONICAL_WRITER = new ObjectMapper();
 
 	public SandboxManifestContext load(Path path) {
-		byte[] input = readMountedManifest(path);
+		return loadBytes(readMountedManifest(path), false);
+	}
+
+	/**
+	 * Loads an authoring draft. The all-zero expected genesis hash is accepted
+	 * only through this explicit offline entry point.
+	 */
+	public SandboxManifestContext loadAuthoringDraft(Path path) {
+		return loadBytes(readMountedManifest(path), true);
+	}
+
+	/** Parses securely acquired draft bytes without weakening draft semantics. */
+	public SandboxManifestContext loadAuthoringDraftBytes(byte[] input) {
+		return loadBytes(input, true);
+	}
+
+	/** Reloads authored canonical bytes using normal, non-placeholder semantics. */
+	public SandboxManifestContext loadAuthoredManifestBytes(byte[] input) {
+		return loadBytes(input, false);
+	}
+
+	private SandboxManifestContext loadBytes(byte[] input, boolean authoringDraft) {
+		if (input == null || input.length > MAX_MANIFEST_BYTES) {
+			throw new SandboxManifestException("Sandbox manifest exceeds the 1 MiB limit");
+		}
 		validateUtf8(input);
 		JsonNode root;
 		try {
@@ -117,7 +143,7 @@ public final class SandboxManifestLoader {
 			throw invalid("$", "manifest must not be empty");
 		}
 
-		SandboxManifest manifest = parseManifest(root);
+		SandboxManifest manifest = parseManifest(root, authoringDraft);
 		byte[] canonicalJson = canonicalize(manifest);
 		return new SandboxManifestContext(manifest, canonicalJson, sha256(canonicalJson));
 	}
@@ -159,7 +185,7 @@ public final class SandboxManifestLoader {
 		}
 	}
 
-	private SandboxManifest parseManifest(JsonNode root) {
+	private SandboxManifest parseManifest(JsonNode root, boolean authoringDraft) {
 		ObjectNode object = exactObject(root, "$", Set.of(
 				"schemaVersion", "chainId", "disposable", "legacyCarrier", "genesis", "forks", "consensus", "pow",
 				"clock", "features", "legacyPeers"));
@@ -168,7 +194,7 @@ public final class SandboxManifestLoader {
 		boolean disposable = exactBoolean(object, "disposable", "$");
 
 		LegacyCarrier legacyCarrier = parseLegacyCarrier(required(object, "legacyCarrier", "$"));
-		Genesis genesis = parseGenesis(required(object, "genesis", "$"));
+		Genesis genesis = parseGenesis(required(object, "genesis", "$"), authoringDraft);
 		SortedMap<ForkName, Long> forks = parseForks(required(object, "forks", "$"));
 		Consensus consensus = parseConsensus(required(object, "consensus", "$"));
 		Pow pow = parsePow(required(object, "pow", "$"));
@@ -192,7 +218,7 @@ public final class SandboxManifestLoader {
 		return new LegacyCarrier(network, code);
 	}
 
-	private Genesis parseGenesis(JsonNode node) {
+	private Genesis parseGenesis(JsonNode node, boolean authoringDraft) {
 		String path = "$.genesis";
 		ObjectNode object = exactObject(node, path, Set.of(
 				"timestampMs", "seed", "expectedGenesisHash", "authorities", "validators", "initialBalances",
@@ -202,6 +228,14 @@ public final class SandboxManifestLoader {
 		String seed = matchingString(object, "seed", SEED, path, "64 lowercase hexadecimal characters");
 		String expectedHash = matchingString(object, "expectedGenesisHash", HASH, path,
 				"0x-prefixed lowercase SHA-256 hash");
+		if (AUTHORING_GENESIS_HASH_PLACEHOLDER.equals(expectedHash) && !authoringDraft) {
+			throw invalid(path + ".expectedGenesisHash",
+					"the all-zero placeholder is permitted only in explicit authoring mode");
+		}
+		if (!AUTHORING_GENESIS_HASH_PLACEHOLDER.equals(expectedHash) && authoringDraft) {
+			throw invalid(path + ".expectedGenesisHash",
+					"must be the all-zero placeholder in authoring mode");
+		}
 		List<String> authorities = parseUniqueStrings(required(object, "authorities", path), path + ".authorities",
 				ADDRESS, false).stream().sorted().toList();
 		List<String> validators = parseUniqueStrings(required(object, "validators", path), path + ".validators",

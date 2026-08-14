@@ -40,6 +40,7 @@ class NodeBuildMetadataProviderTest {
 		assertThat(provider.metadata().applicationVersion()).isEqualTo(NodeBuildMetadataProvider.UNKNOWN);
 		assertThat(provider.metadata().gitCommit()).isEqualTo(NodeBuildMetadataProvider.UNKNOWN);
 		assertThat(provider.metadata().cryptoJSha256()).isEqualTo(NodeBuildMetadataProvider.UNKNOWN);
+		assertThat(provider.metadata().randomXSourceCommit()).isEqualTo(NodeBuildMetadataProvider.UNKNOWN);
 	}
 
 	@Test
@@ -60,6 +61,7 @@ class NodeBuildMetadataProviderTest {
 		assertThat(metadata.gitCommit()).isEqualTo("a".repeat(40));
 		assertThat(metadata.cryptoJVersion()).isEqualTo("4.5.6");
 		assertThat(metadata.cryptoJSha256()).isEqualTo("b".repeat(64));
+		assertThat(metadata.randomXSourceCommit()).isEqualTo("c".repeat(40));
 	}
 
 	@Test
@@ -83,6 +85,16 @@ class NodeBuildMetadataProviderTest {
 	}
 
 	@Test
+	void releaseRejectsRandomXSourceCommitThatIsNotExactLowercaseCommit() {
+		Properties properties = completeProperties();
+		properties.setProperty("randomx.source.commit", "C".repeat(40));
+
+		assertThatThrownBy(() -> new NodeBuildMetadataProvider(properties, true))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("RandomX source commit");
+	}
+
+	@Test
 	void filteredReleaseArtifactFlagForcesValidationWithoutARuntimeProfile() {
 		Properties properties = completeProperties();
 		properties.setProperty("release.metadata.required", "true");
@@ -99,6 +111,7 @@ class NodeBuildMetadataProviderTest {
 		properties.setProperty("git.commit", "a".repeat(40));
 		properties.setProperty("cryptoj.version", "4.5.6");
 		properties.setProperty("cryptoj.sha256", "b".repeat(64));
+		properties.setProperty("randomx.source.commit", "c".repeat(40));
 		return properties;
 	}
 }

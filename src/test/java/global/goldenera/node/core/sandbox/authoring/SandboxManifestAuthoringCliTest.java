@@ -21,23 +21,31 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.chainidentity;
+package global.goldenera.node.core.sandbox.authoring;
 
-import global.goldenera.node.NetworkSettings;
-import global.goldenera.node.core.blockchain.genesis.GenesisCandidateFactory;
-import global.goldenera.node.core.state.IsolatedWorldStateStorage;
+import static org.assertj.core.api.Assertions.assertThat;
 
-/** Calculates a development genesis hash without opening the target RocksDB. */
-public final class DevelopmentGenesisIdentityCalculator {
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 
-	public String calculate(NetworkSettings settings) {
-		try (IsolatedWorldStateStorage storage =
-				IsolatedWorldStateStorage.temporary("goldenera-genesis-preflight-")) {
-			return new GenesisCandidateFactory(storage.worldStateFactory())
-					.create(settings, 0L).block().getHash().toHexString();
-		} catch (Exception e) {
-			throw new ChainStorageGuardException(
-					"Failed to calculate development genesis in isolated storage", e);
-		}
+import org.junit.jupiter.api.Test;
+
+class SandboxManifestAuthoringCliTest {
+
+	@Test
+	void rejectsIncompleteInvocationWithoutStartingNode() {
+		ByteArrayOutputStream standardOutput = new ByteArrayOutputStream();
+		ByteArrayOutputStream standardError = new ByteArrayOutputStream();
+
+		int exitCode = SandboxManifestAuthoringCli.execute(
+				new String[0],
+				new PrintStream(standardOutput, true, StandardCharsets.UTF_8),
+				new PrintStream(standardError, true, StandardCharsets.UTF_8));
+
+		assertThat(exitCode).isEqualTo(2);
+		assertThat(standardOutput).hasToString("");
+		assertThat(standardError.toString(StandardCharsets.UTF_8))
+				.contains("usage: sandbox-manifest-author");
 	}
 }

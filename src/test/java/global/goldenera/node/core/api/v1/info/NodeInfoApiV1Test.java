@@ -88,7 +88,7 @@ class NodeInfoApiV1Test {
 				ProofOfWorkRuntimeMode.DETERMINISTIC_SHA256_V1,
 				List.of("chain-identity-v1", "pow-deterministic-sha256-v1")));
 		when(build.metadata()).thenReturn(new NodeBuildMetadata(
-				"1.2.3", "abc", "4.5.6", "def", "21", "vendor", "vm", "os", "arch"));
+				"1.2.3", "abc", "4.5.6", "def", "randomx", "21", "vendor", "vm", "os", "arch"));
 		when(groups.groups()).thenReturn(List.of(new NodeOpenApiGroup(
 				"CORE API", "/v3/api-docs/CORE%20API")));
 		NodeInfoApiV1 api = new NodeInfoApiV1(
@@ -105,6 +105,7 @@ class NodeInfoApiV1Test {
 		assertThat(response.getAnchor().height()).isEqualTo(42L);
 		assertThat(response.getAnchor().blockHash()).isEqualTo(Hash.ZERO.toHexString());
 		assertThat(response.getBuildMetadata().gitCommit()).isEqualTo("abc");
+		assertThat(response.getBuildMetadata().randomXSourceCommit()).isEqualTo("randomx");
 		assertThat(response.getOpenApiGroups()).containsExactly(
 				new OpenApiGroupDtoV1(
 						"CORE API", "/v3/api-docs/CORE%20API"));

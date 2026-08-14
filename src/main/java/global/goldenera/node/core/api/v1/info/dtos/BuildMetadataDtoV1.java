@@ -28,6 +28,7 @@ public record BuildMetadataDtoV1(
 		String gitCommit,
 		String cryptoJVersion,
 		String cryptoJSha256,
+		String randomXSourceCommit,
 		String javaVersion,
 		String javaVendor,
 		String vmName,

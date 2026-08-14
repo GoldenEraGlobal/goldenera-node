@@ -43,6 +43,7 @@
         <okhttp.version>5.3.0</okhttp.version>
         <rocksdb.version>9.1.0</rocksdb.version>
         <goldenera-randomx.version>0.0.1</goldenera-randomx.version>
+        <goldenera-randomx.source.commit>1ab5cbfd9081802729dc888c80e88777c709893b</goldenera-randomx.source.commit>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
         <goldenera-merkletrie.version>0.0.1</goldenera-merkletrie.version>
         <goldenera-cryptoj.version>0.0.3</goldenera-cryptoj.version>
@@ -549,6 +550,11 @@
                                             <property>goldenera.cryptoj.sha256</property>
                                             <regex>^[0-9a-f]{64}$</regex>
                                             <message>Release CryptoJ checksum must be an exact lowercase SHA-256.</message>
+                                        </requireProperty>
+                                        <requireProperty>
+                                            <property>goldenera-randomx.source.commit</property>
+                                            <regex>^[0-9a-f]{40}$</regex>
+                                            <message>Release RandomX source commit must be exact lowercase 40-char hexadecimal.</message>
                                         </requireProperty>
                                     </rules>
                                 </configuration>

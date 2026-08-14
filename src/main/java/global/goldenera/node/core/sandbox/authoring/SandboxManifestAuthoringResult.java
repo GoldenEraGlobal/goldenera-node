@@ -21,23 +21,43 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.chainidentity;
+package global.goldenera.node.core.sandbox.authoring;
 
-import global.goldenera.node.NetworkSettings;
-import global.goldenera.node.core.blockchain.genesis.GenesisCandidateFactory;
-import global.goldenera.node.core.state.IsolatedWorldStateStorage;
+import java.nio.file.Path;
+import java.util.Objects;
 
-/** Calculates a development genesis hash without opening the target RocksDB. */
-public final class DevelopmentGenesisIdentityCalculator {
+/** Immutable identity material produced by offline manifest authoring. */
+public final class SandboxManifestAuthoringResult {
 
-	public String calculate(NetworkSettings settings) {
-		try (IsolatedWorldStateStorage storage =
-				IsolatedWorldStateStorage.temporary("goldenera-genesis-preflight-")) {
-			return new GenesisCandidateFactory(storage.worldStateFactory())
-					.create(settings, 0L).block().getHash().toHexString();
-		} catch (Exception e) {
-			throw new ChainStorageGuardException(
-					"Failed to calculate development genesis in isolated storage", e);
-		}
+	private final Path output;
+	private final String genesisHash;
+	private final String manifestFingerprint;
+	private final byte[] canonicalManifest;
+
+	SandboxManifestAuthoringResult(
+			Path output,
+			String genesisHash,
+			String manifestFingerprint,
+			byte[] canonicalManifest) {
+		this.output = Objects.requireNonNull(output, "output");
+		this.genesisHash = Objects.requireNonNull(genesisHash, "genesisHash");
+		this.manifestFingerprint = Objects.requireNonNull(manifestFingerprint, "manifestFingerprint");
+		this.canonicalManifest = canonicalManifest.clone();
+	}
+
+	public Path output() {
+		return output;
+	}
+
+	public String genesisHash() {
+		return genesisHash;
+	}
+
+	public String manifestFingerprint() {
+		return manifestFingerprint;
+	}
+
+	public byte[] canonicalManifest() {
+		return canonicalManifest.clone();
 	}
 }

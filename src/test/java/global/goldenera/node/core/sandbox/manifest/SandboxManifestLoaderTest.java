@@ -213,6 +213,23 @@ class SandboxManifestLoaderTest {
 	}
 
 	@Test
+	void allZeroGenesisHashIsAcceptedOnlyByExplicitAuthoringLoader() throws Exception {
+		String draft = resource(VALID_RESOURCE).replace(
+				"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SandboxManifestLoader.AUTHORING_GENESIS_HASH_PLACEHOLDER);
+		Path path = write("draft.json", draft);
+
+		assertThatThrownBy(() -> loader.load(path))
+				.isInstanceOf(SandboxManifestException.class)
+				.hasMessageContaining("only in explicit authoring mode");
+		assertThat(loader.loadAuthoringDraft(path).manifest().genesis().expectedGenesisHash())
+				.isEqualTo(SandboxManifestLoader.AUTHORING_GENESIS_HASH_PLACEHOLDER);
+		assertThatThrownBy(() -> loader.loadAuthoringDraft(write("already-final.json", resource(VALID_RESOURCE))))
+				.isInstanceOf(SandboxManifestException.class)
+				.hasMessageContaining("must be the all-zero placeholder");
+	}
+
+	@Test
 	void legacyPeerAllowlistAcceptsOnlyCanonicalLowercaseTwentyByteAddresses() throws Exception {
 		String valid = resource(VALID_RESOURCE);
 

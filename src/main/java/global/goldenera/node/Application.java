@@ -24,12 +24,15 @@
 package global.goldenera.node;
 
 import java.security.Security;
+import java.util.Arrays;
 
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
+
+import global.goldenera.node.core.sandbox.authoring.SandboxManifestAuthoringCli;
 
 @SpringBootApplication
 @ComponentScan(excludeFilters = @ComponentScan.Filter(
@@ -51,6 +54,14 @@ public class Application {
     }
 
     public static void main(String[] args) {
+        if (args.length > 0 && SandboxManifestAuthoringCli.COMMAND.equals(args[0])) {
+            String[] authoringArguments = Arrays.copyOfRange(args, 1, args.length);
+            int exitCode = SandboxManifestAuthoringCli.execute(authoringArguments, System.out, System.err);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
         SpringApplication.run(Application.class, args);
     }
 

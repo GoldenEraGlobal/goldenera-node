@@ -6,6 +6,7 @@ FROM eclipse-temurin:21-jdk-jammy AS app-builder
 ARG GITHUB_ACTOR
 ARG BUILD_GIT_COMMIT
 ARG CRYPTOJ_SHA256
+ARG RANDOMX_SOURCE_COMMIT
 
 WORKDIR /app
 
@@ -35,9 +36,11 @@ RUN --mount=type=secret,id=github_token \
     printf '%s' "${BUILD_GIT_COMMIT}" | grep -Eq '^[0-9a-f]{40,64}$' && \
     printf '%s' "${CRYPTOJ_SHA256}" | grep -Eq '^[0-9a-f]{64}$' && \
     CRYPTOJ_VERSION=$(./mvnw help:evaluate -Dexpression=goldenera-cryptoj.version -q -DforceStdout -s settings.xml) && \
+    PINNED_RANDOMX_SOURCE_COMMIT=$(./mvnw help:evaluate -Dexpression=goldenera-randomx.source.commit -q -DforceStdout -s settings.xml) && \
     CRYPTOJ_JAR="${HOME}/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar" && \
     test -f "${CRYPTOJ_JAR}" && \
     test "$(sha256sum "${CRYPTOJ_JAR}" | cut -d ' ' -f 1)" = "${CRYPTOJ_SHA256}" && \
+    test "${PINNED_RANDOMX_SOURCE_COMMIT}" = "${RANDOMX_SOURCE_COMMIT}" && \
     ./mvnw clean package -Prelease-artifact -DskipTests \
       -Dgoldenera.git.commit="${BUILD_GIT_COMMIT}" \
       -Dgoldenera.cryptoj.sha256="${CRYPTOJ_SHA256}" \
@@ -46,13 +49,15 @@ RUN --mount=type=secret,id=github_token \
 # ==============================================================================
 # STAGE 2: Production Runtime (Ubuntu 24.04 + RandomX JIT)
 # ==============================================================================
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS runtime-base
 
 ARG BUILD_GIT_COMMIT
 ARG CRYPTOJ_SHA256
+ARG RANDOMX_SOURCE_COMMIT
 
 LABEL org.opencontainers.image.revision="${BUILD_GIT_COMMIT}" \
-      global.goldenera.cryptoj.sha256="${CRYPTOJ_SHA256}"
+      global.goldenera.cryptoj.sha256="${CRYPTOJ_SHA256}" \
+      global.goldenera.randomx.source.commit="${RANDOMX_SOURCE_COMMIT}"
 
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
@@ -72,8 +77,12 @@ RUN wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee
 
 # 3. Clone RandomX Fork
 WORKDIR /usr/src
-RUN git clone https://github.com/GoldenEraGlobal/goldenera-randomx.git \
+RUN printf '%s' "${RANDOMX_SOURCE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$' \
+    && git init goldenera-randomx \
     && cd goldenera-randomx \
+    && git remote add origin https://github.com/GoldenEraGlobal/goldenera-randomx.git \
+    && git fetch --depth 1 origin "${RANDOMX_SOURCE_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
     && git submodule update --init --recursive
 
 # 4. User Setup
@@ -81,8 +90,7 @@ RUN groupadd -r blockchain && useradd -r -g blockchain -d ${APP_HOME} -s /sbin/n
 
 WORKDIR ${APP_HOME}
 
-# 5. Copy Artifacts
-COPY --from=app-builder /app/target/*.jar ${APP_HOME}/app.jar
+# 5. Copy Runtime Entrypoint
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
@@ -96,3 +104,13 @@ EXPOSE 8080 9000 80 443
 VOLUME ["/app/node_data", "/app/node_logs"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Local sandbox builds consume the exact release-metadata JAR built through the
+# host mise toolchain. This keeps unpublished local Maven artifacts out of the
+# Docker build graph while preserving the same runtime image.
+FROM runtime-base AS sandbox-local-runtime
+COPY --chown=blockchain:blockchain target/goldenera-node-*.jar ${APP_HOME}/app.jar
+
+# Published/release builds remain self-contained and build the JAR in Docker.
+FROM runtime-base AS release-runtime
+COPY --from=app-builder --chown=blockchain:blockchain /app/target/*.jar ${APP_HOME}/app.jar

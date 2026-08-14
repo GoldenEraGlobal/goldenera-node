@@ -166,6 +166,7 @@ jobs:
           CRYPTOJ_JAR="$HOME/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar"
           echo "cryptoj_sha256=$(sha256sum "$CRYPTOJ_JAR" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
           echo "git_commit=$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+          echo "randomx_source_commit=$(mvn help:evaluate -Dexpression=goldenera-randomx.source.commit -q -DforceStdout)" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -189,6 +190,7 @@ jobs:
             GITHUB_ACTOR=${{ github.actor }}
             BUILD_GIT_COMMIT=${{ steps.release_meta.outputs.git_commit }}
             CRYPTOJ_SHA256=${{ steps.release_meta.outputs.cryptoj_sha256 }}
+            RANDOMX_SOURCE_COMMIT=${{ steps.release_meta.outputs.randomx_source_commit }}
           secrets: |
             github_token=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha,scope=build-${{ matrix.arch }}
