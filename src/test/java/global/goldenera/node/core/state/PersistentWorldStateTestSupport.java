@@ -86,6 +86,8 @@ public final class PersistentWorldStateTestSupport implements AutoCloseable {
 				serialization.bipStateDeserializer(),
 				serialization.networkParamsSerializer(),
 				serialization.networkParamsDeserializer(),
+				serialization.miningWindowSerializer(),
+				serialization.miningWindowDeserializer(),
 				serialization.tokenSerializer(),
 				serialization.tokenDeserializer());
 	}

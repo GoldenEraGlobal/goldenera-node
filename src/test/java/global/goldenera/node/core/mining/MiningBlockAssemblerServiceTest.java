@@ -27,16 +27,28 @@ import static global.goldenera.node.core.mempool.MempoolTestFixtures.ALICE;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.BOB;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.transfer;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.math.BigInteger;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.ValidatorState;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.mempool.MempoolManager;
@@ -44,6 +56,7 @@ import global.goldenera.node.core.mempool.MempoolTestFixtures;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.processing.StateProcessor;
+import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -64,7 +77,8 @@ class MiningBlockAssemblerServiceTest {
 		when(worldState.getNonce(BOB)).thenReturn(nonce);
 		assembler = new MiningBlockAssemblerService(mock(WorldStateFactory.class), mempool,
 				MempoolTestFixtures.properties(100), mock(GeneralProperties.class), mock(StateProcessor.class),
-				mock(DifficultyCalculator.class), mock(IdentityService.class));
+				mock(DifficultyCalculator.class), mock(IdentityService.class),
+				mock(ValidatorMiningPolicyService.class));
 	}
 
 	@Test
@@ -101,5 +115,42 @@ class MiningBlockAssemblerServiceTest {
 
 		assertThat(assembler.getExecutableTransactions(1000, worldState))
 				.containsExactly(parent.getTx(), child.getTx());
+	}
+
+	@Test
+	void exhaustedLimitedMinerReturnsNoTemplateBeforeExecutionOrRandomXJobCanStart() throws Exception {
+		WorldStateFactory worldStateFactory = mock(WorldStateFactory.class);
+		StateProcessor stateProcessor = mock(StateProcessor.class);
+		IdentityService identityService = mock(IdentityService.class);
+		ValidatorMiningPolicyService policyService = mock(ValidatorMiningPolicyService.class);
+		GeneralProperties generalProperties = mock(GeneralProperties.class);
+		MiningBlockAssemblerService localAssembler = new MiningBlockAssemblerService(
+				worldStateFactory, mempool, MempoolTestFixtures.properties(100), generalProperties,
+				stateProcessor, mock(DifficultyCalculator.class), identityService, policyService);
+		Block parent = mock(Block.class);
+		BlockHeader parentHeader = mock(BlockHeader.class);
+		NetworkParamsState params = mock(NetworkParamsState.class);
+		ValidatorState validator = mock(ValidatorState.class);
+		Address identity = Address.fromHexString("0x0000000000000000000000000000000000000001");
+		when(parent.getHeight()).thenReturn(10L);
+		when(parent.getHeader()).thenReturn(parentHeader);
+		when(parentHeader.getStateRootHash()).thenReturn(Hash.ZERO);
+		when(parentHeader.getTimestamp()).thenReturn(Instant.EPOCH);
+		when(parentHeader.getDifficulty()).thenReturn(BigInteger.ONE);
+		when(worldStateFactory.createForMining(Hash.ZERO)).thenReturn(worldState);
+		when(worldState.getParams()).thenReturn(params);
+		when(params.getCurrentValidatorCount()).thenReturn(1L);
+		when(worldState.getValidator(identity)).thenReturn(validator);
+		when(validator.exists()).thenReturn(true);
+		when(identityService.getNodeIdentityAddress()).thenReturn(identity);
+		when(generalProperties.getBeneficiaryAddress()).thenReturn(Address.ZERO);
+		when(policyService.isCandidateEligible(worldState, 11, identity)).thenReturn(false);
+
+		Optional<MiningBlockAssemblerService.AssembledBlock> result = localAssembler.createBlockTemplate(parent);
+
+		assertThat(result).isEmpty();
+		verify(mempool, never()).getTxIterator();
+		verify(stateProcessor, never()).executeMiningBatch(
+				any(), any(), anyList(), any());
 	}
 }

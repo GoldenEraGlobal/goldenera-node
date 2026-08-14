@@ -49,6 +49,7 @@ import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
+import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.randomx.RandomXVM;
@@ -67,6 +68,7 @@ public class BlockValidator {
 	DifficultyCalculator difficultyService;
 	CheckpointRegistry checkpointService;
 	TxValidator txValidator;
+	ValidatorMiningPolicyService validatorMiningPolicyService;
 
 	// =================================================================================
 	// 1. HEADER VALIDATION (Lightweight)
@@ -161,6 +163,7 @@ public class BlockValidator {
 						"Consensus violation: Miner %s is not a registered validator",
 						minerIdentity.toChecksumAddress());
 			}
+			validatorMiningPolicyService.validateCandidate(worldState, child.getHeight(), child.getIdentity());
 		} catch (IllegalArgumentException e) {
 			throw new GEValidationException("Contextual Header Validation failed: " + e.getMessage(), e);
 		}

@@ -70,8 +70,14 @@ import lombok.extern.slf4j.Slf4j;
 public class StateProcessor {
 
 	Map<TxType, TxHandler> handlers = new EnumMap<>(TxType.class);
+	MiningEconomicsActivationService miningEconomicsActivationService;
+	ValidatorMiningPolicyService validatorMiningPolicyService;
 
-	public StateProcessor(List<TxHandler> handlerList) {
+	public StateProcessor(List<TxHandler> handlerList,
+			MiningEconomicsActivationService miningEconomicsActivationService,
+			ValidatorMiningPolicyService validatorMiningPolicyService) {
+		this.miningEconomicsActivationService = miningEconomicsActivationService;
+		this.validatorMiningPolicyService = validatorMiningPolicyService;
 		for (TxHandler h : handlerList) {
 			handlers.put(h.getSupportedType(), h);
 		}
@@ -104,6 +110,8 @@ public class StateProcessor {
 			boolean failFast) {
 		Wei totalFeesCollected = Wei.ZERO;
 		Wei totalSupplyIncrease = Wei.ZERO;
+		miningEconomicsActivationService.applyIfNeeded(worldState, block.getHeight());
+		params = worldState.getParams();
 
 		List<Tx> validTxs = new ArrayList<>(txs.size());
 		List<Tx> invalidTxs = new ArrayList<>();
@@ -138,6 +146,7 @@ public class StateProcessor {
 		}
 		Wei rewardFromPool = processRewardDistribution(worldState, block, params, totalFeesCollected,
 				totalSupplyIncrease);
+		validatorMiningPolicyService.appendAcceptedBlock(worldState, block);
 		Wei minerActualRewardPaid = rewardFromPool.addExact(totalFeesCollected);
 		return ExecutionResult.builder()
 				.validTxs(validTxs)
@@ -273,17 +282,20 @@ public class StateProcessor {
 		long height;
 		Instant timestamp;
 		Address coinbase;
+		Address identity;
 
 		public SimpleBlock(BlockHeader header) {
 			this.height = header.getHeight();
 			this.timestamp = header.getTimestamp();
 			this.coinbase = header.getCoinbase();
+			this.identity = header.getIdentity();
 		}
 
 		public SimpleBlock(Block block) {
 			this.height = block.getHeader().getHeight();
 			this.timestamp = block.getHeader().getTimestamp();
 			this.coinbase = block.getHeader().getCoinbase();
+			this.identity = block.getHeader().getIdentity();
 		}
 	}
 

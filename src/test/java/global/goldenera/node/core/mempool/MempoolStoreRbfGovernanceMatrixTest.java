@@ -56,6 +56,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
@@ -188,6 +189,8 @@ class MempoolStoreRbfGovernanceMatrixTest {
 		TxBipValidatorAddPayload validatorAdd = addressPayload(TxBipValidatorAddPayload.class, TARGET);
 		TxBipValidatorRemovePayload validatorRemove = addressPayload(TxBipValidatorRemovePayload.class, TARGET);
 		TxBipValidatorAddPayload otherValidator = addressPayload(TxBipValidatorAddPayload.class, OTHER_TARGET);
+		TxBipValidatorMiningPolicySetPayload validatorPolicy = policyPayload(TARGET);
+		TxBipValidatorMiningPolicySetPayload otherValidatorPolicy = policyPayload(OTHER_TARGET);
 
 		TxBipAddressAliasAddPayload aliasAdd = aliasPayload(TxBipAddressAliasAddPayload.class, "target");
 		TxBipAddressAliasRemovePayload aliasRemove = aliasPayload(TxBipAddressAliasRemovePayload.class, "target");
@@ -200,6 +203,7 @@ class MempoolStoreRbfGovernanceMatrixTest {
 		return Stream.of(
 				row("authority add/remove", 1, authorityAdd, authorityRemove, otherAuthority),
 				row("validator add/remove", 10, validatorAdd, validatorRemove, otherValidator),
+				row("validator add/policy", 15, validatorAdd, validatorPolicy, otherValidatorPolicy),
 				row("alias add/remove", 20, aliasAdd, aliasRemove, otherAlias),
 				row("token update", 30, tokenUpdate, sameTokenUpdate, otherTokenUpdate));
 	}
@@ -236,6 +240,12 @@ class MempoolStoreRbfGovernanceMatrixTest {
 	private static TxBipTokenUpdatePayload tokenPayload(Address token) {
 		TxBipTokenUpdatePayload payload = mock(TxBipTokenUpdatePayload.class);
 		when(payload.getTokenAddress()).thenReturn(token);
+		return payload;
+	}
+
+	private static TxBipValidatorMiningPolicySetPayload policyPayload(Address validator) {
+		TxBipValidatorMiningPolicySetPayload payload = mock(TxBipValidatorMiningPolicySetPayload.class);
+		when(payload.getValidatorAddress()).thenReturn(validator);
 		return payload;
 	}
 

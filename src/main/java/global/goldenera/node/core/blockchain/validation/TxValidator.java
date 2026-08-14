@@ -30,6 +30,7 @@ import java.math.BigInteger;
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Service;
 
+import global.goldenera.cryptoj.common.MiningConsensusRules;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePayload;
@@ -41,8 +42,10 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.node.Constants;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -194,6 +197,12 @@ public class TxValidator {
 					if (p.getAddress().equals(Address.ZERO)) {
 						throw new GEValidationException("Validator address cannot be the zero address");
 					}
+					if (p.getMiningLimitMode() != null || p.getMaxMiningShareBps() != null) {
+						if (p.getMiningLimitMode() == null || p.getMaxMiningShareBps() == null) {
+							throw new GEValidationException("Validator mining policy must be complete");
+						}
+						validateMiningPolicy(p.getMiningLimitMode(), p.getMaxMiningShareBps());
+					}
 				}
 				break;
 			case BIP_VALIDATOR_REMOVE:
@@ -204,6 +213,14 @@ public class TxValidator {
 					if (p.getAddress().equals(Address.ZERO)) {
 						throw new GEValidationException("Validator address cannot be the zero address");
 					}
+				}
+				break;
+			case BIP_VALIDATOR_MINING_POLICY_SET:
+				if (tx.getPayload() instanceof TxBipValidatorMiningPolicySetPayload p) {
+					if (p.getValidatorAddress() == null || p.getValidatorAddress().equals(Address.ZERO)) {
+						throw new GEValidationException("Validator address cannot be null or zero");
+					}
+					validateMiningPolicy(p.getMiningLimitMode(), p.getMaxMiningShareBps());
 				}
 				break;
 			case BIP_ADDRESS_ALIAS_ADD:
@@ -230,6 +247,13 @@ public class TxValidator {
 					validateMinTxFee(p.getMinTxByteFee(), "minTxByteFee");
 					validateMinDifficulty(p.getMinDifficulty());
 					validateAsertHalfLifeBlocks(p.getAsertHalfLifeBlocks());
+					if (p.getValidatorMiningWindowBlocks() != null) {
+						try {
+							MiningConsensusRules.validateWindowSize(p.getValidatorMiningWindowBlocks());
+						} catch (RuntimeException exception) {
+							throw new GEValidationException(exception.getMessage());
+						}
+					}
 				}
 				break;
 			default:
@@ -328,6 +352,14 @@ public class TxValidator {
 	private void validateAsertHalfLifeBlocks(Long halfLife) {
 		if (halfLife != null && halfLife < 1) {
 			throw new GEValidationException("asertHalfLifeBlocks must be at least 1");
+		}
+	}
+
+	private void validateMiningPolicy(MiningLimitMode mode, long share) {
+		try {
+			MiningConsensusRules.validatePolicy(mode, share);
+		} catch (RuntimeException exception) {
+			throw new GEValidationException(exception.getMessage());
 		}
 	}
 

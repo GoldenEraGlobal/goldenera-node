@@ -34,8 +34,10 @@ import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.blockchain.genesis.GenesisInitializer;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.p2p.manager.NodeConnectionManager;
 import global.goldenera.node.core.p2p.services.DirectoryService;
+import global.goldenera.node.core.processing.MiningEconomicsActivationService;
 import global.goldenera.node.core.sync.BlockSyncManagerService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -53,6 +55,8 @@ public class CoreBootstrapService {
 	BlockSyncManagerService syncManagerService;
 	GenesisInitializer blockGenesisService;
 	NodeConnectionManager nodeConnectionManager;
+	ChainQuery chainQuery;
+	MiningEconomicsActivationService miningEconomicsActivationService;
 
 	@EventListener
 	public void onApplicationReady(ApplicationReadyEvent event) {
@@ -76,6 +80,8 @@ public class CoreBootstrapService {
 		try {
 			blockGenesisService.checkAndInitGenesisBlock();
 			chainHeadStateCache.init();
+			miningEconomicsActivationService.assertHeadReady(
+					chainHeadStateCache.getHeadState(), chainQuery.getLatestStoredBlockOrThrow().getHeight());
 		} catch (Exception e) {
 			e.printStackTrace();
 			log.error("CORE DB: Core initialization failed: {}", e.getMessage());

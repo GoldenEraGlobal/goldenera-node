@@ -57,6 +57,7 @@ import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
+import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
@@ -91,6 +92,7 @@ public class MiningBlockAssemblerService {
 	StateProcessor stateProcessor;
 	DifficultyCalculator difficultyService;
 	IdentityService identityService;
+	ValidatorMiningPolicyService validatorMiningPolicyService;
 
 	/**
 	 * Creates a new, mineable block template.
@@ -127,6 +129,11 @@ public class MiningBlockAssemblerService {
 		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
 
 		long nextHeight = parentBlock.getHeight() + 1;
+		if (!validatorMiningPolicyService.isCandidateEligible(worldState, nextHeight, minerIdentity)) {
+			log.debug("Mining skipped: Miner identity {} exhausted its mining share at height {}",
+					minerIdentity.toChecksumAddress(), nextHeight);
+			return Optional.empty();
+		}
 
 		// Dynamic block size based on mempool utilization (height-aware for fork
 		// overrides)
@@ -148,6 +155,7 @@ public class MiningBlockAssemblerService {
 						.height(nextHeight)
 						.timestamp(Instant.ofEpochMilli(timestamp))
 						.coinbase(beneficiaryAddress)
+						.identity(minerIdentity)
 						.build(),
 				txs,
 				params);

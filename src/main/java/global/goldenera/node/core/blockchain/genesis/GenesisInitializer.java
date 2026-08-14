@@ -38,6 +38,7 @@ import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.BlockImpl;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningWindowStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
@@ -45,12 +46,15 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.enums.BlockVersion;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
+import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.state.BlockStateTransitions;
@@ -90,7 +94,7 @@ public class GenesisInitializer {
 		}
 
 		WorldState worldState = worldStateFactory.createForValidation(MerkleTrie.EMPTY_TRIE_NODE_HASH);
-		executeGenesisStateExplicitly(worldState, authorities, timestamp);
+		executeGenesisStateExplicitly(worldState, authorities, timestamp, settings);
 
 		Hash stateRootHash = worldState.calculateRootHash();
 		Hash txRootHash = Hash.ZERO;
@@ -118,15 +122,17 @@ public class GenesisInitializer {
 		log.info("Genesis initialized. Hash: {}", genesisBlock.getHash());
 	}
 
-	private void executeGenesisStateExplicitly(WorldState worldState, List<Address> authorities, Instant timestamp) {
-		NetworkSettings settings = Constants.getSettings();
+	void executeGenesisStateExplicitly(WorldState worldState, List<Address> authorities, Instant timestamp,
+			NetworkSettings settings) {
 		Wei totalSupply = settings.genesisNetworkInitialMintForAuthority()
 				.addExact(settings.genesisNetworkInitialMintForBlockReward());
 		List<Address> validators = settings.genesisValidatorAddresses();
 
 		// 1. Network Params
-		NetworkParamsStateImpl params = NetworkParamsStateImpl.builder()
-				.version(NetworkParamsStateVersion.V1)
+		boolean miningEconomicsAtGenesis = settings.forkActivationBlocks()
+				.getOrDefault(ForkName.MINING_ECONOMICS, Long.MAX_VALUE) == GENESIS_HEIGHT;
+		var paramsBuilder = NetworkParamsStateImpl.builder()
+				.version(miningEconomicsAtGenesis ? NetworkParamsStateVersion.V2 : NetworkParamsStateVersion.V1)
 				.blockReward(settings.genesisNetworkBlockReward())
 				.targetMiningTimeMs(settings.genesisNetworkTargetMiningTimeMs())
 				.blockRewardPoolAddress(settings.genesisNetworkBlockRewardPoolAddress())
@@ -139,9 +145,18 @@ public class GenesisInitializer {
 				.currentValidatorCount(validators.size())
 				.updatedByTxHash(Hash.ZERO)
 				.updatedAtBlockHeight(GENESIS_HEIGHT)
-				.updatedAtTimestamp(timestamp)
-				.build();
+				.updatedAtTimestamp(timestamp);
+		if (miningEconomicsAtGenesis) {
+			paramsBuilder
+					.currentUnlimitedValidatorCount(validators.size())
+					.validatorMiningWindowBlocks(settings.genesisNetworkValidatorMiningWindowBlocks());
+		}
+		NetworkParamsStateImpl params = paramsBuilder.build();
 		worldState.setParams(params);
+		if (miningEconomicsAtGenesis) {
+			worldState.setMiningWindow(MiningWindowStateImpl.empty(
+					settings.genesisNetworkValidatorMiningWindowBlocks(), GENESIS_HEIGHT));
+		}
 
 		// 2. Native Token
 		TokenStateImpl token = TokenStateImpl.builder()
@@ -174,12 +189,20 @@ public class GenesisInitializer {
 
 		// 4. Validators
 		for (Address validator : validators) {
-			ValidatorStateImpl validatorState = ValidatorStateImpl.builder()
-					.version(ValidatorStateVersion.V1)
+			var validatorBuilder = ValidatorStateImpl.builder()
+					.version(miningEconomicsAtGenesis ? ValidatorStateVersion.V2 : ValidatorStateVersion.V1)
 					.originTxHash(Hash.ZERO)
 					.createdAtBlockHeight(GENESIS_HEIGHT)
-					.createdAtTimestamp(timestamp)
-					.build();
+					.createdAtTimestamp(timestamp);
+			if (miningEconomicsAtGenesis) {
+				validatorBuilder
+						.miningLimitMode(MiningLimitMode.UNLIMITED)
+						.maxMiningShareBps(0)
+						.policyUpdatedByTxHash(Hash.ZERO)
+						.policyUpdatedAtBlockHeight(GENESIS_HEIGHT)
+						.policyUpdatedAtTimestamp(timestamp);
+			}
+			ValidatorStateImpl validatorState = validatorBuilder.build();
 			worldState.addValidator(validator, validatorState);
 		}
 
@@ -223,12 +246,12 @@ public class GenesisInitializer {
 
 		@Override
 		public Hash getHash() {
-			return global.goldenera.cryptoj.utils.BlockHeaderUtil.hash(this);
+			return BlockHeaderUtil.hash(this);
 		}
 
 		@Override
 		public int getSize() {
-			return global.goldenera.cryptoj.utils.BlockHeaderUtil.size(this);
+			return BlockHeaderUtil.size(this);
 		}
 
 		@Override

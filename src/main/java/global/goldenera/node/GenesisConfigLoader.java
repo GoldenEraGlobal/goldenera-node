@@ -28,12 +28,14 @@ import java.io.InputStream;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import global.goldenera.cryptoj.common.MiningConsensusRules;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
 import lombok.experimental.UtilityClass;
@@ -93,7 +95,7 @@ public class GenesisConfigLoader {
         }
     }
 
-    private static GenesisSettings parseGenesisSettings(JsonNode root) {
+    static GenesisSettings parseGenesisSettings(JsonNode root) {
         // Size limits
         JsonNode limits = requireNode(root, "limits");
         long maxHeaderSizeInBytes = requireLong(limits, "maxHeaderSizeInBytes");
@@ -117,6 +119,13 @@ public class GenesisConfigLoader {
         BigInteger minDifficulty = new BigInteger(requireString(networkParams, "minDifficulty"));
         Wei minTxBaseFee = Wei.valueOf(new BigInteger(requireString(networkParams, "minTxBaseFee")));
         Wei minTxByteFee = Wei.valueOf(new BigInteger(requireString(networkParams, "minTxByteFee")));
+        long validatorMiningWindowBlocks = requireConsensusLong(networkParams, "validatorMiningWindowBlocks");
+        try {
+            MiningConsensusRules.validateWindowSize(validatorMiningWindowBlocks);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("Invalid networkParams.validatorMiningWindowBlocks: "
+                    + validatorMiningWindowBlocks, e);
+        }
 
         // Authorities
         JsonNode authoritiesNode = requireNode(root, "authorities");
@@ -163,6 +172,7 @@ public class GenesisConfigLoader {
                 minDifficulty,
                 minTxBaseFee,
                 minTxByteFee,
+                validatorMiningWindowBlocks,
                 authorities,
                 initialMintForAuthority,
                 validators,
@@ -207,6 +217,14 @@ public class GenesisConfigLoader {
         return node.asLong();
     }
 
+    private static long requireConsensusLong(JsonNode parent, String fieldName) {
+        JsonNode node = parent.get(fieldName);
+        if (node == null || node.isNull() || !node.isIntegralNumber() || !node.canConvertToLong()) {
+            throw new IllegalStateException("Missing or invalid consensus long field: " + fieldName);
+        }
+        return node.longValue();
+    }
+
     private static int requireInt(JsonNode parent, String fieldName) {
         JsonNode node = parent.get(fieldName);
         if (node == null || node.isNull() || !node.isNumber()) {
@@ -227,7 +245,7 @@ public class GenesisConfigLoader {
         if (!arrayNode.isArray()) {
             throw new IllegalStateException("Expected array for authorities");
         }
-        return java.util.stream.StreamSupport.stream(arrayNode.spliterator(), false)
+        return StreamSupport.stream(arrayNode.spliterator(), false)
                 .map(JsonNode::asText)
                 .map(Address::fromHexString)
                 .collect(Collectors.toList());

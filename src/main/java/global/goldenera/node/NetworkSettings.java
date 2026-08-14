@@ -69,6 +69,7 @@ public record NetworkSettings(
         BigInteger genesisNetworkMinDifficulty,
         Wei genesisNetworkMinTxBaseFee,
         Wei genesisNetworkMinTxByteFee,
+        long genesisNetworkValidatorMiningWindowBlocks,
 
         // Genesis authorities
         List<Address> genesisAuthorityAddresses,
@@ -181,7 +182,11 @@ public record NetworkSettings(
      * @return Complete NetworkSettings
      */
     public static NetworkSettings fromGenesisSettings(GenesisSettings genesis, Network network) {
-        ConsensusSettings consensus = Constants.getConsensusSettings(network);
+        return fromGenesisSettings(genesis, network, Constants.getActiveProfile());
+    }
+
+    public static NetworkSettings fromGenesisSettings(GenesisSettings genesis, Network network, String profile) {
+        ConsensusSettings consensus = Constants.getConsensusSettings(network, profile);
 
         return new NetworkSettings(
                 genesis.maxHeaderSizeInBytes(),
@@ -198,6 +203,7 @@ public record NetworkSettings(
                 genesis.genesisNetworkMinDifficulty(),
                 genesis.genesisNetworkMinTxBaseFee(),
                 genesis.genesisNetworkMinTxByteFee(),
+                genesis.genesisNetworkValidatorMiningWindowBlocks(),
                 genesis.genesisAuthorityAddresses(),
                 genesis.genesisNetworkInitialMintForAuthority(),
                 genesis.genesisValidatorAddresses(),

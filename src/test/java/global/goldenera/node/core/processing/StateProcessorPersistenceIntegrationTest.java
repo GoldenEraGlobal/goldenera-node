@@ -24,6 +24,7 @@
 package global.goldenera.node.core.processing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import java.math.BigInteger;
 import java.nio.file.Path;
@@ -192,7 +193,8 @@ class StateProcessorPersistenceIntegrationTest {
 	}
 
 	private StateProcessor processor(TxHandler handler) {
-		return new StateProcessor(List.of(handler));
+		return new StateProcessor(List.of(handler), mock(MiningEconomicsActivationService.class),
+				mock(ValidatorMiningPolicyService.class));
 	}
 
 	private SimpleBlock block() {

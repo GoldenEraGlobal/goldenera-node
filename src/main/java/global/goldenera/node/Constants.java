@@ -55,7 +55,8 @@ public class Constants {
         // FORK NAMES
         // =============================================
         public enum ForkName {
-                GENESIS;
+                GENESIS,
+                MINING_ECONOMICS;
                 // Add future forks here, e.g.:
                 // UPGRADE_1,
                 // UPGRADE_2;
@@ -116,7 +117,8 @@ public class Constants {
         private static final ConsensusSettings MAINNET_CONSENSUS = new ConsensusSettings(
                         // Fork activation blocks
                         Map.of(
-                                        ForkName.GENESIS, 0L
+                                        ForkName.GENESIS, 0L,
+                                        ForkName.MINING_ECONOMICS, 10L
                         // Add future forks here, e.g.:
                         // ForkName.UPGRADE_1, 100000L
                         ),
@@ -142,7 +144,8 @@ public class Constants {
         private static final ConsensusSettings TESTNET_CONSENSUS = new ConsensusSettings(
                         // Fork activation blocks
                         Map.of(
-                                        ForkName.GENESIS, 0L),
+                                        ForkName.GENESIS, 0L,
+                                        ForkName.MINING_ECONOMICS, 10L),
                         // Block checkpoints
                         Map.of(),
                         // Max block size overrides
@@ -179,8 +182,12 @@ public class Constants {
          * For dev profile, returns settings with all forks activated at block 0.
          */
         public static ConsensusSettings getConsensusSettings(Network network) {
+                return getConsensusSettings(network, getActiveProfile());
+        }
+
+        static ConsensusSettings getConsensusSettings(Network network, String profile) {
                 // For dev profile, activate all forks at block 0
-                if ("dev".equals(getActiveProfile())) {
+                if ("dev".equals(profile)) {
                         return createDevConsensus();
                 }
 
@@ -245,7 +252,13 @@ public class Constants {
         public static ForkName getActiveForkName(Network network, long blockHeight) {
                 return getSettings(network).forkActivationBlocks().entrySet().stream()
                                 .filter(entry -> entry.getValue() <= blockHeight)
-                                .max(Map.Entry.comparingByValue())
+                                .max((left, right) -> {
+                                        int heightComparison = Long.compare(left.getValue(), right.getValue());
+                                        return heightComparison != 0
+                                                        ? heightComparison
+                                                        : Integer.compare(left.getKey().ordinal(),
+                                                                        right.getKey().ordinal());
+                                })
                                 .map(Map.Entry::getKey)
                                 .orElse(ForkName.GENESIS);
         }

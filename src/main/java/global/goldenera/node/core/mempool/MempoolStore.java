@@ -66,6 +66,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -290,6 +291,10 @@ public class MempoolStore {
 	}
 
 	public boolean isValidatorRemovePending(Address address) {
+		return pendingValidatorChanges.containsKey(address);
+	}
+
+	public boolean isValidatorMiningPolicyChangePending(Address address) {
 		return pendingValidatorChanges.containsKey(address);
 	}
 
@@ -960,6 +965,9 @@ public class MempoolStore {
 			}
 			if (payload instanceof TxBipValidatorRemovePayload value) {
 				return mapReservation(pendingValidatorChanges, value.getAddress());
+			}
+			if (payload instanceof TxBipValidatorMiningPolicySetPayload value) {
+				return mapReservation(pendingValidatorChanges, value.getValidatorAddress());
 			}
 			if (payload instanceof TxBipNetworkParamsSetPayload) {
 				return referenceReservation(pendingNetworkParamsChange);

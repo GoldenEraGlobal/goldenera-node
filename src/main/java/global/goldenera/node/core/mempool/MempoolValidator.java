@@ -45,6 +45,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenBurnPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
@@ -60,6 +61,7 @@ import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
+import global.goldenera.node.core.processing.MiningEconomicsPayloadRules;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -144,7 +146,8 @@ public class MempoolValidator {
 			}
 
 			if (tx.getSender() != null) {
-				return validateUserTx(tx, worldstate, mode, earliestBlockTimestamp);
+				return validateUserTx(tx, worldstate, mode, earliestBlockTimestamp,
+						Math.addExact(chainTip.getHeight(), 1));
 			} else {
 				return MempoolValidationResult.stateInvalid("System tx not supported.");
 			}
@@ -162,7 +165,7 @@ public class MempoolValidator {
 	 * (TRANSFER, BIP_CREATE, BIP_VOTE, TOKEN_BURN)
 	 */
 	private MempoolValidationResult validateUserTx(Tx tx, WorldState worldstate, ValidationMode mode,
-			Instant earliestBlockTimestamp) {
+			Instant earliestBlockTimestamp, long candidateBlockHeight) {
 		Address sender = tx.getSender();
 		log.debug("[VALIDATOR-DEBUG] validateUserTx: hash={}, type={}, sender={}, txNonce={}",
 				tx.getHash().toShortLogString(), tx.getType(), sender.toChecksumAddress(), tx.getNonce());
@@ -251,7 +254,7 @@ public class MempoolValidator {
 					return MempoolValidationResult.stateInvalid("Sender is not an authority.");
 				}
 				MempoolValidationResult governanceResult = validateGovernanceTx(tx, worldstate,
-						mode == ValidationMode.ADMISSION, earliestBlockTimestamp);
+						mode == ValidationMode.ADMISSION, earliestBlockTimestamp, candidateBlockHeight);
 				if (!governanceResult.isValid()) {
 					return governanceResult;
 				}
@@ -285,9 +288,14 @@ public class MempoolValidator {
 	 *            Should be FALSE during re-validation to avoid self-collision.
 	 */
 	private MempoolValidationResult validateGovernanceTx(Tx tx, WorldState worldstate, boolean checkMempoolDuplicates,
-			Instant earliestBlockTimestamp) {
+			Instant earliestBlockTimestamp, long candidateBlockHeight) {
 		if (tx.getType() == TxType.BIP_CREATE) {
 			TxPayload payload = tx.getPayload();
+			try {
+				MiningEconomicsPayloadRules.validateAtHeight(payload, candidateBlockHeight);
+			} catch (RuntimeException exception) {
+				return MempoolValidationResult.stateInvalid(exception.getMessage());
+			}
 
 			if (payload instanceof TxBipAuthorityAddPayload) {
 				Address addr = ((TxBipAuthorityAddPayload) payload).getAddress();
@@ -328,6 +336,16 @@ public class MempoolValidator {
 				// Check mempool
 				if (isConflictingAdmission(tx, checkMempoolDuplicates, mempoolStorage.isValidatorRemovePending(addr))) {
 					return MempoolValidationResult.governanceDuplicate("ValidatorRemove is already pending in mempool.");
+				}
+			} else if (payload instanceof TxBipValidatorMiningPolicySetPayload policyPayload) {
+				Address addr = policyPayload.getValidatorAddress();
+				if (!worldstate.getValidator(addr).exists()) {
+					return MempoolValidationResult.invalid("Validator does not exist on-chain.");
+				}
+				if (isConflictingAdmission(tx, checkMempoolDuplicates,
+						mempoolStorage.isValidatorMiningPolicyChangePending(addr))) {
+					return MempoolValidationResult.governanceDuplicate(
+							"Validator mining policy change is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipAddressAliasAddPayload) {
 				String alias = ((TxBipAddressAliasAddPayload) payload).getAlias();

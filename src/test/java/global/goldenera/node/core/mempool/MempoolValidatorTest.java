@@ -25,6 +25,7 @@ package global.goldenera.node.core.mempool;
 
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.ALICE;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.BOB;
+import static global.goldenera.node.core.mempool.MempoolTestFixtures.governance;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.hash;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.transfer;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.vote;
@@ -45,12 +46,15 @@ import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayloadImpl;
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
@@ -200,6 +204,27 @@ class MempoolValidatorTest {
 		when(worldState.getNonce(ALICE)).thenThrow(new IllegalStateException("rocks unavailable"));
 
 		assertThat(admit(entry).getStatus()).isEqualTo(ValidationStatus.TRANSIENT_ERROR);
+	}
+
+	@Test
+	void postForkAdmissionRejectsLegacyValidatorAddAndAcceptsCanonicalV2() {
+		balance(Address.NATIVE_TOKEN, 100);
+		Address validatorAddress = MempoolTestFixtures.address(91);
+		TxBipValidatorAddPayloadImpl legacy = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.address(validatorAddress)
+				.build();
+		TxBipValidatorAddPayloadImpl versionTwo = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(4000L)
+				.build();
+
+		assertThat(admit(governance(90, ALICE, 1, 10, legacy)).getStatus())
+				.isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(admit(governance(91, ALICE, 1, 10, versionTwo)).getStatus())
+				.isEqualTo(ValidationStatus.VALID);
 	}
 
 	private MempoolValidationResult admit(MempoolEntry entry) {

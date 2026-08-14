@@ -43,6 +43,7 @@ import global.goldenera.cryptoj.enums.state.BipStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.cryptoj.enums.state.BipType;
 import global.goldenera.node.Constants;
+import global.goldenera.node.core.processing.MiningEconomicsPayloadRules;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.processing.TxExecutionContext;
 import global.goldenera.node.core.state.WorldState;
@@ -76,6 +77,7 @@ public class BipCreateHandler implements TxHandler {
 		long requiredVotes = (currentAuthorityCount * approvalThresholdBps + 9999L) / 10000L;
 
 		TxPayload payload = (TxPayload) tx.getPayload();
+		MiningEconomicsPayloadRules.validateAtHeight(payload, block.getHeight());
 
 		Address derivedTokenAddr = payload.getPayloadType() == TxPayloadType.BIP_TOKEN_CREATE
 				? Address.generateTokenAddress(tx.getSender(), tx.getNonce())

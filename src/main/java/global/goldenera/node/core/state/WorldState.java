@@ -41,6 +41,7 @@ import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.AddressAliasState;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.MiningWindowState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
@@ -50,6 +51,7 @@ import global.goldenera.cryptoj.common.state.impl.AccountNonceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AddressAliasStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningWindowStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
@@ -97,6 +99,8 @@ public class WorldState {
 	MerkleTrie<Bytes, AddressAliasState> addressAliasTrie;
 	MerkleTrie<Bytes, BipState> bipStateTrie;
 	MerkleTrie<Bytes, NetworkParamsState> networkParamsTrie;
+	MerkleTrie<Bytes, MiningWindowState> miningWindowTrie;
+	boolean miningWindowTriePresent;
 	MerkleTrie<Bytes, TokenState> tokenTrie;
 
 	// Dirty Caches (Mutable state overlay)
@@ -117,6 +121,7 @@ public class WorldState {
 	Map<Hash, BipState> initialBipStates = new LinkedHashMap<>();
 	Map<Address, TokenState> initialTokens = new LinkedHashMap<>();
 	NetworkParamsState[] initialNetworkParams = new NetworkParamsState[1];
+	MiningWindowState[] initialMiningWindow = new MiningWindowState[1];
 
 	// Set of changes for validation logic & deletions
 	Set<Address> tokensCreatedThisBlock = new LinkedHashSet<>();
@@ -127,6 +132,7 @@ public class WorldState {
 	// Dirty Cache for Singleton (Params)
 	final NetworkParamsState[] dirtyParams = new NetworkParamsState[1];
 	final boolean[] paramsChanged = { false };
+	final MiningWindowState[] dirtyMiningWindow = new MiningWindowState[1];
 
 	// =================================================================================
 	// === JOURNAL-BASED ROLLBACK (OPTIMIZED) ===
@@ -439,6 +445,26 @@ public class WorldState {
 		return this.paramsChanged[0];
 	}
 
+	public MiningWindowState getMiningWindow() {
+		if (dirtyMiningWindow[0] != null)
+			return dirtyMiningWindow[0];
+		return miningWindowTrie.get(MiningWindowState.KEY).orElse(MiningWindowStateImpl.ZERO);
+	}
+
+	public void setMiningWindow(MiningWindowState state) {
+		if (!isMining && initialMiningWindow[0] == null && dirtyMiningWindow[0] == null) {
+			initialMiningWindow[0] = getMiningWindow();
+		}
+		if (isMining) {
+			UndoRecord rec = new UndoRecord();
+			rec.type = UNDO_ARRAY_SLOT;
+			rec.target = dirtyMiningWindow;
+			rec.value = dirtyMiningWindow[0];
+			journal.add(rec);
+		}
+		dirtyMiningWindow[0] = state;
+	}
+
 	public boolean checkAndMarkTokenAsUpdated(Address tokenAddress) {
 		recordSetChange(tokensCreatedThisBlock, tokenAddress);
 		return tokensCreatedThisBlock.add(tokenAddress);
@@ -466,6 +492,9 @@ public class WorldState {
 		if (dirtyParams[0] != null) {
 			networkParamsTrie.put(WorldStateFactory.KEY_NETWORK_PARAMS, dirtyParams[0]);
 		}
+		if (dirtyMiningWindow[0] != null) {
+			miningWindowTrie.put(MiningWindowState.KEY, dirtyMiningWindow[0]);
+		}
 	}
 
 	public Hash getFinalStateRoot() {
@@ -482,6 +511,9 @@ public class WorldState {
 		addressAliasTrie.commit(nodeUpdater);
 		bipStateTrie.commit(nodeUpdater);
 		networkParamsTrie.commit(nodeUpdater);
+		if (miningWindowTriePresent || dirtyMiningWindow[0] != null) {
+			miningWindowTrie.commit(nodeUpdater);
+		}
 		tokenTrie.commit(nodeUpdater);
 
 		mainTrie.put(WorldStateFactory.KEY_BALANCE, balanceTrie.getRootHash());
@@ -491,6 +523,9 @@ public class WorldState {
 		mainTrie.put(WorldStateFactory.KEY_ADDRESS_ALIAS, addressAliasTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_BIP_STATE, bipStateTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_NETWORK_PARAMS, networkParamsTrie.getRootHash());
+		if (miningWindowTriePresent || dirtyMiningWindow[0] != null) {
+			mainTrie.put(WorldStateFactory.KEY_MINING_WINDOW, miningWindowTrie.getRootHash());
+		}
 		mainTrie.put(WorldStateFactory.KEY_TOKEN, tokenTrie.getRootHash());
 
 		mainTrie.commit(nodeUpdater);
@@ -519,8 +554,10 @@ public class WorldState {
 		initialBipStates.clear();
 		initialTokens.clear();
 		initialNetworkParams[0] = null;
+		initialMiningWindow[0] = null;
 
 		dirtyParams[0] = null;
+		dirtyMiningWindow[0] = null;
 		paramsChanged[0] = false;
 
 		tokensCreatedThisBlock.clear();
@@ -554,8 +591,10 @@ public class WorldState {
 		initialBipStates.clear();
 		initialTokens.clear();
 		initialNetworkParams[0] = null;
+		initialMiningWindow[0] = null;
 
 		dirtyParams[0] = null;
+		dirtyMiningWindow[0] = null;
 		paramsChanged[0] = false;
 
 		tokensCreatedThisBlock.clear();
@@ -607,6 +646,19 @@ public class WorldState {
 		}
 
 		return new WorldStateDiff<>(oldVal, newVal);
+	}
+
+	public StateDiff<MiningWindowState> getMiningWindowDiff() {
+		if (isMining || dirtyMiningWindow[0] == null) {
+			return null;
+		}
+		MiningWindowState oldValue = initialMiningWindow[0] != null
+				? initialMiningWindow[0]
+				: MiningWindowStateImpl.ZERO;
+		if (oldValue.equals(dirtyMiningWindow[0])) {
+			return null;
+		}
+		return new WorldStateDiff<>(oldValue, dirtyMiningWindow[0]);
 	}
 
 	public Map<String, AddressAliasState> getAliasesRemovedWithState() {

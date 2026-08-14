@@ -112,7 +112,7 @@ public class NetworkSettingsProvider {
         String cacheKey = network.name() + "-" + profile;
         return settingsCache.computeIfAbsent(cacheKey, key -> {
             GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
-            return NetworkSettings.fromGenesisSettings(genesis, network);
+            return NetworkSettings.fromGenesisSettings(genesis, network, profile);
         });
     }
 
@@ -156,7 +156,7 @@ public class NetworkSettingsProvider {
             log.warn("NetworkSettingsProvider not yet initialized, loading settings directly for {}-{}",
                     network, profile);
             GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
-            return NetworkSettings.fromGenesisSettings(genesis, network);
+            return NetworkSettings.fromGenesisSettings(genesis, network, profile);
         }
         return activeSettings;
     }
@@ -176,7 +176,7 @@ public class NetworkSettingsProvider {
 
         // Load if not cached (shouldn't happen often after init)
         GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
-        NetworkSettings settings = NetworkSettings.fromGenesisSettings(genesis, network);
+        NetworkSettings settings = NetworkSettings.fromGenesisSettings(genesis, network, profile);
         settingsCache.put(cacheKey, settings);
         return settings;
     }
