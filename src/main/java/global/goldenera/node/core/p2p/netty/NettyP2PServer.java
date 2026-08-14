@@ -26,6 +26,7 @@ package global.goldenera.node.core.p2p.netty;
 import java.net.InetSocketAddress;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.node.core.properties.P2PProperties;
@@ -49,6 +50,7 @@ public class NettyP2PServer {
 	private final P2PProperties p2pProperties;
 	private volatile Channel serverChannel;
 
+	@Autowired
 	public NettyP2PServer(P2PChannelInitializer channelInitializer, P2PProperties p2pProperties) {
 		this(channelInitializer, p2pProperties, new NioEventLoopGroup(1), new NioEventLoopGroup());
 	}

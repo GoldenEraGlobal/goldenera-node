@@ -31,10 +31,25 @@ import java.io.IOException;
 import java.net.ServerSocket;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 import global.goldenera.node.core.properties.P2PProperties;
 
 class NettyP2PServerTest {
+
+	@Test
+	void springSelectsTheProductionConstructor() {
+		P2PProperties properties = properties(0);
+		P2PChannelInitializer initializer = mock(P2PChannelInitializer.class);
+		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+			context.getBeanFactory().registerSingleton("p2pProperties", properties);
+			context.getBeanFactory().registerSingleton("p2pChannelInitializer", initializer);
+			context.register(NettyP2PServer.class);
+			context.refresh();
+
+			assertThat(context.getBean(NettyP2PServer.class)).isNotNull();
+		}
+	}
 
 	@Test
 	void bindsPortZeroObservablyAndHoldsTheChannel() {
@@ -68,9 +83,13 @@ class NettyP2PServerTest {
 	}
 
 	private NettyP2PServer server(int port) {
+		return new NettyP2PServer(mock(P2PChannelInitializer.class), properties(port));
+	}
+
+	private P2PProperties properties(int port) {
 		P2PProperties properties = new P2PProperties();
 		properties.setHost("127.0.0.1");
 		properties.setPort(port);
-		return new NettyP2PServer(mock(P2PChannelInitializer.class), properties);
+		return properties;
 	}
 }

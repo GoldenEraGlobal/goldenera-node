@@ -43,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import global.goldenera.cryptoj.common.Block;
@@ -59,6 +60,20 @@ import global.goldenera.node.shared.enums.WebhookType;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class WebhookListenerServiceTest {
+
+	@Test
+	void springSelectsTheObjectFactoryConstructor() {
+		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+			context.getBeanFactory().registerSingleton("webhookDispatchService", mock(WebhookDispatchService.class));
+			context.getBeanFactory().registerSingleton("explorerRuntimeReadiness", readyExplorer());
+			context.getBeanFactory().registerSingleton(CoreAsyncConfig.WEBHOOK_EVENT_EXECUTOR,
+					(Executor) Runnable::run);
+			context.register(WebhookListenerService.class);
+			context.refresh();
+
+			assertThat(context.getBean(WebhookListenerService.class)).isNotNull();
+		}
+	}
 
 	@Test
 	@Timeout(5)

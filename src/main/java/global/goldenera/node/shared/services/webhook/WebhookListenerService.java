@@ -28,6 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.concurrent.Executor;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.context.event.EventListener;
@@ -63,6 +64,7 @@ public class WebhookListenerService {
 	ExplorerRuntimeReadiness explorerReadiness;
 	ObjectFactory<Executor> webhookEventExecutor;
 
+	@Autowired
 	public WebhookListenerService(
 			WebhookDispatchService webhookDispatchService,
 			ExplorerRuntimeReadiness explorerReadiness,
