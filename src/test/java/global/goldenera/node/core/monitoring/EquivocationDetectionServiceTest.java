@@ -24,6 +24,7 @@
 package global.goldenera.node.core.monitoring;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -32,6 +33,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -166,6 +168,62 @@ class EquivocationDetectionServiceTest {
 		}
 	}
 
+	@Test
+	void sixtyFifthHeaderIsBoundedByDeterministicHashOrderAcrossArrivalOrders() throws Exception {
+		List<BlockHeader> headers = new ArrayList<>();
+		for (int index = 0; index < 65; index++) {
+			headers.add(signedHeader(50, 1_000L + index, KEY_A));
+		}
+		List<Hash> expected = headers.stream().map(BlockHeader::getHash).sorted().limit(64).toList();
+
+		List<Hash> forward;
+		try (EvidenceStore store = EvidenceStore.open(tempDir.resolve("cap-forward"))) {
+			for (int index = 0; index < headers.size(); index++) {
+				store.service().observeValidatedHeader(headers.get(index), SEEN.plusSeconds(index));
+			}
+			forward = store.repository.find(50, KEY_A.getAddress()).orElseThrow().signedHeaders().stream()
+					.map(EquivocationEvidence.SignedHeader::blockHash).toList();
+			assertThat(store.registry.counter("blockchain.equivocation.detections").count()).isEqualTo(1);
+			assertThat(store.registry.get("blockchain.equivocation.evidence").gauge().value()).isEqualTo(1);
+		}
+
+		List<Hash> reverse;
+		try (EvidenceStore store = EvidenceStore.open(tempDir.resolve("cap-reverse"))) {
+			for (int index = headers.size() - 1; index >= 0; index--) {
+				store.service().observeValidatedHeader(headers.get(index), SEEN.plusSeconds(index));
+			}
+			reverse = store.repository.find(50, KEY_A.getAddress()).orElseThrow().signedHeaders().stream()
+					.map(EquivocationEvidence.SignedHeader::blockHash).toList();
+			assertThat(store.registry.counter("blockchain.equivocation.detections").count()).isEqualTo(1);
+		}
+
+		assertThat(forward).hasSize(64).containsExactlyElementsOf(expected);
+		assertThat(reverse).containsExactlyElementsOf(expected);
+	}
+
+	@Test
+	void evidenceCodecRejectsUnknownVersionTruncationAndTrailingBytes() {
+		EquivocationEvidenceCodec codec = new EquivocationEvidenceCodec();
+		BlockHeader header = signedHeader(60, 1, KEY_A);
+		EquivocationEvidence evidence = new EquivocationEvidence(60, KEY_A.getAddress(),
+				List.of(new EquivocationEvidence.SignedHeader(header.getHash(), header.getSignature())), SEEN, SEEN);
+		byte[] encoded = codec.encode(evidence);
+
+		byte[] unknownVersion = encoded.clone();
+		unknownVersion[Integer.BYTES - 1] = 2;
+		assertThat(catchThrowable(() -> codec.decode(unknownVersion)))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("Unsupported equivocation evidence version");
+		assertThat(catchThrowable(
+				() -> codec.decode(Arrays.copyOf(encoded, encoded.length - 1))))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("evidence length");
+		assertThat(catchThrowable(
+				() -> codec.decode(Arrays.copyOf(encoded, encoded.length + 1))))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("payload length");
+	}
+
 	private static BlockHeader signedHeader(long height, long nonce, PrivateKey key) {
 		BlockHeaderImpl unsigned = unsignedHeader(height, nonce);
 		return unsigned.toBuilder().signature(key.sign(BlockHeaderUtil.hashForSigning(unsigned))).build();
@@ -196,16 +254,19 @@ class EquivocationDetectionServiceTest {
 		private final DBOptions dbOptions;
 		private final EquivocationEvidenceRepository repository;
 		private final EquivocationDetectionService service;
+		private final SimpleMeterRegistry registry;
 
 		private EvidenceStore(RocksDB database, List<ColumnFamilyHandle> handles,
 				List<ColumnFamilyOptions> options, DBOptions dbOptions,
-				EquivocationEvidenceRepository repository, EquivocationDetectionService service) {
+				EquivocationEvidenceRepository repository, EquivocationDetectionService service,
+				SimpleMeterRegistry registry) {
 			this.database = database;
 			this.handles = handles;
 			this.options = options;
 			this.dbOptions = dbOptions;
 			this.repository = repository;
 			this.service = service;
+			this.registry = registry;
 		}
 
 		static EvidenceStore open(Path path) throws Exception {
@@ -224,9 +285,9 @@ class EquivocationDetectionServiceTest {
 			RocksDBRepository rocksRepository = new RocksDBRepository(database, families);
 			EquivocationEvidenceRepository repository = new EquivocationEvidenceRepository(
 					rocksRepository, families, new EquivocationEvidenceCodec());
-			EquivocationDetectionService service = new EquivocationDetectionService(
-					repository, new SimpleMeterRegistry());
-			return new EvidenceStore(database, handles, options, dbOptions, repository, service);
+			SimpleMeterRegistry registry = new SimpleMeterRegistry();
+			EquivocationDetectionService service = new EquivocationDetectionService(repository, registry);
+			return new EvidenceStore(database, handles, options, dbOptions, repository, service, registry);
 		}
 
 		EquivocationDetectionService service() {
@@ -235,6 +296,7 @@ class EquivocationDetectionServiceTest {
 
 		@Override
 		public void close() {
+			registry.close();
 			handles.forEach(ColumnFamilyHandle::close);
 			database.close();
 			options.forEach(ColumnFamilyOptions::close);

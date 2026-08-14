@@ -31,6 +31,7 @@ import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -51,10 +52,13 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import global.goldenera.cryptoj.builder.TxBuilder;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.BlockHeaderImpl;
 import global.goldenera.cryptoj.common.BlockImpl;
+import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.MiningWindowStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
@@ -63,6 +67,9 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.PrivateKey;
 import global.goldenera.cryptoj.enums.BlockVersion;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
+import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
@@ -82,7 +89,10 @@ import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.processing.MiningEconomicsActivationService;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
+import global.goldenera.node.core.processing.ValidatorMiningGovernanceService;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
+import global.goldenera.node.core.processing.handlers.BipCreateHandler;
+import global.goldenera.node.core.processing.handlers.BipVoteHandler;
 import global.goldenera.node.core.state.PersistentWorldStateTestSupport;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
@@ -241,6 +251,202 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		}
 	}
 
+	@Test
+	void signedPolicyVoteAppliesAtHPlusOneAndHigherWorkReorgRestoresPolicyCountersWindowAndBip() throws Exception {
+		try (Fixture fixture = new Fixture(databaseDirectory)) {
+			StoredBlock base = fixture.seedActiveCanonicalBlock();
+			Tx proposal = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
+			Block create = fixture.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(proposal));
+			assertThat(fixture.ingest(create)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+
+			Tx approval = approve(proposal.getHash(), 1);
+			Block execution = fixture.buildValidChild(create, MINER_B_KEY, List.of(approval));
+			assertThat(fixture.ingest(execution)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+
+			WorldState executed = fixture.stateAt(execution);
+			assertThat(executed.getBip(proposal.getHash()).getStatus()).isEqualTo(BipStatus.APPROVED);
+			assertThat(executed.getBip(proposal.getHash()).isActionExecuted()).isTrue();
+			assertThat(executed.getValidator(MINER_A).getMiningLimitMode()).isEqualTo(MiningLimitMode.UNLIMITED);
+			assertThat(executed.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(2);
+
+			Block hPlusOne = fixture.buildValidChild(execution, MINER_A_KEY);
+			assertThat(fixture.ingest(hPlusOne)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.stateAt(hPlusOne).getMiningWindow().getOrderedValidatorIdentities())
+					.containsExactly(MINER_B, MINER_B, MINER_A);
+
+			Block forkEleven = fixture.buildValidChild(base.getBlock(), MINER_B_KEY);
+			Block forkTwelve = fixture.buildValidChild(forkEleven, MINER_B_KEY);
+			Block forkThirteen = fixture.buildValidChild(forkTwelve, MINER_B_KEY);
+			Block forkFourteen = fixture.buildValidChild(forkThirteen, MINER_B_KEY);
+			fixture.ingest(forkEleven);
+			fixture.ingest(forkTwelve);
+			fixture.ingest(forkThirteen);
+			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(hPlusOne.getHash());
+
+			assertThat(fixture.ingest(forkFourteen)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			WorldState reorged = fixture.stateAt(forkFourteen);
+			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(forkFourteen.getHash());
+			assertThat(reorged.getValidator(MINER_A).getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
+			assertThat(reorged.getParams().getCurrentValidatorCount()).isEqualTo(2);
+			assertThat(reorged.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(1);
+			assertThat(reorged.getBip(proposal.getHash()).exists()).isFalse();
+			assertThat(reorged.getMiningWindow().getOrderedValidatorIdentities())
+					.containsExactly(MINER_B, MINER_B, MINER_B, MINER_B)
+					.doesNotContain(MINER_A);
+		}
+	}
+
+	@Test
+	void signedResizeApprovalLeavesExecutionBlockEmptyAndFirstIdentityStartsAtHPlusOne() throws Exception {
+		try (Fixture fixture = new Fixture(databaseDirectory)) {
+			StoredBlock base = fixture.seedActiveCanonicalBlock();
+			Tx proposal = resize(250, 0);
+			Block create = fixture.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(proposal));
+			assertThat(fixture.ingest(create)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.stateAt(create).getMiningWindow().getOrderedValidatorIdentities())
+					.containsExactly(MINER_B);
+
+			Block execution = fixture.buildValidChild(
+					create, MINER_B_KEY, List.of(approve(proposal.getHash(), 1)));
+			assertThat(fixture.ingest(execution)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			WorldState resized = fixture.stateAt(execution);
+			assertThat(resized.getParams().getValidatorMiningWindowBlocks()).isEqualTo(250);
+			assertThat(resized.getMiningWindow().getWindowSize()).isEqualTo(250);
+			assertThat(resized.getMiningWindow().getOrderedValidatorIdentities()).isEmpty();
+			assertThat(resized.getMiningWindow().getLastUpdatedBlockHeight()).isEqualTo(execution.getHeight());
+
+			Block firstAfterResize = fixture.buildValidChild(execution, MINER_A_KEY);
+			assertThat(fixture.ingest(firstAfterResize)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.stateAt(firstAfterResize).getMiningWindow().getOrderedValidatorIdentities())
+					.containsExactly(MINER_A);
+		}
+	}
+
+	@Test
+	void governanceActionsInOneBlockRequirePromoteBeforeDemotingLastUnlimited() throws Exception {
+		try (Fixture valid = new Fixture(databaseDirectory.resolve("valid-order"))) {
+			StoredBlock base = valid.seedActiveCanonicalBlock();
+			Tx promote = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
+			Tx demote = policy(MINER_B, MiningLimitMode.LIMITED, 4_000, 1);
+			Block creates = valid.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(promote, demote));
+			assertThat(valid.ingest(creates)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+
+			Block ordered = valid.buildValidChild(creates, MINER_B_KEY,
+					List.of(approve(promote.getHash(), 2), approve(demote.getHash(), 3)));
+			assertThat(valid.ingest(ordered)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			WorldState state = valid.stateAt(ordered);
+			assertThat(state.getValidator(MINER_A).getMiningLimitMode()).isEqualTo(MiningLimitMode.UNLIMITED);
+			assertThat(state.getValidator(MINER_B).getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
+			assertThat(state.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(1);
+		}
+
+		try (Fixture invalid = new Fixture(databaseDirectory.resolve("invalid-order"))) {
+			StoredBlock base = invalid.seedActiveCanonicalBlock();
+			Tx promote = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
+			Tx demote = policy(MINER_B, MiningLimitMode.LIMITED, 4_000, 1);
+			Block creates = invalid.buildValidChild(base.getBlock(), MINER_B_KEY, List.of(promote, demote));
+			assertThat(invalid.ingest(creates)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+
+			List<Tx> wrongOrder = List.of(approve(demote.getHash(), 2), approve(promote.getHash(), 3));
+			Block rejected = invalid.buildUncheckedChild(creates, MINER_B_KEY, wrongOrder);
+			assertThat(invalid.ingest(rejected)).isEqualTo(BlockIngestionService.IngestionResult.FAILED);
+			assertThat(invalid.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(creates.getHash());
+			assertThat(invalid.chainQuery.getStoredBlockByHeight(rejected.getHeight())).isEmpty();
+			WorldState state = invalid.stateAt(creates);
+			assertThat(state.getValidator(MINER_A).getMiningLimitMode()).isEqualTo(MiningLimitMode.LIMITED);
+			assertThat(state.getValidator(MINER_B).getMiningLimitMode()).isEqualTo(MiningLimitMode.UNLIMITED);
+			assertThat(state.getBip(demote.getHash()).getStatus()).isEqualTo(BipStatus.PENDING);
+			assertThat(state.getBip(demote.getHash()).getAllVoters()).isEmpty();
+		}
+	}
+
+	@Test
+	void approvalTimeFailureAfterEarlierValidVoteRollsBackWholeIngestionAndRepositoryCaches() throws Exception {
+		try (Fixture fixture = new Fixture(databaseDirectory)) {
+			StoredBlock base = fixture.seedActiveCanonicalBlock();
+			Tx staleProposal = policy(MINER_A, MiningLimitMode.UNLIMITED, 0, 0);
+			Tx removeProposal = removeValidator(MINER_A, 1);
+			Tx validProposal = resize(250, 2);
+			Block creates = fixture.buildValidChild(
+					base.getBlock(), MINER_B_KEY, List.of(staleProposal, removeProposal, validProposal));
+			assertThat(fixture.ingest(creates)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+
+			Block removal = fixture.buildValidChild(
+					creates, MINER_B_KEY, List.of(approve(removeProposal.getHash(), 3)));
+			assertThat(fixture.ingest(removal)).isEqualTo(BlockIngestionService.IngestionResult.SUCCESS);
+			assertThat(fixture.stateAt(removal).getValidator(MINER_A).exists()).isFalse();
+
+			List<Tx> votes = List.of(
+					approve(validProposal.getHash(), 4),
+					approve(staleProposal.getHash(), 5));
+			Block rejected = fixture.buildUncheckedChild(removal, MINER_B_KEY, votes);
+			assertThat(fixture.ingest(rejected)).isEqualTo(BlockIngestionService.IngestionResult.FAILED);
+
+			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(removal.getHash());
+			assertThat(fixture.chainQuery.getStoredBlockByHash(rejected.getHash())).isEmpty();
+			assertThat(fixture.chainQuery.getStoredBlockByHeight(rejected.getHeight())).isEmpty();
+			WorldState persisted = fixture.stateAt(removal);
+			assertThat(persisted.getValidator(MINER_A).exists()).isFalse();
+			assertThat(persisted.getParams().getCurrentValidatorCount()).isEqualTo(1);
+			assertThat(persisted.getParams().getCurrentUnlimitedValidatorCount()).isEqualTo(1);
+			assertThat(persisted.getParams().getValidatorMiningWindowBlocks()).isEqualTo(100);
+			assertThat(persisted.getMiningWindow().getWindowSize()).isEqualTo(100);
+			assertThat(persisted.getMiningWindow().getOrderedValidatorIdentities())
+					.containsExactly(MINER_B, MINER_B);
+			assertThat(persisted.getBip(validProposal.getHash()).getStatus()).isEqualTo(BipStatus.PENDING);
+			assertThat(persisted.getBip(validProposal.getHash()).getAllVoters()).isEmpty();
+			assertThat(persisted.getBip(staleProposal.getHash()).getStatus()).isEqualTo(BipStatus.PENDING);
+			assertThat(persisted.getBip(staleProposal.getHash()).getAllVoters()).isEmpty();
+			assertThat(persisted.getBip(removeProposal.getHash()).getStatus()).isEqualTo(BipStatus.APPROVED);
+			assertThat(persisted.getBip(removeProposal.getHash()).isActionExecuted()).isTrue();
+		}
+	}
+
+	private static Tx policy(Address validator, MiningLimitMode mode, long shareBps, long nonce) throws Exception {
+		return TxBuilder.create()
+				.setValidatorMiningPolicy()
+				.validator(validator)
+				.miningPolicy(mode, shareBps)
+				.done()
+				.network(Network.TESTNET)
+				.nonce(nonce)
+				.fee(Wei.ZERO)
+				.sign(MINER_A_KEY);
+	}
+
+	private static Tx resize(long window, long nonce) throws Exception {
+		return TxBuilder.create()
+				.setNetworkParams()
+				.validatorMiningWindowBlocks(window)
+				.done()
+				.network(Network.TESTNET)
+				.nonce(nonce)
+				.fee(Wei.ZERO)
+				.sign(MINER_A_KEY);
+	}
+
+	private static Tx removeValidator(Address validator, long nonce) throws Exception {
+		return TxBuilder.create()
+				.removeValidator()
+				.validator(validator)
+				.done()
+				.network(Network.TESTNET)
+				.nonce(nonce)
+				.fee(Wei.ZERO)
+				.sign(MINER_A_KEY);
+	}
+
+	private static Tx approve(Hash bipHash, long nonce) throws Exception {
+		return TxBuilder.create()
+				.vote()
+				.approve(bipHash)
+				.done()
+				.network(Network.TESTNET)
+				.nonce(nonce)
+				.fee(Wei.ZERO)
+				.sign(MINER_A_KEY);
+	}
+
 	private static PrivateKey key(int value) {
 		return PrivateKey.wrap(Bytes32.fromHexString(String.format("0x%064x", value)));
 	}
@@ -275,6 +481,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		private final BlockReorgs blockReorgs;
 
 		private Fixture(Path directory) throws Exception {
+			Files.createDirectories(directory);
 			RocksDB.loadLibrary();
 			List<ColumnFamilyDescriptor> descriptors = new ArrayList<>();
 			columnOptions.add(new ColumnFamilyOptions());
@@ -329,8 +536,10 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					serialization.tokenDeserializer());
 
 			ValidatorMiningPolicyService policyService = new ValidatorMiningPolicyService();
+			ValidatorMiningGovernanceService governanceService = new ValidatorMiningGovernanceService();
 			stateProcessor = new StateProcessor(
-					List.of(), new MiningEconomicsActivationService(), policyService);
+					List.of(new BipCreateHandler(), new BipVoteHandler(governanceService)),
+					new MiningEconomicsActivationService(), policyService);
 			TxValidator txValidator = mock(TxValidator.class);
 			DifficultyCalculator difficulty = mock(DifficultyCalculator.class);
 			when(difficulty.calculateNextDifficulty(any(), any())).thenReturn(BigInteger.ONE);
@@ -419,22 +628,36 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		}
 
 		private Block buildValidChild(Block parent, PrivateKey minerKey) {
+			return buildValidChild(parent, minerKey, List.of());
+		}
+
+		private Block buildValidChild(Block parent, PrivateKey minerKey, List<Tx> txs) {
 			long height = parent.getHeight() + 1;
 			WorldState state = expectedStates.factory().createForValidation(parent.getHeader().getStateRootHash());
-			Block provisional = signedBlock(height, parent.getHash(), Hash.ZERO, minerKey);
+			Block provisional = signedBlock(height, parent.getHash(), Hash.ZERO, minerKey, txs);
 			stateProcessor.executeTransactions(
-					state, new SimpleBlock(provisional), List.of(), state.getParams());
+					state, new SimpleBlock(provisional), txs, state.getParams());
 			Hash root = state.calculateRootHash();
 			try {
 				expectedStates.persist(state);
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to persist expected child state", exception);
 			}
-			return signedBlock(height, parent.getHash(), root, minerKey);
+			return signedBlock(height, parent.getHash(), root, minerKey, txs);
+		}
+
+		private Block buildUncheckedChild(Block parent, PrivateKey minerKey, List<Tx> txs) {
+			return signedBlock(parent.getHeight() + 1, parent.getHash(), parent.getHeader().getStateRootHash(),
+					minerKey, txs);
+		}
+
+		private WorldState stateAt(Block block) {
+			return worldStateFactory.createForValidation(block.getHeader().getStateRootHash());
 		}
 
 		private void initializeLegacyState(WorldState state) {
 			state.setParams(legacyParams());
+			state.addAuthority(MINER_A, authority());
 			state.addValidator(MINER_A, legacyValidator());
 			state.addValidator(MINER_B, legacyValidator());
 		}
@@ -442,6 +665,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		private void initializeActiveState(WorldState state) {
 			state.setParams(activeParams());
 			state.setMiningWindow(MiningWindowStateImpl.empty(100, 10));
+			state.addAuthority(MINER_A, authority());
 			state.addValidator(MINER_A, explicitValidator(MiningLimitMode.LIMITED, 4_000));
 			state.addValidator(MINER_B, explicitValidator(MiningLimitMode.UNLIMITED, 0));
 		}
@@ -474,12 +698,16 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		}
 
 		private Block signedBlock(long height, Hash previousHash, Hash stateRoot, PrivateKey minerKey) {
+			return signedBlock(height, previousHash, stateRoot, minerKey, List.of());
+		}
+
+		private Block signedBlock(long height, Hash previousHash, Hash stateRoot, PrivateKey minerKey, List<Tx> txs) {
 			BlockHeaderImpl unsigned = BlockHeaderImpl.builder()
 					.version(BlockVersion.V1)
 					.height(height)
 					.timestamp(BASE_TIME.plusSeconds(height))
 					.previousHash(previousHash)
-					.txRootHash(TxRootUtil.txRootHash(List.of()))
+					.txRootHash(TxRootUtil.txRootHash(txs))
 					.stateRootHash(stateRoot)
 					.difficulty(BigInteger.ONE)
 					.coinbase(BENEFICIARY)
@@ -488,7 +716,16 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			BlockHeader signed = unsigned.toBuilder()
 					.signature(minerKey.sign(BlockHeaderUtil.hashForSigning(unsigned)))
 					.build();
-			return BlockImpl.builder().header(signed).txs(List.of()).build();
+			return BlockImpl.builder().header(signed).txs(txs).build();
+		}
+
+		private AuthorityStateImpl authority() {
+			return AuthorityStateImpl.builder()
+					.version(AuthorityStateVersion.V1)
+					.originTxHash(Hash.ZERO)
+					.createdAtBlockHeight(0)
+					.createdAtTimestamp(BASE_TIME)
+					.build();
 		}
 
 		private NetworkParamsStateImpl legacyParams() {

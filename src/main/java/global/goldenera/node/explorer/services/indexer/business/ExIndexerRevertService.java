@@ -25,6 +25,7 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -192,8 +193,8 @@ public class ExIndexerRevertService {
 				    (alias, address, origin_tx_hash, created_at_block_height, created_at_timestamp, address_alias_version)
 				    SELECT
 				        convert_from(l.ref_key_1, 'UTF8'),
-				        decode(l.old_value->>'addr', 'hex'),
-				        decode(l.old_value->>'tx', 'hex'),
+				        decode(replace(l.old_value->>'addr', '0x', ''), 'hex'),
+				        decode(replace(l.old_value->>'tx', '0x', ''), 'hex'),
 				        (l.old_value->>'ch')::bigint,
 				        (l.old_value->>'ct')::timestamp,
 				        (l.old_value->>'ver')::integer
@@ -223,7 +224,7 @@ public class ExIndexerRevertService {
 				    (address, origin_tx_hash, created_at_block_height, created_at_timestamp, authority_version)
 				    SELECT
 				        l.ref_key_1, -- Address PK
-				        decode(l.old_value->>'tx', 'hex'),
+				        decode(replace(l.old_value->>'tx', '0x', ''), 'hex'),
 				        (l.old_value->>'ch')::bigint,
 				        (l.old_value->>'ct')::timestamp,
 				        (l.old_value->>'ver')::integer
@@ -254,14 +255,14 @@ public class ExIndexerRevertService {
 				     policy_updated_by_tx_hash, policy_updated_at_block_height, policy_updated_at_timestamp)
 				    SELECT
 				        l.ref_key_1, -- Address PK
-				        decode(l.old_value->>'tx', 'hex'),
+				        decode(replace(l.old_value->>'tx', '0x', ''), 'hex'),
 				        (l.old_value->>'ch')::bigint,
 				        (l.old_value->>'ct')::timestamp,
 				        (l.old_value->>'ver')::integer,
 				        l.old_value->>'mode',
 				        l.old_value->>'src',
 				        (l.old_value->>'bps')::bigint,
-				        decode(l.old_value->>'ptx', 'hex'),
+				        decode(replace(l.old_value->>'ptx', '0x', ''), 'hex'),
 				        (l.old_value->>'ph')::bigint,
 				        (l.old_value->>'pt')::timestamp
 				    FROM explorer_revert_log l
@@ -274,14 +275,14 @@ public class ExIndexerRevertService {
 		jdbcTemplate.update("""
 				    UPDATE explorer_validator v
 				    SET
-				        origin_tx_hash = decode(l.old_value->>'tx', 'hex'),
+				        origin_tx_hash = decode(replace(l.old_value->>'tx', '0x', ''), 'hex'),
 				        created_at_block_height = (l.old_value->>'ch')::bigint,
 				        created_at_timestamp = (l.old_value->>'ct')::timestamp,
 				        validator_version = (l.old_value->>'ver')::integer,
 				        mining_limit_mode = l.old_value->>'mode',
 				        mining_policy_source = l.old_value->>'src',
 				        max_mining_share_bps = (l.old_value->>'bps')::bigint,
-				        policy_updated_by_tx_hash = decode(l.old_value->>'ptx', 'hex'),
+				        policy_updated_by_tx_hash = decode(replace(l.old_value->>'ptx', '0x', ''), 'hex'),
 				        policy_updated_at_block_height = (l.old_value->>'ph')::bigint,
 				        policy_updated_at_timestamp = (l.old_value->>'pt')::timestamp
 				    FROM explorer_revert_log l
@@ -308,11 +309,11 @@ public class ExIndexerRevertService {
 				    UPDATE explorer_bip_state b
 				    SET
 				        status = (l.old_value->>'s')::integer,
-				        approvers = decode(l.old_value->>'appr', 'hex'),
-				        disapprovers = decode(l.old_value->>'disappr', 'hex'),
+				        approvers = decode(replace(l.old_value->>'appr', '0x', ''), 'hex'),
+				        disapprovers = decode(replace(l.old_value->>'disappr', '0x', ''), 'hex'),
 				        updated_at_block_height = (l.old_value->>'uh')::bigint,
 				        updated_at_timestamp = (l.old_value->>'ut')::timestamp,
-				        updated_by_tx_hash = decode(l.old_value->>'utx', 'hex'),
+				        updated_by_tx_hash = decode(replace(l.old_value->>'utx', '0x', ''), 'hex'),
 						bip_state_version = (l.old_value->>'ver')::integer
 				    FROM explorer_revert_log l
 				    WHERE l.block_hash = ?
@@ -329,7 +330,7 @@ public class ExIndexerRevertService {
 				        network_params_version = (l.old_value->>'ver')::integer,
 
 				        block_reward = (l.old_value->>'br')::numeric,
-				        block_reward_pool_address = decode(l.old_value->>'pool', 'hex'),
+				        block_reward_pool_address = decode(replace(l.old_value->>'pool', '0x', ''), 'hex'),
 
 				        target_mining_time_ms = (l.old_value->>'tgt')::bigint,
 				        asert_half_life_blocks = (l.old_value->>'half')::bigint,
@@ -343,7 +344,7 @@ public class ExIndexerRevertService {
 				        current_validator_count = (l.old_value->>'val_cnt')::bigint,
 				        validator_mining_window_blocks = (l.old_value->>'window')::bigint,
 				        current_unlimited_validator_count = (l.old_value->>'unlimited_cnt')::bigint,
-				        updated_by_tx_hash = decode(l.old_value->>'utx', 'hex'),
+				        updated_by_tx_hash = decode(replace(l.old_value->>'utx', '0x', ''), 'hex'),
 
 				        updated_at_block_height = (l.old_value->>'uh')::bigint,
 				        updated_at_timestamp = (l.old_value->>'ut')::timestamp
@@ -362,7 +363,7 @@ public class ExIndexerRevertService {
 			byte[] hash = jdbcTemplate.queryForObject(sqlGetHash, byte[].class, newHeight);
 
 			String sqlUpdate = "UPDATE explorer_status SET synced_block_height = ?, synced_block_hash = ?, last_updated_at = ? WHERE id = 1";
-			jdbcTemplate.update(sqlUpdate, newHeight, hash, java.sql.Timestamp.from(Instant.now()));
+			jdbcTemplate.update(sqlUpdate, newHeight, hash, Timestamp.from(Instant.now()));
 		} catch (Exception e) {
 			log.error("Failed to update status after revert. Critical!", e);
 			throw new GEFailedException("Database inconsistency after revert", e);
