@@ -45,7 +45,7 @@
         <goldenera-randomx.version>0.0.1</goldenera-randomx.version>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
         <goldenera-merkletrie.version>0.0.1</goldenera-merkletrie.version>
-        <goldenera-cryptoj.version>0.0.1</goldenera-cryptoj.version>
+        <goldenera-cryptoj.version>0.0.2</goldenera-cryptoj.version>
         <micrometer-extras.version>0.2.2</micrometer-extras.version>
         <license-maven-plugin.version>4.6</license-maven-plugin.version>
         <bucket4j.version>8.15.0</bucket4j.version>
