@@ -14,6 +14,7 @@ APP_JAR="${APP_HOME}/app.jar"
 
 DATA_DIR="${APP_HOME}/node_data"
 LOG_DIR="${APP_HOME}/node_logs"
+NATIVE_TMP_DIR="${APP_HOME}/native-tmp"
 
 JAVA_BIN=$(which java)
 if [ -z "$JAVA_BIN" ]; then
@@ -29,12 +30,13 @@ echo ">>> [INFO] CPU: $ARCH"
 # PERMISSION FIX
 # ==============================================================================
 echo ">>> [INIT] Enforcing permissions for persistence layers..."
-mkdir -p "$DATA_DIR" "$LOG_DIR" "$OVERRIDES_DIR"
+mkdir -p "$DATA_DIR" "$LOG_DIR" "$OVERRIDES_DIR" "$NATIVE_TMP_DIR"
 
 chown -R blockchain:blockchain "$DATA_DIR"
 chown -R blockchain:blockchain "$LOG_DIR"
 chown -R blockchain:blockchain "$OVERRIDES_DIR"
-chmod 700 "$DATA_DIR"
+chown blockchain:blockchain "$NATIVE_TMP_DIR"
+chmod 700 "$DATA_DIR" "$NATIVE_TMP_DIR"
 
 # ==============================================================================
 # MEMORY CONFIGURATION

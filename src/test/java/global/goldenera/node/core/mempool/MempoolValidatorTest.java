@@ -59,6 +59,7 @@ import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.mempool.MempoolValidator.ValidationStatus;
@@ -74,6 +75,7 @@ class MempoolValidatorTest {
 	WorldState worldState;
 	MempoolStore store;
 	MempoolValidator validator;
+	ChainClock chainClock;
 
 	@BeforeEach
 	void setUp() {
@@ -102,8 +104,10 @@ class MempoolValidatorTest {
 				.thenAnswer(invocation -> affordable(invocation.getArgument(2)));
 		when(store.tokenReservation(any(Address.class), any(Address.class), any(Tx.class), any(Wei.class)))
 				.thenAnswer(invocation -> affordable(invocation.getArgument(3)));
+		chainClock = mock(ChainClock.class);
+		when(chainClock.earliestNextBlockTimestamp(any())).thenReturn(Instant.now());
 		validator = new MempoolValidator(new SimpleMeterRegistry(), chainHead, chainQuery, properties, store,
-				mock(TxValidator.class));
+				mock(TxValidator.class), chainClock);
 	}
 
 	@Test
@@ -183,6 +187,24 @@ class MempoolValidatorTest {
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
 		assertThat(result.getErrorMessage()).contains("expired");
+	}
+
+	@Test
+	void deterministicChainTimeDoesNotExpireAValidVoteAgainstTheHostWallClock() {
+		Instant deterministicNextBlock = Instant.parse("2023-11-14T22:13:41Z");
+		when(chainClock.earliestNextBlockTimestamp(any())).thenReturn(deterministicNextBlock);
+		MempoolEntry vote = vote(1, ALICE, 1, 10, hash(50));
+		balance(Address.NATIVE_TOKEN, 100);
+		BipState bip = mock(BipState.class);
+		when(bip.exists()).thenReturn(true);
+		when(bip.getStatus()).thenReturn(BipStatus.PENDING);
+		when(bip.getExpirationTimestamp()).thenReturn(deterministicNextBlock.plusSeconds(60));
+		when(bip.getAllVoters()).thenReturn(new LinkedHashSet<>());
+		when(worldState.getBip(hash(50))).thenReturn(bip);
+
+		MempoolValidationResult result = admit(vote);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.VALID);
 	}
 
 	@Test

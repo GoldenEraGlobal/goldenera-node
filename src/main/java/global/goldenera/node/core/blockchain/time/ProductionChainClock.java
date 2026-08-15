@@ -54,6 +54,14 @@ public final class ProductionChainClock implements ChainClock {
 	}
 
 	@Override
+	public Instant earliestNextBlockTimestamp(BlockHeader parent) {
+		Objects.requireNonNull(parent, "parent");
+		Instant now = Instant.now(wallClock);
+		Instant afterParent = parent.getTimestamp().plusMillis(1);
+		return afterParent.isAfter(now) ? afterParent : now;
+	}
+
+	@Override
 	public void validateBlockTimestamp(BlockHeader child, BlockHeader parent, long productionAllowedFutureDriftMs) {
 		Objects.requireNonNull(child, "child");
 		Objects.requireNonNull(parent, "parent");

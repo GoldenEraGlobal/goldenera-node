@@ -59,6 +59,7 @@ import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.processing.MiningEconomicsPayloadRules;
@@ -88,6 +89,7 @@ public class MempoolValidator {
 	MempoolProperties mempoolProperties;
 	MempoolStore mempoolStorage;
 	TxValidator txValidator;
+	ChainClock chainClock;
 
 	public MempoolValidationResult validateAgainstChainAndMempool(@NonNull MempoolEntry entry,
 			@NonNull MempoolTxAddEvent.AddReason reason, boolean skipValidation) {
@@ -139,11 +141,7 @@ public class MempoolValidator {
 			}
 
 			WorldState worldstate = chainHeadStateService.getHeadState();
-			Instant earliestBlockTimestamp = Instant.now();
-			Instant afterParent = chainTip.getHeader().getTimestamp().plusMillis(1);
-			if (afterParent.isAfter(earliestBlockTimestamp)) {
-				earliestBlockTimestamp = afterParent;
-			}
+			Instant earliestBlockTimestamp = chainClock.earliestNextBlockTimestamp(chainTip.getHeader());
 
 			if (tx.getSender() != null) {
 				return validateUserTx(tx, worldstate, mode, earliestBlockTimestamp,

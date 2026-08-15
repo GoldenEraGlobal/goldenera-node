@@ -53,6 +53,16 @@ class ProductionChainClockTest {
 	}
 
 	@Test
+	void admissionTimestampPreservesExactWallClockAndParentClamp() {
+		ProductionChainClock clock = clock();
+
+		assertThat(clock.earliestNextBlockTimestamp(parent(10, NOW.minusSeconds(10))))
+				.isEqualTo(NOW);
+		assertThat(clock.earliestNextBlockTimestamp(parent(10, NOW.plusMillis(211))))
+				.isEqualTo(NOW.plusMillis(212));
+	}
+
+	@Test
 	void productionValidationPreservesWallClockFutureDriftRule() {
 		ProductionChainClock clock = clock();
 		BlockHeader parent = parent(10, NOW.minusSeconds(1));

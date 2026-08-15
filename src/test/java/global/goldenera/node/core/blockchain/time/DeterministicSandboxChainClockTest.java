@@ -70,6 +70,12 @@ class DeterministicSandboxChainClockTest {
 	}
 
 	@Test
+	void admissionTimestampUsesTheSameDeterministicChainTime() {
+		assertThat(clock.earliestNextBlockTimestamp(parent(4, at(4_000))))
+				.isEqualTo(at(5_000));
+	}
+
+	@Test
 	void concurrentConsumersObserveTheSamePureTimestampWithoutSharedMutation() throws Exception {
 		BlockHeader parent = parent(4, at(4_000));
 		CountDownLatch start = new CountDownLatch(1);

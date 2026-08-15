@@ -35,6 +35,15 @@ public interface ChainClock {
 	Instant nextBlockTimestamp(BlockHeader parent);
 
 	/**
+	 * Earliest timestamp that the next block may use for time-dependent admission
+	 * checks. Deterministic clocks remain on chain time instead of leaking the
+	 * host wall clock into sandbox consensus behavior.
+	 */
+	default Instant earliestNextBlockTimestamp(BlockHeader parent) {
+		return nextBlockTimestamp(parent);
+	}
+
+	/**
 	 * Reserves the timestamp for exactly one assembly attempt. Production clocks
 	 * reject explicit scheduling and preserve their normal wall-clock selection.
 	 */
