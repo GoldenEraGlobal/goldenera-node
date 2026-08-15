@@ -57,6 +57,7 @@ import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.MempoolManager.MempoolAddResult;
+import global.goldenera.node.core.mempool.MempoolManager.MempoolReasonCode;
 import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.mempool.MempoolValidator.ValidationStatus;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
@@ -260,6 +261,20 @@ class MempoolManagerTest {
 	})
 	void validationStatusMapsToStablePublicResult(ValidationStatus status, MempoolAddResult expected) {
 		assertThat(MempoolAddResult.fromValidation(status)).isEqualTo(expected);
+	}
+
+	@Test
+	void detailedGovernanceReasonSurvivesThePublicMempoolResult() {
+		MempoolEntry candidate = transfer(99, ALICE, 1, 10);
+		when(validator.validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.NEW), eq(false)))
+				.thenReturn(MempoolValidationResult.stateInvalid(
+						MempoolReasonCode.LAST_UNLIMITED_REQUIRED, "not exposed as a contract"));
+
+		var result = manager.addTx(candidate.getTx());
+
+		assertThat(result.status()).isEqualTo(MempoolAddResult.REJECTED_STATE);
+		assertThat(result.reasonCode()).isEqualTo(MempoolReasonCode.LAST_UNLIMITED_REQUIRED);
 	}
 
 	private MempoolEntry nativeTransfer(int id, Address sender, long nonce, long fee) {

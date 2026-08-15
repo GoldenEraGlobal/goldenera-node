@@ -99,6 +99,9 @@ public class ValidatorMiningPolicyService {
 		checkArgument(parentWindow.getWindowSize() == params.getValidatorMiningWindowBlocks(),
 				"Mining window size does not match parent network params");
 		MiningWindowStateValidation.validate(parentWindow);
+		if (params.getCurrentValidatorCount() == 0) {
+			return CandidateEvaluation.eligibleWithoutQuota();
+		}
 
 		ValidatorState validator = parentState.getValidator(minerIdentity);
 		checkArgument(validator.exists(), "Miner is not an active validator: %s", minerIdentity.toChecksumAddress());

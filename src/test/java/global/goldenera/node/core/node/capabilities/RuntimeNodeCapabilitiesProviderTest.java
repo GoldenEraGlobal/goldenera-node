@@ -55,7 +55,7 @@ class RuntimeNodeCapabilitiesProviderTest {
 				.snapshot();
 
 		assertThat(snapshot.proofOfWorkMode()).isEqualTo(ProofOfWorkRuntimeMode.RANDOMX_FULL);
-		assertThat(snapshot.capabilityIds()).contains("pow-randomx-full");
+		assertThat(snapshot.capabilityIds()).contains("pow-randomx-full", "mining-economics-v1");
 		assertThat(snapshot.capabilityIds()).noneMatch(id -> id.startsWith("sandbox-")
 				|| id.startsWith("clock-") || id.startsWith("legacy-peer-"));
 	}

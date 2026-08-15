@@ -30,10 +30,16 @@ import java.util.TreeSet;
 
 import org.springframework.stereotype.Component;
 
+import org.springframework.beans.factory.annotation.Autowired;
+
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesProvider;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesSnapshot;
+import global.goldenera.node.core.node.capabilities.RuntimeNodeCapabilitiesProvider;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
@@ -45,13 +51,24 @@ public final class P2PChainIdentityPolicy {
 
 	private final SandboxRuntimeContext runtimeContext;
 	private final NodeCapabilitiesProvider capabilitiesProvider;
+	private final ChainQuery chainQuery;
 	private final P2PChainCapabilityCodec codec = new P2PChainCapabilityCodec();
 
+	@Autowired
+	public P2PChainIdentityPolicy(
+			SandboxRuntimeContext runtimeContext,
+			NodeCapabilitiesProvider capabilitiesProvider,
+			ChainQuery chainQuery) {
+		this.runtimeContext = runtimeContext;
+		this.capabilitiesProvider = capabilitiesProvider;
+		this.chainQuery = chainQuery;
+	}
+
+	/** Test-friendly constructor for policies which do not need a local head. */
 	public P2PChainIdentityPolicy(
 			SandboxRuntimeContext runtimeContext,
 			NodeCapabilitiesProvider capabilitiesProvider) {
-		this.runtimeContext = runtimeContext;
-		this.capabilitiesProvider = capabilitiesProvider;
+		this(runtimeContext, capabilitiesProvider, null);
 	}
 
 	public List<String> localCapabilities() {
@@ -68,6 +85,7 @@ public final class P2PChainIdentityPolicy {
 			throw rejected("Peer status is missing chain identity prerequisites");
 		}
 		StoredChainIdentity authoritative = currentSnapshot().chainIdentity();
+		validateMiningEconomicsCompatibility(status);
 		Optional<P2PChainCapability> claimed;
 		try {
 			claimed = codec.find(status.getCapabilities());
@@ -86,6 +104,19 @@ public final class P2PChainIdentityPolicy {
 			return new Validation(Mode.PROTOCOL_V1_ABSENT, null);
 		}
 		return validateSandboxLegacy(status, authoritative);
+	}
+
+	private void validateMiningEconomicsCompatibility(P2PStatusDto status) {
+		if (status.getCapabilities() == null) {
+			throw rejected("Peer status is missing capabilities");
+		}
+		long peerHeight = status.getBestBlockHeader() == null ? -1 : status.getBestBlockHeader().getHeight();
+		long localHeight = chainQuery == null ? -1 : chainQuery.getLatestStoredBlockOrThrow().getHeight();
+		long observedHeight = Math.max(peerHeight, localHeight);
+		if (Constants.isForkActive(ForkName.MINING_ECONOMICS, observedHeight)
+				&& !status.getCapabilities().contains(RuntimeNodeCapabilitiesProvider.MINING_ECONOMICS_V1)) {
+			throw rejected("Peer omitted the required mining-economics-v1 capability after activation");
+		}
 	}
 
 	private Validation validateSandboxLegacy(P2PStatusDto status, StoredChainIdentity authoritative) {

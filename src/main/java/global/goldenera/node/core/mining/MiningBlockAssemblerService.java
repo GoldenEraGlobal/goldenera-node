@@ -131,7 +131,7 @@ public class MiningBlockAssemblerService {
 	 *             if assembly fails
 	 */
 	public Optional<AssembledBlock> createBlockTemplate(Block parentBlock) throws Exception {
-		return createBlockTemplateInternal(parentBlock, Optional.empty());
+		return createBlockTemplateInternal(parentBlock, Optional.empty(), false);
 	}
 
 	/**
@@ -140,12 +140,25 @@ public class MiningBlockAssemblerService {
 	public Optional<AssembledBlock> createBlockTemplate(
 			Block parentBlock,
 			BlockTimestampReservation timestampReservation) throws Exception {
-		return createBlockTemplateInternal(parentBlock, Optional.of(timestampReservation));
+		return createBlockTemplateInternal(parentBlock, Optional.of(timestampReservation), false);
+	}
+
+	/**
+	 * Authors a sandbox control candidate through the production assembler while
+	 * bypassing only the local validator mining-policy eligibility precheck. The
+	 * returned candidate is still subject to normal proof-of-work, signing and
+	 * receiver-side validation.
+	 */
+	public Optional<AssembledBlock> createSandboxCandidateTemplate(
+			Block parentBlock,
+			BlockTimestampReservation timestampReservation) throws Exception {
+		return createBlockTemplateInternal(parentBlock, Optional.of(timestampReservation), true);
 	}
 
 	private Optional<AssembledBlock> createBlockTemplateInternal(
 			Block parentBlock,
-			Optional<BlockTimestampReservation> timestampReservation) throws Exception {
+			Optional<BlockTimestampReservation> timestampReservation,
+			boolean bypassMiningPolicyPrecheck) throws Exception {
 		log.debug("Creating block template | Parent: {}", parentBlock.getHeight());
 		BlockVersion blockVersion = BlockVersion.V1;
 
@@ -172,7 +185,8 @@ public class MiningBlockAssemblerService {
 		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
 
 		long nextHeight = parentBlock.getHeight() + 1;
-		if (!validatorMiningPolicyService.isCandidateEligible(worldState, nextHeight, minerIdentity)) {
+		if (!bypassMiningPolicyPrecheck
+				&& !validatorMiningPolicyService.isCandidateEligible(worldState, nextHeight, minerIdentity)) {
 			log.debug("Mining skipped: Miner identity {} exhausted its mining share at height {}",
 					minerIdentity.toChecksumAddress(), nextHeight);
 			return Optional.empty();
@@ -232,6 +246,7 @@ public class MiningBlockAssemblerService {
 		return Optional.of(AssembledBlock.builder()
 				.blockTemplate(template)
 				.txs(validTxs)
+				.selectedTxs(List.copyOf(txs))
 				.invalidTxs(result.getInvalidTxs())
 				.build());
 	}
@@ -439,6 +454,7 @@ public class MiningBlockAssemblerService {
 	public static class AssembledBlock {
 		BlockHeaderTemplate blockTemplate;
 		List<Tx> txs;
+		List<Tx> selectedTxs;
 		List<Tx> invalidTxs;
 	}
 

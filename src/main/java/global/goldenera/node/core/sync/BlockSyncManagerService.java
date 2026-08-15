@@ -43,6 +43,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -169,6 +170,7 @@ public class BlockSyncManagerService {
 
 	final ExecutorService syncExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sync-Manager"));
 	final AtomicBoolean isRunning = new AtomicBoolean(false);
+	private final AtomicBoolean activeSyncCycle = new AtomicBoolean(false);
 
 	@Getter
 	volatile boolean synced = false;
@@ -181,6 +183,43 @@ public class BlockSyncManagerService {
 	final Map<Long, CompletableFuture<List<List<Tx>>>> pendingBodyRequests = new ConcurrentHashMap<>();
 
 	final Set<Hash> pendingBroadcastDownloads = ConcurrentHashMap.newKeySet();
+	private final SyncRequestTelemetry syncRequestTelemetry = new SyncRequestTelemetry();
+
+	public SyncRuntimeSnapshot runtimeSnapshot() {
+		SyncRequestTelemetry.Snapshot requestTelemetry = syncRequestTelemetry.snapshot();
+		return new SyncRuntimeSnapshot(
+				synced,
+				activeSyncCycle.get(),
+				chainQueryService.getLatestBlockHeight().orElse(-1L),
+				pendingHeaderRequests.size(),
+				pendingBodyRequests.size(),
+				pendingBroadcastDownloads.size(),
+				requestTelemetry.headerRequestsIssued(),
+				requestTelemetry.bodyRequestsIssued(),
+				requestTelemetry.firstHeaderRequestSequence(),
+				requestTelemetry.firstBodyRequestSequence(),
+				SYNC_CHUNK_SIZE_HEADERS,
+				calculateBodyBatchSize(),
+				calculatePipelineDepth(calculateBodyBatchSize()),
+				PERSIST_BATCH_SIZE);
+	}
+
+	public record SyncRuntimeSnapshot(
+			boolean synced,
+			boolean activeCycle,
+			long localHeight,
+			int pendingHeaderRequests,
+			int pendingBodyRequests,
+			int pendingBroadcastDownloads,
+			long headerRequestsIssued,
+			long bodyRequestsIssued,
+			long firstHeaderRequestSequence,
+			long firstBodyRequestSequence,
+			int headerBatchLimit,
+			int bodyBatchLimit,
+			int pipelineDepthLimit,
+			int persistenceBatchLimit) {
+	}
 
 	public void start() {
 		if (isRunning.getAndSet(true))
@@ -252,6 +291,7 @@ public class BlockSyncManagerService {
 
 	private boolean performSync(RemotePeer peer, Block localBest) {
 		Timer.Sample sample = Timer.start(registry);
+		activeSyncCycle.set(true);
 		try {
 			log.debug("Starting sync with peer {}", peer.getIdentity());
 
@@ -309,6 +349,7 @@ public class BlockSyncManagerService {
 			peerReputationService.recordFailure(peer.getIdentity());
 			return false;
 		} finally {
+			activeSyncCycle.set(false);
 			sample.stop(registry.timer("blockchain.sync.batch_time"));
 		}
 	}
@@ -348,6 +389,7 @@ public class BlockSyncManagerService {
 				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
 				long reqId = peer.reserveRequestId();
 				pendingBodyRequests.put(reqId, future);
+				recordBodyRequest();
 				peer.sendGetBlockBodies(hashes, reqId);
 
 				pendingRequests.add(new PendingBodyRequest(reqId, batchHeaders, future, startIdx));
@@ -481,6 +523,7 @@ public class BlockSyncManagerService {
 			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
 			long reqId = peer.reserveRequestId();
 			pendingHeaderRequests.put(reqId, future);
+			recordHeaderRequest();
 			int remaining = SYNC_CHUNK_SIZE_HEADERS - allHeaders.size();
 
 			long sendStart = System.currentTimeMillis();
@@ -550,6 +593,49 @@ public class BlockSyncManagerService {
 		}
 
 		return allHeaders;
+	}
+
+	private void recordHeaderRequest() {
+		syncRequestTelemetry.recordHeaderRequest();
+	}
+
+	private void recordBodyRequest() {
+		syncRequestTelemetry.recordBodyRequest();
+	}
+
+	static final class SyncRequestTelemetry {
+		private final AtomicLong sequence = new AtomicLong();
+		private final AtomicLong headerRequestsIssued = new AtomicLong();
+		private final AtomicLong bodyRequestsIssued = new AtomicLong();
+		private final AtomicLong firstHeaderRequestSequence = new AtomicLong();
+		private final AtomicLong firstBodyRequestSequence = new AtomicLong();
+
+		synchronized void recordHeaderRequest() {
+			long requestSequence = sequence.incrementAndGet();
+			headerRequestsIssued.incrementAndGet();
+			firstHeaderRequestSequence.compareAndSet(0, requestSequence);
+		}
+
+		synchronized void recordBodyRequest() {
+			long requestSequence = sequence.incrementAndGet();
+			bodyRequestsIssued.incrementAndGet();
+			firstBodyRequestSequence.compareAndSet(0, requestSequence);
+		}
+
+		synchronized Snapshot snapshot() {
+			return new Snapshot(
+					headerRequestsIssued.get(),
+					bodyRequestsIssued.get(),
+					firstHeaderRequestSequence.get(),
+					firstBodyRequestSequence.get());
+		}
+
+		record Snapshot(
+				long headerRequestsIssued,
+				long bodyRequestsIssued,
+				long firstHeaderRequestSequence,
+				long firstBodyRequestSequence) {
+		}
 	}
 
 	/**

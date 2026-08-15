@@ -47,6 +47,7 @@ import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
@@ -146,8 +147,10 @@ public class BlockValidator {
 			if (!checkpointService.verifyCheckpoint(header.getHeight(), header.getHash())) {
 				throw new GEValidationException("Checkpoint mismatch for block " + header.getHeight());
 			}
-			checkArgument(header.getSignature().validate(BlockHeaderUtil.hashForSigning(header), header.getIdentity()),
-					"Miner signature does not authenticate the recovered identity");
+			if (Constants.isForkActive(ForkName.MINING_ECONOMICS, header.getHeight())) {
+				checkArgument(header.getSignature().validate(BlockHeaderUtil.hashForSigning(header), header.getIdentity()),
+						"Miner signature does not authenticate the recovered identity");
+			}
 			// 4. Proof-of-work calculation
 			validateProofOfWorkInternal(header, batchContext);
 			return new StatelessValidatedHeader(header);

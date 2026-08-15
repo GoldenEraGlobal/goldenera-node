@@ -75,7 +75,35 @@ final class SandboxControlDtos {
 	}
 
 	@JsonIgnoreProperties(ignoreUnknown = false)
+	record CandidateBatchRequest(
+			Integer count,
+			Long deadlineMs,
+			Boolean bypassPolicyPrecheck,
+			Boolean includeExecutionInvalidTransactions,
+			List<String> retainedCanonicalTransactionsBase64) {
+	}
+
+	record CandidateBatch(List<Candidate> candidates) {
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = false)
 	record ExactOneRequest(Instant scheduledTimestamp, Long deadlineMs) {
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = false)
+	record CandidateRequest(
+			Long deadlineMs,
+			Boolean bypassPolicyPrecheck,
+			Boolean includeExecutionInvalidTransactions,
+			List<String> retainedCanonicalTransactionsBase64) {
+	}
+
+	record Candidate(
+			String code,
+			String parentHash,
+			Long blockHeight,
+			String blockHash,
+			String canonicalBlockBase64) {
 	}
 
 	record Operation(
@@ -106,5 +134,49 @@ final class SandboxControlDtos {
 			List<SandboxControlAuditLog.Event> events,
 			boolean hasMore,
 			Long nextAfter) {
+	}
+
+	record BlockIngestionAudit(
+			String blockHash,
+			String status,
+			Long height,
+			boolean canonical,
+			String outcomeCode) {
+	}
+
+	record SyncRuntimeAudit(
+			boolean synced,
+			boolean activeCycle,
+			long localHeight,
+			int pendingHeaderRequests,
+			int pendingBodyRequests,
+			int pendingBroadcastDownloads,
+			long headerRequestsIssued,
+			long bodyRequestsIssued,
+			long firstHeaderRequestSequence,
+			long firstBodyRequestSequence,
+			int headerBatchLimit,
+			int bodyBatchLimit,
+			int pipelineDepthLimit,
+			int persistenceBatchLimit) {
+	}
+
+	record PowRuntimeAudit(
+			String provider,
+			String memoryMode,
+			boolean datasetAllocated,
+			int activeVmLeases,
+			boolean initializationInProgress,
+			long proofOfWorkInvocationCount) {
+	}
+
+	record EquivocationRuntimeAudit(
+			int queueCapacity,
+			long processingDelayMs,
+			long delayAfterObservations,
+			long submittedObservations,
+			long startedObservations,
+			int pendingObservations,
+			long droppedAuditObservations) {
 	}
 }

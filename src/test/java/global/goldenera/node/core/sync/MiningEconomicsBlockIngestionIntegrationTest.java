@@ -353,6 +353,8 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			List<Tx> wrongOrder = List.of(approve(demote.getHash(), 2), approve(promote.getHash(), 3));
 			Block rejected = invalid.buildUncheckedChild(creates, MINER_B_KEY, wrongOrder);
 			assertThat(invalid.ingest(rejected)).isEqualTo(BlockIngestionOutcome.Code.REJECTED_EXECUTION);
+			assertThat(invalid.ingestionService.recentOutcome(rejected.getHash()))
+					.contains(BlockIngestionOutcome.Code.REJECTED_EXECUTION);
 			assertThat(invalid.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(creates.getHash());
 			assertThat(invalid.chainQuery.getStoredBlockByHeight(rejected.getHeight())).isEmpty();
 			WorldState state = invalid.stateAt(creates);

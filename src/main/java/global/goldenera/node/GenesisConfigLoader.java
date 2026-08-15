@@ -88,7 +88,7 @@ public class GenesisConfigLoader {
             }
 
             JsonNode root = OBJECT_MAPPER.readTree(is);
-            return parseGenesisSettings(root);
+            return parseProductionGenesisSettings(root, network);
 
         } catch (IOException e) {
             throw new IllegalStateException("Failed to load genesis configuration from: " + fileName, e);
@@ -96,6 +96,14 @@ public class GenesisConfigLoader {
     }
 
     static GenesisSettings parseGenesisSettings(JsonNode root) {
+		return parseGenesisSettings(root, null);
+	}
+
+	static GenesisSettings parseProductionGenesisSettings(JsonNode root, Network network) {
+		return parseGenesisSettings(root, legacyMiningWindowDefault(network));
+	}
+
+	private static GenesisSettings parseGenesisSettings(JsonNode root, Long missingMiningWindowDefault) {
         // Size limits
         JsonNode limits = requireNode(root, "limits");
         long maxHeaderSizeInBytes = requireLong(limits, "maxHeaderSizeInBytes");
@@ -119,7 +127,9 @@ public class GenesisConfigLoader {
         BigInteger minDifficulty = new BigInteger(requireString(networkParams, "minDifficulty"));
         Wei minTxBaseFee = Wei.valueOf(new BigInteger(requireString(networkParams, "minTxBaseFee")));
         Wei minTxByteFee = Wei.valueOf(new BigInteger(requireString(networkParams, "minTxByteFee")));
-        long validatorMiningWindowBlocks = requireConsensusLong(networkParams, "validatorMiningWindowBlocks");
+        long validatorMiningWindowBlocks = networkParams.has("validatorMiningWindowBlocks")
+				? requireConsensusLong(networkParams, "validatorMiningWindowBlocks")
+				: requireLegacyMiningWindowDefault(missingMiningWindowDefault);
         try {
             MiningConsensusRules.validateWindowSize(validatorMiningWindowBlocks);
         } catch (RuntimeException e) {
@@ -188,6 +198,20 @@ public class GenesisConfigLoader {
                 randomXGenesisKey,
                 randomXBatchSize);
     }
+
+	private static long requireLegacyMiningWindowDefault(Long value) {
+		if (value == null) {
+			throw new IllegalStateException("Missing required field: validatorMiningWindowBlocks");
+		}
+		return value;
+	}
+
+	private static long legacyMiningWindowDefault(Network network) {
+		return switch (network) {
+			case MAINNET -> 1_000L;
+			case TESTNET -> 100L;
+		};
+	}
 
     // =============================================
     // HELPER METHODS

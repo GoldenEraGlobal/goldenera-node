@@ -28,6 +28,7 @@ import java.util.function.Function;
 
 import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.crypto.RandomXVmLease;
+import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
 
 /**
  * Production proof-of-work provider preserving the existing RandomX modes:
@@ -70,6 +71,18 @@ public class RandomXProofOfWorkProvider implements ProofOfWorkProvider {
 	@Override
 	public boolean isInitializationInProgress() {
 		return randomXManager.isInitializationInProgress();
+	}
+
+	public boolean isDatasetAllocated() {
+		return randomXManager.isDatasetAllocated();
+	}
+
+	public int getActiveVmLeaseCount() {
+		return randomXManager.getActiveVmLeaseCount();
+	}
+
+	public RandomXMiningMemoryMode getMiningMemoryMode() {
+		return randomXManager.getMiningMemoryMode();
 	}
 
 }

@@ -24,10 +24,14 @@
 package global.goldenera.node.core.sandbox.control;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Base64;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -44,12 +48,17 @@ import global.goldenera.node.core.mining.ExactOneMiningOutcome;
 import global.goldenera.node.core.mining.ExactOneMiningRequest;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.mining.MiningSuspensionReason;
+import global.goldenera.node.core.mining.SandboxCandidateAuthoringOutcome;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadiness;
 import global.goldenera.node.core.sandbox.control.SandboxControlAuditLog.Action;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AuditPage;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AutonomousRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AutonomousState;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Capabilities;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Candidate;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatch;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatchRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactOneRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Operation;
 import global.goldenera.node.core.sandbox.control.SandboxControlOperationRegistry.Admission;
@@ -59,10 +68,19 @@ import global.goldenera.node.core.sandbox.manifest.SandboxManifest;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.serialization.block.BlockEncoder;
+import global.goldenera.cryptoj.serialization.tx.TxDecoder;
+import global.goldenera.cryptoj.serialization.tx.TxEncoder;
+import org.apache.tuweni.bytes.Bytes;
 
 final class SandboxControlService {
+	private static final int MAX_CANDIDATE_CANONICAL_BYTES = 16 * 1024 * 1024;
+	private static final long MAX_CANDIDATE_BATCH_CANONICAL_BYTES = 64L * 1024 * 1024;
 
 	static final Duration AUTONOMOUS_PAUSE_TIMEOUT = Duration.ofSeconds(5);
+	private static final int MAX_RETAINED_CANDIDATE_TRANSACTIONS = 32;
+	private static final int MAX_RETAINED_TRANSACTION_BYTES = 100_000;
 	private static final Pattern OPERATION_ID = Pattern.compile("[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{22}");
 
 	private final MiningService miningService;
@@ -118,7 +136,13 @@ final class SandboxControlService {
 						"READ_AUTONOMOUS_STATE",
 						"SET_AUTONOMOUS_STATE",
 						"MINE_EXACTLY_ONE",
+						"AUTHOR_CANDIDATE_WITHOUT_INGESTION",
+						"AUTHOR_CANDIDATES_WITHOUT_INGESTION",
 						"READ_REQUEST_RESULT",
+						"READ_BLOCK_INGESTION",
+						"READ_SYNC_RUNTIME",
+						"READ_POW_RUNTIME",
+						"READ_EQUIVOCATION_RUNTIME",
 						"READ_AUDIT"),
 				SandboxControlSecurityFilter.MAX_REQUEST_BODY_BYTES,
 				SandboxControlSecurityFilter.MAX_CONCURRENT_REQUESTS,
@@ -226,6 +250,146 @@ final class SandboxControlService {
 			}
 		});
 		return new Submission(admission.operation(), false);
+	}
+
+	Candidate authorCandidate(CandidateRequest request) {
+		validateCandidateRequest(request);
+		MutationLease lease = operations.tryAcquireMutation();
+		if (lease == null) {
+			throw busy();
+		}
+		try (lease) {
+			return authorCandidateUnderLease(request, 0, 1);
+		}
+	}
+
+	private void validateCandidateRequest(CandidateRequest request) {
+		if (request == null || request.deadlineMs() == null
+				|| !Boolean.TRUE.equals(request.bypassPolicyPrecheck())) {
+			throw badRequest("INVALID_CANDIDATE_REQUEST",
+					"deadlineMs and explicit bypassPolicyPrecheck=true are required");
+		}
+		long maxDeadlineMs = ExactOneMiningRequest.MAX_DEADLINE.toMillis();
+		if (request.deadlineMs() <= 0 || request.deadlineMs() > maxDeadlineMs) {
+			throw badRequest("INVALID_CANDIDATE_DEADLINE",
+					"deadlineMs must be between 1 and " + maxDeadlineMs);
+		}
+		if (request.retainedCanonicalTransactionsBase64() != null
+				&& !request.retainedCanonicalTransactionsBase64().isEmpty()
+				&& !Boolean.TRUE.equals(request.includeExecutionInvalidTransactions())) {
+			throw badRequest("INVALID_RETAINED_TRANSACTIONS",
+					"retained transactions require includeExecutionInvalidTransactions=true");
+		}
+		requireCoreReady();
+		AutonomousMiningState miningState = miningService.getAutonomousMiningState();
+		if (!miningState.suspensions().contains(MiningSuspensionReason.SANDBOX_CONTROL)
+				|| !miningState.quiescent()) {
+			throw new SandboxControlException(HttpStatus.CONFLICT, "MINING_NOT_QUIESCENT",
+					"Candidate authoring requires sandbox-controlled autonomous mining to be paused");
+		}
+	}
+
+	private Candidate authorCandidateUnderLease(
+			CandidateRequest request, int nonceSearchOffset, int nonceSearchStride) {
+		List<Tx> retainedTransactions = decodeRetainedTransactions(
+				request.retainedCanonicalTransactionsBase64());
+		SandboxCandidateAuthoringOutcome outcome = miningService.authorSandboxCandidate(
+				Duration.ofMillis(request.deadlineMs()),
+				Boolean.TRUE.equals(request.includeExecutionInvalidTransactions()),
+				retainedTransactions,
+				nonceSearchOffset,
+				nonceSearchStride);
+		auditLog.record(Action.AUTHOR_CANDIDATE, outcome.code().name(), null);
+		String parentHash = outcome.parentHash() == null ? null : outcome.parentHash().toHexString();
+		if (outcome.block() == null) {
+			return new Candidate(outcome.code().name(), parentHash, outcome.blockHeight(), null, null);
+		}
+		byte[] canonical = BlockEncoder.INSTANCE.encode(outcome.block(), true).toArray();
+		if (canonical.length > MAX_CANDIDATE_CANONICAL_BYTES) {
+			throw new SandboxControlException(HttpStatus.PAYLOAD_TOO_LARGE, "CANDIDATE_TOO_LARGE",
+					"Canonical candidate exceeds the control API response bound");
+		}
+		return new Candidate(
+				outcome.code().name(),
+				parentHash,
+				outcome.blockHeight(),
+				outcome.block().getHash().toHexString(),
+				Base64.getEncoder().encodeToString(canonical));
+	}
+
+	CandidateBatch authorCandidates(CandidateBatchRequest request) {
+		if (request == null || request.count() == null || request.count() < 1 || request.count() > 64) {
+			throw badRequest("INVALID_CANDIDATE_BATCH", "candidate batch count must be between 1 and 64");
+		}
+		long maxDeadlineMs = ExactOneMiningRequest.MAX_DEADLINE.toMillis();
+		if (request.deadlineMs() == null || request.deadlineMs() < 1 || request.deadlineMs() > maxDeadlineMs) {
+			throw badRequest("INVALID_CANDIDATE_DEADLINE",
+					"deadlineMs must be between 1 and " + maxDeadlineMs);
+		}
+		long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(request.deadlineMs());
+		List<Candidate> candidates = new ArrayList<>(request.count());
+		long canonicalBytes = 0;
+		MutationLease lease = operations.tryAcquireMutation();
+		if (lease == null) {
+			throw busy();
+		}
+		try (lease) {
+			for (int index = 0; index < request.count(); index++) {
+				long remainingNanos = deadlineNanos - System.nanoTime();
+				if (remainingNanos <= 0) {
+					throw new SandboxControlException(HttpStatus.REQUEST_TIMEOUT, "CANDIDATE_BATCH_TIMED_OUT",
+							"Candidate batch exceeded its shared deadline");
+				}
+				long remainingMillis = Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
+				CandidateRequest candidate = new CandidateRequest(
+						remainingMillis, request.bypassPolicyPrecheck(),
+						request.includeExecutionInvalidTransactions(), request.retainedCanonicalTransactionsBase64());
+				validateCandidateRequest(candidate);
+				Candidate authored = authorCandidateUnderLease(candidate, index, request.count());
+				if (authored.canonicalBlockBase64() != null) {
+					canonicalBytes += decodedBase64Length(authored.canonicalBlockBase64());
+					if (canonicalBytes > MAX_CANDIDATE_BATCH_CANONICAL_BYTES) {
+						throw new SandboxControlException(HttpStatus.PAYLOAD_TOO_LARGE,
+								"CANDIDATE_BATCH_TOO_LARGE",
+								"Canonical candidate batch exceeds the aggregate response bound");
+					}
+				}
+				candidates.add(authored);
+			}
+		}
+		return new CandidateBatch(List.copyOf(candidates));
+	}
+
+	private static long decodedBase64Length(String encoded) {
+		int padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+		return (encoded.length() / 4L) * 3L - padding;
+	}
+
+	private List<Tx> decodeRetainedTransactions(List<String> encodedTransactions) {
+		if (encodedTransactions == null || encodedTransactions.isEmpty()) {
+			return List.of();
+		}
+		if (encodedTransactions.size() > MAX_RETAINED_CANDIDATE_TRANSACTIONS) {
+			throw badRequest("INVALID_RETAINED_TRANSACTIONS", "too many retained candidate transactions");
+		}
+		List<Tx> decoded = new ArrayList<>(encodedTransactions.size());
+		for (String encoded : encodedTransactions) {
+			try {
+				byte[] canonical = Base64.getDecoder().decode(encoded);
+				if (canonical.length == 0 || canonical.length > MAX_RETAINED_TRANSACTION_BYTES) {
+					throw new IllegalArgumentException("transaction size is out of range");
+				}
+				var transaction = TxDecoder.INSTANCE.decode(Bytes.wrap(canonical));
+				byte[] roundTrip = TxEncoder.INSTANCE.encode(transaction, true).toArray();
+				if (!Arrays.equals(canonical, roundTrip)) {
+					throw new IllegalArgumentException("non-canonical transaction");
+				}
+				decoded.add(transaction);
+			} catch (RuntimeException exception) {
+				throw badRequest("INVALID_RETAINED_TRANSACTIONS", "retained transaction is not canonical");
+			}
+		}
+		return List.copyOf(decoded);
 	}
 
 	Operation operation(String operationId) {

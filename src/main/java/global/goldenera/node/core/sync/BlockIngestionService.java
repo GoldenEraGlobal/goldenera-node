@@ -27,6 +27,8 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -59,6 +61,8 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class BlockIngestionService {
+	private static final int MAX_RECENT_OUTCOMES = 256;
+	private final Map<Hash, BlockIngestionOutcome.Code> recentOutcomes = new LinkedHashMap<>();
 
 	ReentrantLock masterChainLock;
 
@@ -149,9 +153,24 @@ public class BlockIngestionService {
 			return outcome;
 		} finally {
 			masterChainLock.unlock();
+			if (blockHash != null && outcome != null) {
+				recordRecentOutcome(blockHash, outcome.code());
+			}
 			sample.stop(registry.timer("blockchain.block.process_time",
 					"source", source.name(),
 					"result", (outcome != null ? outcome.code().name() : "ERROR")));
+		}
+	}
+
+	public synchronized Optional<BlockIngestionOutcome.Code> recentOutcome(Hash blockHash) {
+		return Optional.ofNullable(recentOutcomes.get(blockHash));
+	}
+
+	private synchronized void recordRecentOutcome(Hash blockHash, BlockIngestionOutcome.Code code) {
+		recentOutcomes.remove(blockHash);
+		recentOutcomes.put(blockHash, code);
+		while (recentOutcomes.size() > MAX_RECENT_OUTCOMES) {
+			recentOutcomes.remove(recentOutcomes.keySet().iterator().next());
 		}
 	}
 

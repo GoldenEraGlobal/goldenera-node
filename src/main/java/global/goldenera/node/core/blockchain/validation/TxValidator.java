@@ -247,13 +247,9 @@ public class TxValidator {
 					validateMinTxFee(p.getMinTxByteFee(), "minTxByteFee");
 					validateMinDifficulty(p.getMinDifficulty());
 					validateAsertHalfLifeBlocks(p.getAsertHalfLifeBlocks());
-					if (p.getValidatorMiningWindowBlocks() != null) {
-						try {
-							MiningConsensusRules.validateWindowSize(p.getValidatorMiningWindowBlocks());
-						} catch (RuntimeException exception) {
-							throw new GEValidationException(exception.getMessage());
-						}
-					}
+					// Mining-window bounds are height-dependent consensus rules. They are
+					// classified by MiningEconomicsPayloadRules after structural/signature
+					// validation so callers receive a stable governance outcome.
 				}
 				break;
 			default:

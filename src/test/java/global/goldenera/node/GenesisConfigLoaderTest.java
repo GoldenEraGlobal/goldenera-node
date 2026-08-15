@@ -38,6 +38,19 @@ import global.goldenera.cryptoj.enums.Network;
 
 class GenesisConfigLoaderTest {
 
+	@Test
+	void exactLegacyProductionInputReceivesNetworkSpecificPostForkWindowDefault() throws Exception {
+		JsonNode mainnet = productionGenesis("genesis/genesis-mainnet-prod.json");
+		JsonNode testnet = productionGenesis("genesis/genesis-testnet-prod.json");
+		((ObjectNode) mainnet.get("networkParams")).remove("validatorMiningWindowBlocks");
+		((ObjectNode) testnet.get("networkParams")).remove("validatorMiningWindowBlocks");
+
+		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(mainnet, Network.MAINNET)
+				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(1_000);
+		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(testnet, Network.TESTNET)
+				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(100);
+	}
+
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
 	@Test
@@ -87,8 +100,12 @@ class GenesisConfigLoaderTest {
 	}
 
 	private JsonNode productionMainnet() throws Exception {
+		return productionGenesis("genesis/genesis-mainnet-prod.json");
+	}
+
+	private JsonNode productionGenesis(String resource) throws Exception {
 		try (InputStream stream = getClass().getClassLoader()
-				.getResourceAsStream("genesis/genesis-mainnet-prod.json")) {
+				.getResourceAsStream(resource)) {
 			return OBJECT_MAPPER.readTree(stream);
 		}
 	}

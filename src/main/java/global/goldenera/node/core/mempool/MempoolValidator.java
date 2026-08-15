@@ -34,6 +34,7 @@ import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.MiningConsensusRules;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.TxPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayload;
@@ -54,13 +55,19 @@ import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
+import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
+import global.goldenera.node.core.mempool.MempoolManager.MempoolReasonCode;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.processing.MiningEconomicsPayloadRules;
 import global.goldenera.node.core.properties.MempoolProperties;
@@ -292,7 +299,8 @@ public class MempoolValidator {
 			try {
 				MiningEconomicsPayloadRules.validateAtHeight(payload, candidateBlockHeight);
 			} catch (RuntimeException exception) {
-				return MempoolValidationResult.stateInvalid(exception.getMessage());
+				MempoolReasonCode reasonCode = governanceValidationReason(payload, candidateBlockHeight);
+				return MempoolValidationResult.stateInvalid(reasonCode, exception.getMessage());
 			}
 
 			if (payload instanceof TxBipAuthorityAddPayload) {
@@ -316,10 +324,27 @@ public class MempoolValidator {
 					return MempoolValidationResult.governanceDuplicate("AuthorityRemove is already pending in mempool.");
 				}
 			} else if (payload instanceof TxBipValidatorAddPayload) {
-				Address addr = ((TxBipValidatorAddPayload) payload).getAddress();
+				TxBipValidatorAddPayload validatorAdd = (TxBipValidatorAddPayload) payload;
+				Address addr = validatorAdd.getAddress();
 				// Check chain
 				if (worldstate.getValidator(addr).exists()) {
-					return MempoolValidationResult.invalid("Validator already exists on-chain.");
+					return MempoolValidationResult.stateInvalid(
+							MempoolReasonCode.INVALID_POLICY_TRANSITION,
+							"Validator already exists on-chain.");
+				}
+				if (validatorAdd.getMiningLimitMode() == MiningLimitMode.LIMITED) {
+					long window = effectiveMiningWindow(worldstate.getParams(), candidateBlockHeight);
+					long share = validatorAdd.getMaxMiningShareBps();
+					if (window * share < 10_000) {
+						return MempoolValidationResult.stateInvalid(
+								MempoolReasonCode.LIMITED_QUOTA_ZERO,
+								"LIMITED policy would allow zero blocks in the configured window.");
+					}
+					if (worldstate.getParams().getCurrentValidatorCount() == 0) {
+						return MempoolValidationResult.stateInvalid(
+								MempoolReasonCode.LAST_UNLIMITED_REQUIRED,
+								"The first validator must use an UNLIMITED mining policy.");
+					}
 				}
 				// Check mempool
 				if (isConflictingAdmission(tx, checkMempoolDuplicates, mempoolStorage.isValidatorAddPending(addr))) {
@@ -338,7 +363,17 @@ public class MempoolValidator {
 			} else if (payload instanceof TxBipValidatorMiningPolicySetPayload policyPayload) {
 				Address addr = policyPayload.getValidatorAddress();
 				if (!worldstate.getValidator(addr).exists()) {
-					return MempoolValidationResult.invalid("Validator does not exist on-chain.");
+					return MempoolValidationResult.stateInvalid(
+							MempoolReasonCode.INVALID_POLICY_TRANSITION,
+							"Validator does not exist on-chain.");
+				}
+				if (policyPayload.getMiningLimitMode() == MiningLimitMode.LIMITED) {
+					long window = effectiveMiningWindow(worldstate.getParams(), candidateBlockHeight);
+					if (window * policyPayload.getMaxMiningShareBps() < 10_000) {
+						return MempoolValidationResult.stateInvalid(
+								MempoolReasonCode.LIMITED_QUOTA_ZERO,
+								"LIMITED policy would allow zero blocks in the configured window.");
+					}
 				}
 				if (isConflictingAdmission(tx, checkMempoolDuplicates,
 						mempoolStorage.isValidatorMiningPolicyChangePending(addr))) {
@@ -465,6 +500,30 @@ public class MempoolValidator {
 				.orElse(null);
 	}
 
+	private long effectiveMiningWindow(NetworkParamsState params, long candidateBlockHeight) {
+		if (params.getVersion() == NetworkParamsStateVersion.V1
+				&& Constants.isForkActive(ForkName.MINING_ECONOMICS, candidateBlockHeight)) {
+			return Constants.getSettings().genesisNetworkValidatorMiningWindowBlocks();
+		}
+		return params.getValidatorMiningWindowBlocks();
+	}
+
+	private MempoolReasonCode governanceValidationReason(TxPayload payload, long candidateBlockHeight) {
+		if (payload instanceof TxBipNetworkParamsSetPayload networkParams
+				&& Constants.isForkActive(ForkName.MINING_ECONOMICS, candidateBlockHeight)
+				&& networkParams.getPayloadVersion() == TxPayloadVersion.V2
+				&& networkParams.getValidatorMiningWindowBlocks() != null) {
+			long window = networkParams.getValidatorMiningWindowBlocks();
+			if (window < MiningConsensusRules.MIN_VALIDATOR_MINING_WINDOW_BLOCKS
+					|| window > MiningConsensusRules.MAX_VALIDATOR_MINING_WINDOW_BLOCKS) {
+				return MempoolReasonCode.MINING_WINDOW_OUT_OF_RANGE;
+			}
+		}
+		return payload instanceof TxBipNetworkParamsSetPayload
+				? MempoolReasonCode.VALIDATION_STATELESS_INVALID
+				: MempoolReasonCode.INVALID_POLICY_TRANSITION;
+	}
+
 	private boolean isConflictingAdmission(Tx candidate, boolean checkMempoolDuplicates, boolean pending) {
 		if (!checkMempoolDuplicates || !pending) {
 			return false;
@@ -478,13 +537,16 @@ public class MempoolValidator {
 	public static class MempoolValidationResult {
 
 		private final ValidationStatus status;
+		private final MempoolReasonCode reasonCode;
 		private final String errorMessage;
 		private final long currentChainNonce; // The confirmed nonce from the chain
 		private final MempoolStore.AdmissionConstraints admissionConstraints;
 
-		private MempoolValidationResult(ValidationStatus status, String errorMessage, long currentChainNonce,
+		private MempoolValidationResult(ValidationStatus status, MempoolReasonCode reasonCode,
+				String errorMessage, long currentChainNonce,
 				MempoolStore.AdmissionConstraints admissionConstraints) {
 			this.status = status;
+			this.reasonCode = reasonCode;
 			this.errorMessage = errorMessage;
 			this.currentChainNonce = currentChainNonce;
 			this.admissionConstraints = admissionConstraints;
@@ -496,7 +558,8 @@ public class MempoolValidator {
 
 		public static MempoolValidationResult valid(long currentChainNonce,
 				MempoolStore.AdmissionConstraints admissionConstraints) {
-			return new MempoolValidationResult(ValidationStatus.VALID, null, currentChainNonce, admissionConstraints);
+			return new MempoolValidationResult(
+					ValidationStatus.VALID, null, null, currentChainNonce, admissionConstraints);
 		}
 
 		public static MempoolValidationResult invalid(String message) {
@@ -504,27 +567,31 @@ public class MempoolValidator {
 		}
 
 		public static MempoolValidationResult stateInvalid(String message) {
-			return new MempoolValidationResult(ValidationStatus.STATE_INVALID, message, -1L, null);
+			return stateInvalid(null, message);
+		}
+
+		public static MempoolValidationResult stateInvalid(MempoolReasonCode reasonCode, String message) {
+			return new MempoolValidationResult(ValidationStatus.STATE_INVALID, reasonCode, message, -1L, null);
 		}
 
 		public static MempoolValidationResult statelessInvalid(String message) {
-			return new MempoolValidationResult(ValidationStatus.STATELESS_INVALID, message, -1L, null);
+			return new MempoolValidationResult(ValidationStatus.STATELESS_INVALID, null, message, -1L, null);
 		}
 
 		public static MempoolValidationResult feeTooLow(String message) {
-			return new MempoolValidationResult(ValidationStatus.FEE_TOO_LOW, message, -1L, null);
+			return new MempoolValidationResult(ValidationStatus.FEE_TOO_LOW, null, message, -1L, null);
 		}
 
 		public static MempoolValidationResult governanceDuplicate(String message) {
-			return new MempoolValidationResult(ValidationStatus.GOVERNANCE_DUPLICATE, message, -1L, null);
+			return new MempoolValidationResult(ValidationStatus.GOVERNANCE_DUPLICATE, null, message, -1L, null);
 		}
 
 		public static MempoolValidationResult transientError(String message) {
-			return new MempoolValidationResult(ValidationStatus.TRANSIENT_ERROR, message, -1L, null);
+			return new MempoolValidationResult(ValidationStatus.TRANSIENT_ERROR, null, message, -1L, null);
 		}
 
 		public static MempoolValidationResult stale(long currentChainNonce, String message) {
-			return new MempoolValidationResult(ValidationStatus.STALE, message, currentChainNonce, null);
+			return new MempoolValidationResult(ValidationStatus.STALE, null, message, currentChainNonce, null);
 		}
 
 		public boolean isValid() {

@@ -49,6 +49,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -64,6 +65,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
+import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
@@ -101,6 +103,7 @@ public class MiningService {
 	final EnumSet<MiningSuspensionReason> suspensions = EnumSet.noneOf(MiningSuspensionReason.class);
 	final AtomicBoolean shutdown = new AtomicBoolean(false);
 	final AtomicBoolean autonomousDesired = new AtomicBoolean(true);
+	final AtomicLong proofOfWorkInvocationCount = new AtomicLong();
 	final int hashingThreads;
 
 	final MeterRegistry registry;
@@ -156,6 +159,118 @@ public class MiningService {
 				Executors.newSingleThreadScheduledExecutor(MiningService::newDeadlineThread);
 		this.hashingThreads = getHashingThreads();
 		log.info("Mining initialized with {} hashing threads", this.hashingThreads);
+	}
+
+	/**
+	 * Produces a signed proof-of-work candidate without submitting it locally.
+	 * This method is intentionally exposed only to the sandbox control service;
+	 * production API wiring never calls it.
+	 */
+	public SandboxCandidateAuthoringOutcome authorSandboxCandidate(
+			Duration deadline, boolean includeExecutionInvalidTransactions, List<Tx> retainedTransactions) {
+		return authorSandboxCandidate(deadline, includeExecutionInvalidTransactions, retainedTransactions, 0, 1);
+	}
+
+	public SandboxCandidateAuthoringOutcome authorSandboxCandidate(
+			Duration deadline,
+			boolean includeExecutionInvalidTransactions,
+			List<Tx> retainedTransactions,
+			int nonceSearchOffset,
+			int nonceSearchStride) {
+		if (deadline == null || deadline.isZero() || deadline.isNegative()
+				|| deadline.compareTo(ExactOneMiningRequest.MAX_DEADLINE) > 0) {
+			throw new IllegalArgumentException("Sandbox candidate deadline is out of range");
+		}
+		if (nonceSearchOffset < 0 || nonceSearchStride < 1 || nonceSearchOffset >= nonceSearchStride
+				|| nonceSearchStride > 1_152) {
+			throw new IllegalArgumentException("Sandbox nonce search partition is out of range");
+		}
+		MiningAttemptContext context = MiningAttemptContext.exactOne(deadline);
+		Block parentBlock;
+		masterChainLock.lock();
+		try {
+			parentBlock = chainQueryService.getLatestStoredBlockOrThrow().getBlock();
+			context.parentHash = parentBlock.getHash();
+		} finally {
+			masterChainLock.unlock();
+		}
+		try (BlockTimestampReservation timestamp = chainClock.reserveNextBlockTimestamp(
+				parentBlock.getHeader(), Optional.empty())) {
+			Optional<MiningBlockAssemblerService.AssembledBlock> assembled =
+					miningBlockAssemblerService.createSandboxCandidateTemplate(parentBlock, timestamp);
+			if (assembled.isEmpty()) {
+				return sandboxCandidateOutcome(SandboxCandidateAuthoringOutcome.Code.NOT_ELIGIBLE, context, null, null);
+			}
+			MiningBlockAssemblerService.AssembledBlock candidate = assembled.orElseThrow();
+			List<Tx> body = includeExecutionInvalidTransactions
+					? new ArrayList<>(candidate.getSelectedTxs())
+					: new ArrayList<>(candidate.getTxs());
+			for (Tx retained : Objects.requireNonNull(retainedTransactions, "retainedTransactions")) {
+				if (body.stream().noneMatch(existing -> existing.getHash().equals(retained.getHash()))) {
+					body.add(retained);
+				}
+			}
+			MiningBlockAssemblerService.BlockHeaderTemplate template = candidate.getBlockTemplate();
+			if ((includeExecutionInvalidTransactions && !candidate.getInvalidTxs().isEmpty())
+					|| !retainedTransactions.isEmpty()) {
+				template = MiningBlockAssemblerService.BlockHeaderTemplate.builder()
+						.version(template.getVersion())
+						.height(template.getHeight())
+						.timestamp(template.getTimestamp())
+						.previousHash(template.getPreviousHash())
+						.difficulty(template.getDifficulty())
+						.coinbase(template.getCoinbase())
+						.txRootHash(TxRootUtil.txRootHash(body))
+						.stateRootHash(template.getStateRootHash())
+						.build();
+			}
+			prepareProofOfWorkForMining(template.getHeight(), context);
+			Long nonce = findNonce(template,
+					DifficultyUtil.calculateTargetFromDifficulty(template.getDifficulty()), context,
+					nonceSearchOffset, nonceSearchStride);
+			if (nonce == null || context.deadlineExceeded()) {
+				return sandboxCandidateOutcome(SandboxCandidateAuthoringOutcome.Code.TIMED_OUT,
+						context, template.getHeight(), null);
+			}
+			BlockHeaderImpl unsignedHeader = BlockHeaderImpl.builder()
+					.version(template.getVersion())
+					.height(template.getHeight())
+					.timestamp(template.getTimestamp())
+					.previousHash(template.getPreviousHash())
+					.difficulty(template.getDifficulty())
+					.coinbase(template.getCoinbase())
+					.txRootHash(template.getTxRootHash())
+					.stateRootHash(template.getStateRootHash())
+					.nonce(nonce)
+					.build();
+			Signature signature = identityService.getPrivateKey().sign(BlockHeaderUtil.hashForSigning(unsignedHeader));
+			Block block = BlockImpl.builder()
+					.header(unsignedHeader.toBuilder().signature(signature).build())
+					.txs(body)
+					.build();
+			masterChainLock.lock();
+			try {
+				if (!chainQueryService.getLatestStoredBlockOrThrow().getHash().equals(parentBlock.getHash())) {
+					return sandboxCandidateOutcome(SandboxCandidateAuthoringOutcome.Code.STALE_PARENT,
+							context, template.getHeight(), null);
+				}
+			} finally {
+				masterChainLock.unlock();
+			}
+			return sandboxCandidateOutcome(SandboxCandidateAuthoringOutcome.Code.AUTHORED,
+					context, template.getHeight(), block);
+		} catch (Exception failure) {
+			log.error("Sandbox candidate authoring failed", failure);
+			return sandboxCandidateOutcome(SandboxCandidateAuthoringOutcome.Code.FAILED, context, null, null);
+		}
+	}
+
+	private SandboxCandidateAuthoringOutcome sandboxCandidateOutcome(
+			SandboxCandidateAuthoringOutcome.Code code,
+			MiningAttemptContext context,
+			Long height,
+			Block block) {
+		return new SandboxCandidateAuthoringOutcome(code, context.parentHash, height, block);
 	}
 
 	@PreDestroy
@@ -720,6 +835,16 @@ public class MiningService {
 
 	private Long findNonce(MiningBlockAssemblerService.BlockHeaderTemplate template, BigInteger target,
 			MiningAttemptContext context) {
+		return findNonce(template, target, context, 0, 1);
+	}
+
+	private Long findNonce(
+			MiningBlockAssemblerService.BlockHeaderTemplate template,
+			BigInteger target,
+			MiningAttemptContext context,
+			int nonceSearchOffset,
+			int nonceSearchStride) {
+		proofOfWorkInvocationCount.incrementAndGet();
 
 		ExecutorService hashingWorker = hashingWorkerFor(context);
 		if (hashingWorker == null) {
@@ -748,7 +873,7 @@ public class MiningService {
 					System.arraycopy(baseHeader, 0, workBuffer, 0, baseHeader.length);
 					int nonceOffset = workBuffer.length - 8;
 
-					long currentNonce = start;
+					long currentNonce = alignedNonceStart(start, nonceSearchOffset, nonceSearchStride);
 					int batchCounter = 0;
 
 					while (currentNonce < end) {
@@ -779,7 +904,10 @@ public class MiningService {
 							return null;
 						}
 
-						currentNonce++;
+						if (currentNonce > end - nonceSearchStride) {
+							break;
+						}
+						currentNonce += nonceSearchStride;
 					}
 				} catch (RuntimeException | Error failure) {
 					workerFailure.compareAndSet(null, failure);
@@ -822,6 +950,16 @@ public class MiningService {
 		}
 
 		return foundNonce.get();
+	}
+
+	static long alignedNonceStart(long workerStart, int nonceSearchOffset, int nonceSearchStride) {
+		long residue = Math.floorMod(workerStart, nonceSearchStride);
+		long adjustment = Math.floorMod(nonceSearchOffset - residue, nonceSearchStride);
+		return Math.addExact(workerStart, adjustment);
+	}
+
+	public long getProofOfWorkInvocationCount() {
+		return proofOfWorkInvocationCount.get();
 	}
 
 	private ExactOneMiningOutcome processMinedBlock(MiningBlockAssemblerService.BlockHeaderTemplate template,

@@ -47,6 +47,7 @@ import org.junit.jupiter.api.Test;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayloadImpl;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayloadImpl;
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.BipState;
@@ -56,6 +57,7 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.TxPayloadVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -63,6 +65,7 @@ import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.mempool.MempoolValidator.ValidationStatus;
+import global.goldenera.node.core.mempool.MempoolManager.MempoolReasonCode;
 import global.goldenera.node.core.mempool.MempoolStore.ReservationSnapshot;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
@@ -76,6 +79,8 @@ class MempoolValidatorTest {
 	MempoolStore store;
 	MempoolValidator validator;
 	ChainClock chainClock;
+	Block block;
+	NetworkParamsState params;
 
 	@BeforeEach
 	void setUp() {
@@ -85,16 +90,19 @@ class MempoolValidatorTest {
 		when(chainHead.getHeadState()).thenReturn(worldState);
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		StoredBlock storedBlock = mock(StoredBlock.class);
-		Block block = mock(Block.class, RETURNS_DEEP_STUBS);
+		block = mock(Block.class, RETURNS_DEEP_STUBS);
 		when(block.getHeight()).thenReturn(10L);
 		when(block.getHeader().getTimestamp()).thenReturn(Instant.now().minusSeconds(10));
 		when(storedBlock.getBlock()).thenReturn(block);
 		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(storedBlock);
 
 		MempoolProperties properties = MempoolTestFixtures.properties(100);
-		NetworkParamsState params = mock(NetworkParamsState.class);
+		params = mock(NetworkParamsState.class);
 		when(params.getMinTxBaseFee()).thenReturn(Wei.ZERO);
 		when(params.getMinTxByteFee()).thenReturn(Wei.ZERO);
+		when(params.getValidatorMiningWindowBlocks()).thenReturn(100L);
+		when(params.getCurrentValidatorCount()).thenReturn(1L);
+		when(params.getCurrentUnlimitedValidatorCount()).thenReturn(1L);
 		when(worldState.getParams()).thenReturn(params);
 		AccountNonceState nonce = mock(AccountNonceState.class);
 		when(nonce.getNonce()).thenReturn(0L);
@@ -247,6 +255,74 @@ class MempoolValidatorTest {
 				.isEqualTo(ValidationStatus.STATE_INVALID);
 		assertThat(admit(governance(91, ALICE, 1, 10, versionTwo)).getStatus())
 				.isEqualTo(ValidationStatus.VALID);
+	}
+
+	@Test
+	void firstLimitedValidatorUsesStableLastUnlimitedReasonCode() {
+		balance(Address.NATIVE_TOKEN, 100);
+		when(worldState.getParams().getCurrentValidatorCount()).thenReturn(0L);
+		when(worldState.getParams().getCurrentUnlimitedValidatorCount()).thenReturn(0L);
+		Address validatorAddress = MempoolTestFixtures.address(92);
+		TxBipValidatorAddPayloadImpl limited = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(4000L)
+				.build();
+
+		MempoolValidationResult result = admit(governance(92, ALICE, 1, 10, limited));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.LAST_UNLIMITED_REQUIRED);
+	}
+
+	@Test
+	void limitedPolicyWithZeroIntegerQuotaUsesStableReasonCode() {
+		balance(Address.NATIVE_TOKEN, 100);
+		Address validatorAddress = MempoolTestFixtures.address(93);
+		TxBipValidatorAddPayloadImpl limited = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(1L)
+				.build();
+
+		MempoolValidationResult result = admit(governance(93, ALICE, 1, 10, limited));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.LIMITED_QUOTA_ZERO);
+	}
+
+	@Test
+	void activationCandidateUsesConfiguredWindowInsteadOfLegacyParentZero() {
+		balance(Address.NATIVE_TOKEN, 100);
+		when(block.getHeight()).thenReturn(9L);
+		when(params.getVersion()).thenReturn(NetworkParamsStateVersion.V1);
+		when(params.getValidatorMiningWindowBlocks()).thenReturn(0L);
+		Address validatorAddress = MempoolTestFixtures.address(94);
+		TxBipValidatorAddPayloadImpl limited = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(100L)
+				.build();
+
+		MempoolValidationResult result = admit(governance(94, ALICE, 1, 10, limited));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.VALID);
+	}
+
+	@Test
+	void networkParamsVersionMismatchIsNotReportedAsWindowBoundsFailure() {
+		balance(Address.NATIVE_TOKEN, 100);
+		TxBipNetworkParamsSetPayloadImpl legacy = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.build();
+
+		MempoolValidationResult result = admit(governance(95, ALICE, 1, 10, legacy));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.VALIDATION_STATELESS_INVALID);
 	}
 
 	private MempoolValidationResult admit(MempoolEntry entry) {

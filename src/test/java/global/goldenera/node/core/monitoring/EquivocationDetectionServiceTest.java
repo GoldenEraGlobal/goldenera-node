@@ -24,6 +24,7 @@
 package global.goldenera.node.core.monitoring;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertTimeout;
 import static org.mockito.ArgumentMatchers.any;
@@ -45,10 +46,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
@@ -68,6 +71,7 @@ import global.goldenera.node.core.storage.blockchain.RocksDBRepository;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence;
 import global.goldenera.node.core.storage.blockchain.serialization.EquivocationEvidenceCodec;
+import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class EquivocationDetectionServiceTest {
@@ -160,6 +164,103 @@ class EquivocationDetectionServiceTest {
 			assertThat(registry.counter("blockchain.equivocation.audit.dropped").count()).isEqualTo(1);
 		} finally {
 			releaseRepository.countDown();
+			service.close();
+			registry.close();
+		}
+	}
+
+	@Test
+	void sandboxSizedAuditQueueRetainsTheSameBoundedDropSemantics() throws Exception {
+		EquivocationEvidenceRepository repository = mock(EquivocationEvidenceRepository.class);
+		when(repository.countConflicts()).thenReturn(0L);
+		CountDownLatch repositoryEntered = new CountDownLatch(1);
+		CountDownLatch releaseRepository = new CountDownLatch(1);
+		when(repository.find(anyLong(), any())).thenAnswer(invocation -> {
+			repositoryEntered.countDown();
+			releaseRepository.await();
+			return Optional.empty();
+		});
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		EquivocationDetectionService service = new EquivocationDetectionService(repository, registry, 2);
+		BlockHeader header = signedHeader(23, 1, KEY_A);
+		try {
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			assertThat(repositoryEntered.await(5, TimeUnit.SECONDS)).isTrue();
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isFalse();
+			assertThat(service.droppedAuditObservations()).isEqualTo(1);
+		} finally {
+			releaseRepository.countDown();
+			service.close();
+			registry.close();
+		}
+	}
+
+	@Test
+	void auditQueueOverrideCannotExceedProductionBound() {
+		EquivocationEvidenceRepository repository = mock(EquivocationEvidenceRepository.class);
+		when(repository.countConflicts()).thenReturn(0L);
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		try {
+			assertThatThrownBy(() -> new EquivocationDetectionService(repository, registry, 0))
+					.isInstanceOf(IllegalArgumentException.class);
+			assertThatThrownBy(() -> new EquivocationDetectionService(repository, registry, 1_025))
+					.isInstanceOf(IllegalArgumentException.class);
+		} finally {
+			registry.close();
+		}
+	}
+
+	@Test
+	void productionRuntimeIgnoresSandboxAuditQueueOverride() {
+		EquivocationEvidenceRepository repository = mock(EquivocationEvidenceRepository.class);
+		when(repository.countConflicts()).thenReturn(0L);
+		SandboxRuntimeContext runtimeContext = mock(SandboxRuntimeContext.class);
+		when(runtimeContext.isSandbox()).thenReturn(false);
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		EquivocationDetectionService service = new EquivocationDetectionService(
+				repository, registry, 2, 30_000, 2, runtimeContext);
+		try {
+			ThreadPoolExecutor executor = (ThreadPoolExecutor) ReflectionTestUtils.getField(service, "auditExecutor");
+			assertThat(executor.getQueue().remainingCapacity())
+					.isEqualTo(EquivocationDetectionService.MAX_PENDING_AUDIT_OBSERVATIONS);
+			assertThat(ReflectionTestUtils.getField(service, "auditProcessingDelayMs")).isEqualTo(0L);
+		} finally {
+			service.close();
+			registry.close();
+		}
+	}
+
+	@Test
+	void sandboxRuntimeSnapshotExposesEffectiveBoundedQueueConfigurationAndCounters() throws Exception {
+		EquivocationEvidenceRepository repository = mock(EquivocationEvidenceRepository.class);
+		when(repository.countConflicts()).thenReturn(0L);
+		SandboxRuntimeContext runtimeContext = mock(SandboxRuntimeContext.class);
+		when(runtimeContext.isSandbox()).thenReturn(true);
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		EquivocationDetectionService service = new EquivocationDetectionService(
+				repository, registry, 2, 60_000, 0, runtimeContext);
+		BlockHeader header = signedHeader(24, 1, KEY_A);
+		try {
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+			while (service.runtimeSnapshot().startedObservations() == 0 && System.nanoTime() < deadline) {
+				Thread.sleep(10);
+			}
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isTrue();
+			assertThat(service.enqueueValidatedHeader(header, SEEN)).isFalse();
+
+			var snapshot = service.runtimeSnapshot();
+			assertThat(snapshot.queueCapacity()).isEqualTo(2);
+			assertThat(snapshot.processingDelayMs()).isEqualTo(60_000);
+			assertThat(snapshot.delayAfterObservations()).isZero();
+			assertThat(snapshot.submittedObservations()).isEqualTo(4);
+			assertThat(snapshot.startedObservations()).isEqualTo(1);
+			assertThat(snapshot.pendingObservations()).isEqualTo(2);
+			assertThat(snapshot.droppedObservations()).isEqualTo(1);
+		} finally {
 			service.close();
 			registry.close();
 		}

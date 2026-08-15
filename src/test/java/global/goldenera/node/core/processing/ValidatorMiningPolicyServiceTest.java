@@ -161,6 +161,17 @@ class ValidatorMiningPolicyServiceTest {
 	}
 
 	@Test
+	void zeroValidatorStateAllowsOpenMiningAndStillTracksTheMinerIdentity() {
+		WorldState state = parent(ValidatorStateImpl.ZERO, MiningWindowStateImpl.empty(100, 10), 100, 0);
+
+		assertThatCode(() -> service.validateCandidate(state, OTHER, 11)).doesNotThrowAnyException();
+		service.appendAcceptedBlock(state, block(11, OTHER), true);
+
+		assertThat(state.getMiningWindow().getOrderedValidatorIdentities()).containsExactly(OTHER);
+		assertThat(state.getMiningWindow().getValidatorBlockCounts()).containsEntry(OTHER, 1L);
+	}
+
+	@Test
 	void windowTracksIdentityNotCoinbaseAndRemoveReaddDoesNotEraseHistory() {
 		WorldState readded = parent(limited(4_000), windowWith(VALIDATOR, 39), 100);
 		SimpleBlock block = SimpleBlock.builder()
@@ -219,8 +230,13 @@ class ValidatorMiningPolicyServiceTest {
 	}
 
 	private WorldState parent(ValidatorState validator, MiningWindowState window, long windowSize) {
+		return parent(validator, window, windowSize, 1);
+	}
+
+	private WorldState parent(ValidatorState validator, MiningWindowState window, long windowSize,
+			long validatorCount) {
 		WorldState state = mock(WorldState.class);
-		when(state.getParams()).thenReturn(params(windowSize));
+		when(state.getParams()).thenReturn(params(windowSize, validatorCount));
 		when(state.getValidator(VALIDATOR)).thenReturn(validator);
 		when(state.getMiningWindow()).thenReturn(window);
 		doAnswer(invocation -> {
@@ -231,6 +247,10 @@ class ValidatorMiningPolicyServiceTest {
 	}
 
 	private NetworkParamsStateImpl params(long windowSize) {
+		return params(windowSize, 1);
+	}
+
+	private NetworkParamsStateImpl params(long windowSize, long validatorCount) {
 		return NetworkParamsStateImpl.builder()
 				.version(NetworkParamsStateVersion.V2)
 				.blockReward(Wei.ZERO)
@@ -243,7 +263,7 @@ class ValidatorMiningPolicyServiceTest {
 				.minTxByteFee(Wei.ZERO)
 				.updatedByTxHash(Hash.ZERO)
 				.currentAuthorityCount(1)
-				.currentValidatorCount(1)
+				.currentValidatorCount(validatorCount)
 				.currentUnlimitedValidatorCount(1)
 				.validatorMiningWindowBlocks(windowSize)
 				.updatedAtBlockHeight(10)

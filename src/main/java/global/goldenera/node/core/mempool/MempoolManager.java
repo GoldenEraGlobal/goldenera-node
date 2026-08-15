@@ -158,6 +158,9 @@ public class MempoolManager {
 			log.warn("[MANAGER-DEBUG] Mempool: Rejecting tx {}: {} (status={})", txHash.toShortLogString(),
 					validationResult.getErrorMessage(), validationResult.getStatus());
 			return new MempoolResult(MempoolAddResult.fromValidation(validationResult.getStatus()),
+					validationResult.getReasonCode() == null
+							? MempoolReasonCode.fromValidation(validationResult.getStatus())
+							: validationResult.getReasonCode(),
 					validationResult.getErrorMessage());
 		}
 
@@ -174,73 +177,85 @@ public class MempoolManager {
 
 		// 3. Translate storage result to API result
 		MempoolAddResult result;
+		MempoolReasonCode reasonCode;
 		String message;
 		switch (storageResult) {
 			case ADDED_EXECUTABLE:
 				log.debug("Mempool: Added executable tx {}", txHash.toShortLogString());
 				result = MempoolAddResult.SUCCESS;
+				reasonCode = MempoolReasonCode.ACCEPTED_EXECUTABLE;
 				message = "Transaction added to mempool.";
 				break;
 			case ADDED_FUTURE:
 				log.debug("Mempool: Added future tx {}", txHash.toShortLogString());
 				result = MempoolAddResult.QUEUED;
+				reasonCode = MempoolReasonCode.ACCEPTED_FUTURE_NONCE;
 				message = "Transaction queued (future nonce).";
 				break;
 			case FAILED_FEE_TOO_LOW:
 				log.warn("Mempool: Rejecting tx {}: Fee too low to replace existing (RBF).",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_RBF;
+				reasonCode = MempoolReasonCode.REPLACEMENT_FEE_TOO_LOW;
 				message = "Fee too low to replace existing transaction (RBF).";
 				break;
 			case DUPLICATE_HASH:
 				log.warn("Mempool: Rejecting tx {}: Duplicate hash.", txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_DUPLICATE;
+				reasonCode = MempoolReasonCode.DUPLICATE_HASH;
 				message = "Transaction already exists in mempool.";
 				break;
 			case GOVERNANCE_CONFLICT:
 				log.warn("Mempool: Rejecting tx {}: Conflicting governance transaction is pending.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_DUPLICATE;
+				reasonCode = MempoolReasonCode.GOVERNANCE_CONFLICT;
 				message = "A conflicting governance transaction is already pending.";
 				break;
 			case INSUFFICIENT_FUNDS:
 				log.warn("Mempool: Rejecting tx {}: Atomic balance reservation failed.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_STATE;
+				reasonCode = MempoolReasonCode.INSUFFICIENT_FUNDS;
 				message = "Insufficient funds after accounting for pending transactions.";
 				break;
 			case TOKEN_SUPPLY_CONFLICT:
 				log.warn("Mempool: Rejecting tx {}: Pending token mints exceed maxSupply.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_STATE;
+				reasonCode = MempoolReasonCode.TOKEN_SUPPLY_CONFLICT;
 				message = "Pending token mint proposals would exceed maxSupply.";
 				break;
 			case STALE:
 				log.warn("Mempool: Rejecting tx {}: Stale (nonce mismatch in storage).",
 						txHash.toShortLogString());
 				result = MempoolAddResult.STALE;
+				reasonCode = MempoolReasonCode.NONCE_STALE;
 				message = "Transaction is stale (nonce mismatch).";
 				break;
 			case NONCE_TOO_FAR_FUTURE:
 				log.warn("Mempool: Rejecting tx {}: Nonce too far in the future.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_NONCE_TOO_FAR_FUTURE;
+				reasonCode = MempoolReasonCode.NONCE_TOO_FAR_FUTURE;
 				message = "Nonce is too far in the future.";
 				break;
 			case MEMPOOL_FULL:
 				log.warn("Mempool: Rejecting tx {}: Mempool full and fee insufficient to evict.",
 						txHash.toShortLogString());
 				result = MempoolAddResult.REJECTED_MEMPOOL_FULL;
+				reasonCode = MempoolReasonCode.MEMPOOL_CAPACITY;
 				message = "Mempool is full and fee is insufficient to evict existing transactions.";
 				break;
 			default:
 				result = MempoolAddResult.REJECTED_OTHER;
+				reasonCode = MempoolReasonCode.STORAGE_FAILURE;
 				message = "Unknown error during storage addition.";
 				break;
 		}
 		registry.counter("blockchain.mempool.add_result", "status", result.name())
 				.increment();
-		return new MempoolResult(result, message);
+		return new MempoolResult(result, reasonCode, message);
 	}
 
 	public void addTxs(@NonNull List<Tx> txs, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
@@ -454,7 +469,62 @@ public class MempoolManager {
 	/**
 	 * Public-facing result enum for addTransaction.
 	 */
-	public record MempoolResult(MempoolAddResult status, String message) {
+	public record MempoolResult(MempoolAddResult status, MempoolReasonCode reasonCode, String message) {
+		public MempoolResult(MempoolAddResult status, String message) {
+			this(status, MempoolReasonCode.fromStatus(status), message);
+		}
+	}
+
+	public enum MempoolReasonCode {
+		ACCEPTED_EXECUTABLE,
+		ACCEPTED_FUTURE_NONCE,
+		VALIDATION_STALE,
+		VALIDATION_FEE_TOO_LOW,
+		VALIDATION_GOVERNANCE_DUPLICATE,
+		VALIDATION_STATE_INVALID,
+		VALIDATION_STATELESS_INVALID,
+		VALIDATION_TRANSIENT_ERROR,
+		LAST_UNLIMITED_REQUIRED,
+		LIMITED_QUOTA_ZERO,
+		MINING_WINDOW_OUT_OF_RANGE,
+		INVALID_POLICY_TRANSITION,
+		EXECUTION_REVALIDATION_FAILED,
+		REPLACEMENT_FEE_TOO_LOW,
+		DUPLICATE_HASH,
+		GOVERNANCE_CONFLICT,
+		INSUFFICIENT_FUNDS,
+		TOKEN_SUPPLY_CONFLICT,
+		NONCE_STALE,
+		NONCE_TOO_FAR_FUTURE,
+		MEMPOOL_CAPACITY,
+		STORAGE_FAILURE;
+
+		static MempoolReasonCode fromValidation(MempoolValidator.ValidationStatus status) {
+			return switch (status) {
+				case VALID -> ACCEPTED_EXECUTABLE;
+				case STALE -> VALIDATION_STALE;
+				case FEE_TOO_LOW -> VALIDATION_FEE_TOO_LOW;
+				case GOVERNANCE_DUPLICATE -> VALIDATION_GOVERNANCE_DUPLICATE;
+				case STATE_INVALID -> VALIDATION_STATE_INVALID;
+				case STATELESS_INVALID -> VALIDATION_STATELESS_INVALID;
+				case TRANSIENT_ERROR -> VALIDATION_TRANSIENT_ERROR;
+			};
+		}
+
+		static MempoolReasonCode fromStatus(MempoolAddResult status) {
+			return switch (status) {
+				case SUCCESS -> ACCEPTED_EXECUTABLE;
+				case QUEUED -> ACCEPTED_FUTURE_NONCE;
+				case STALE -> VALIDATION_STALE;
+				case REJECTED_FEE -> VALIDATION_FEE_TOO_LOW;
+				case REJECTED_RBF -> REPLACEMENT_FEE_TOO_LOW;
+				case REJECTED_STATE -> VALIDATION_STATE_INVALID;
+				case REJECTED_DUPLICATE -> DUPLICATE_HASH;
+				case REJECTED_NONCE_TOO_FAR_FUTURE -> NONCE_TOO_FAR_FUTURE;
+				case REJECTED_MEMPOOL_FULL -> MEMPOOL_CAPACITY;
+				case REJECTED_OTHER -> STORAGE_FAILURE;
+			};
+		}
 	}
 
 	public enum MempoolAddResult {

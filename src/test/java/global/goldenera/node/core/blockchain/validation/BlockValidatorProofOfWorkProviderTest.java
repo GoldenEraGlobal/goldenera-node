@@ -70,6 +70,22 @@ class BlockValidatorProofOfWorkProviderTest {
 
 	private static final PrivateKey KEY = PrivateKey.wrap(Bytes32.fromHexString(
 			"0x0000000000000000000000000000000000000000000000000000000000000001"));
+	private static final PrivateKey OTHER_KEY = PrivateKey.wrap(Bytes32.fromHexString(
+			"0x0000000000000000000000000000000000000000000000000000000000000002"));
+
+	@Test
+	void authenticatesMinerSignatureOnlyFromMiningEconomicsActivation() {
+		ProofOfWorkProvider provider = mock(ProofOfWorkProvider.class);
+		when(provider.openVerificationHasher(anyLong(), any()))
+				.thenAnswer(invocation -> new ProofOfWorkHasher(input -> new byte[32], () -> { }));
+		BlockValidator validator = validator(provider);
+
+		assertThatCode(() -> validator.validateHeader(mockHeaderWithForeignIdentity(9)))
+				.doesNotThrowAnyException();
+		assertThatThrownBy(() -> validator.validateHeader(mockHeaderWithForeignIdentity(10)))
+				.isInstanceOf(BlockValidationException.class)
+				.hasRootCauseMessage("Miner signature does not authenticate the recovered identity");
+	}
 
 	@Test
 	@SuppressWarnings("unchecked")
@@ -207,5 +223,24 @@ class BlockValidatorProofOfWorkProviderTest {
 				.nonce(7L)
 				.build();
 		return unsigned.toBuilder().signature(KEY.sign(BlockHeaderUtil.hashForSigning(unsigned))).build();
+	}
+
+	private BlockHeader mockHeaderWithForeignIdentity(long height) {
+		BlockHeader signed = header();
+		BlockHeader result = mock(BlockHeader.class);
+		when(result.getVersion()).thenReturn(BlockVersion.V1);
+		when(result.getHeight()).thenReturn(height);
+		when(result.getTimestamp()).thenReturn(signed.getTimestamp());
+		when(result.getPreviousHash()).thenReturn(Hash.ZERO);
+		when(result.getTxRootHash()).thenReturn(Hash.ZERO);
+		when(result.getStateRootHash()).thenReturn(Hash.ZERO);
+		when(result.getDifficulty()).thenReturn(BigInteger.ONE);
+		when(result.getCoinbase()).thenReturn(KEY.getAddress());
+		when(result.getNonce()).thenReturn(7L);
+		when(result.getSignature()).thenReturn(signed.getSignature());
+		when(result.getIdentity()).thenReturn(OTHER_KEY.getAddress());
+		when(result.getHash()).thenReturn(Hash.ZERO);
+		when(result.getSize()).thenReturn(100);
+		return result;
 	}
 }

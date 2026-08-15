@@ -49,6 +49,7 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesProvider;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesSnapshot;
 import global.goldenera.node.core.node.capabilities.ProofOfWorkRuntimeMode;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Mode;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
@@ -56,6 +57,7 @@ import global.goldenera.node.core.sandbox.manifest.SandboxManifestLoader;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 
 class P2PChainIdentityPolicyTest {
 
@@ -144,6 +146,48 @@ class P2PChainIdentityPolicyTest {
 				.hasMessageContaining("does not match");
 	}
 
+	@Test
+	void productionRequiresMiningEconomicsCapabilityAtActivationButNotBeforeIt() {
+		StoredChainIdentity identity = new StoredChainIdentity(
+				StoredChainIdentity.CURRENT_FORMAT_VERSION,
+				Network.TESTNET.getCode(),
+				"testnet-production",
+				"0x" + "1".repeat(64),
+				null);
+		P2PChainIdentityPolicy policy = policy(
+				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty()),
+				identity);
+
+		assertThat(policy.validate(status(NOT_ALLOWLISTED, List.of(), 9)).mode())
+				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
+		assertThatThrownBy(() -> policy.validate(status(NOT_ALLOWLISTED, List.of(), 10)))
+				.isInstanceOf(RuntimeException.class)
+				.hasMessageContaining("mining-economics-v1");
+		assertThat(policy.validate(status(
+				NOT_ALLOWLISTED, List.of("mining-economics-v1"), 10)).mode())
+				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
+	}
+
+	@Test
+	void activatedLocalNodeRejectsLegacyPeerStillReportingPreForkHead() {
+		StoredChainIdentity identity = new StoredChainIdentity(
+				StoredChainIdentity.CURRENT_FORMAT_VERSION,
+				Network.TESTNET.getCode(),
+				"testnet-production",
+				"0x" + "1".repeat(64),
+				null);
+		SandboxRuntimeContext runtime = new SandboxRuntimeContext(
+				ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty());
+		ChainQuery chainQuery = mock(ChainQuery.class);
+		StoredBlock localHead = mock(StoredBlock.class);
+		when(localHead.getHeight()).thenReturn(10L);
+		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(localHead);
+
+		assertThatThrownBy(() -> policy(runtime, identity, chainQuery)
+				.validate(status(NOT_ALLOWLISTED, List.of(), 9)))
+				.hasMessageContaining("mining-economics-v1");
+	}
+
 	private Fixture sandboxFixture() throws Exception {
 		SandboxManifestContext context = manifest();
 		StoredChainIdentity identity = new StoredChainIdentity(
@@ -160,6 +204,13 @@ class P2PChainIdentityPolicyTest {
 	}
 
 	private P2PChainIdentityPolicy policy(SandboxRuntimeContext runtime, StoredChainIdentity identity) {
+		return policy(runtime, identity, null);
+	}
+
+	private P2PChainIdentityPolicy policy(
+			SandboxRuntimeContext runtime,
+			StoredChainIdentity identity,
+			ChainQuery chainQuery) {
 		NodeCapabilitiesProvider provider = mock(NodeCapabilitiesProvider.class);
 		when(provider.snapshot()).thenReturn(new NodeCapabilitiesSnapshot(
 				1,
@@ -167,7 +218,9 @@ class P2PChainIdentityPolicyTest {
 				identity,
 				ProofOfWorkRuntimeMode.DETERMINISTIC_SHA256_V1,
 				List.of("chain-identity-v1")));
-		return new P2PChainIdentityPolicy(runtime, provider);
+		return chainQuery == null
+				? new P2PChainIdentityPolicy(runtime, provider)
+				: new P2PChainIdentityPolicy(runtime, provider, chainQuery);
 	}
 
 	private SandboxManifestContext manifest() throws Exception {
@@ -181,6 +234,10 @@ class P2PChainIdentityPolicyTest {
 	}
 
 	private P2PStatusDto status(Address identity, List<String> capabilities) {
+		return status(identity, capabilities, 0);
+	}
+
+	private P2PStatusDto status(Address identity, List<String> capabilities, long height) {
 		return P2PStatusDto.builder()
 				.protocolVersion(1)
 				.nodeVersion("test")
@@ -190,7 +247,7 @@ class P2PChainIdentityPolicyTest {
 				.cumulativeDifficulty(BigInteger.ONE)
 				.bestBlockHeader(BlockHeaderImpl.builder()
 						.version(BlockVersion.V1)
-						.height(0)
+						.height(height)
 						.timestamp(Instant.EPOCH)
 						.previousHash(Hash.ZERO)
 						.txRootHash(Hash.ZERO)

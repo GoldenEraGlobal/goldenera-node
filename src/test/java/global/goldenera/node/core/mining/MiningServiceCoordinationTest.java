@@ -61,6 +61,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.PrivateKey;
 import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.enums.BlockVersion;
+import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
@@ -113,6 +114,45 @@ class MiningServiceCoordinationTest {
 			ExactOneMiningOutcome outcome = fixture.service.mineExactlyOne(new ExactOneMiningRequest(
 					Optional.empty(), Duration.ofSeconds(2))).get(2, TimeUnit.SECONDS);
 			assertThat(outcome.accepted()).isTrue();
+		}
+	}
+
+	@Test
+	void sandboxCandidateNoncePartitionsProduceUniqueSameParentCandidates() {
+		try (Fixture fixture = fixture(false)) {
+			byte[] keyBytes = new byte[PrivateKey.SIZE];
+			keyBytes[PrivateKey.SIZE - 1] = 1;
+			PrivateKey signingKey = PrivateKey.wrap(keyBytes);
+			when(fixture.privateKey.sign(any())).thenAnswer(invocation ->
+					signingKey.sign(invocation.getArgument(0)));
+			SandboxCandidateAuthoringOutcome first = fixture.service.authorSandboxCandidate(
+					Duration.ofSeconds(2), false, List.of(), 0, 2);
+			SandboxCandidateAuthoringOutcome second = fixture.service.authorSandboxCandidate(
+					Duration.ofSeconds(2), false, List.of(), 1, 2);
+
+			assertThat(first.code()).isEqualTo(SandboxCandidateAuthoringOutcome.Code.AUTHORED);
+			assertThat(second.code()).isEqualTo(SandboxCandidateAuthoringOutcome.Code.AUTHORED);
+			assertThat(first.parentHash()).isEqualTo(PARENT_HASH);
+			assertThat(second.parentHash()).isEqualTo(PARENT_HASH);
+			assertThat(first.blockHeight()).isEqualTo(12L);
+			assertThat(second.blockHeight()).isEqualTo(12L);
+			assertThat(first.block().getHeader().getNonce()).isEqualTo(0L);
+			assertThat(second.block().getHeader().getNonce()).isEqualTo(1L);
+			assertThat(first.block().getHash()).isNotEqualTo(second.block().getHash());
+			assertThat(first.block().getHeader().getSignature().validate(
+					BlockHeaderUtil.hashForSigning(first.block().getHeader()), signingKey.getAddress())).isTrue();
+			assertThat(second.block().getHeader().getSignature().validate(
+					BlockHeaderUtil.hashForSigning(second.block().getHeader()), signingKey.getAddress())).isTrue();
+		}
+	}
+
+	@Test
+	void noncePartitionsRemainDisjointAcrossWorkerChunkStarts() {
+		long secondWorkerStart = Long.MAX_VALUE / 4;
+		for (int offset = 0; offset < 17; offset++) {
+			assertThat(Math.floorMod(MiningService.alignedNonceStart(0, offset, 17), 17)).isEqualTo(offset);
+			assertThat(Math.floorMod(
+					MiningService.alignedNonceStart(secondWorkerStart, offset, 17), 17)).isEqualTo(offset);
 		}
 	}
 
@@ -543,6 +583,7 @@ class MiningServiceCoordinationTest {
 		try {
 			when(assembler.createBlockTemplate(parentBlock, reservation)).thenReturn(Optional.of(assembled));
 			when(assembler.createBlockTemplate(parentBlock)).thenReturn(Optional.of(assembled));
+			when(assembler.createSandboxCandidateTemplate(parentBlock, reservation)).thenReturn(Optional.of(assembled));
 		} catch (Exception e) {
 			throw new AssertionError(e);
 		}

@@ -26,7 +26,10 @@ package global.goldenera.node.core.sandbox.control;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,17 +37,21 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import org.slf4j.LoggerFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.core.blockchain.pow.DeterministicSha256ProofOfWorkProvider;
@@ -53,8 +60,11 @@ import global.goldenera.node.core.mining.AutonomousMiningState;
 import global.goldenera.node.core.mining.ExactOneMiningOutcome;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.mining.MiningSuspensionReason;
+import global.goldenera.node.core.mining.SandboxCandidateAuthoringOutcome;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AutonomousRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatchRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactOneRequest;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestLoader;
@@ -114,6 +124,17 @@ class SandboxControlServiceTest {
 	}
 
 	@Test
+	void capabilitiesAdvertiseEveryCandidateAndRuntimeDiagnosticOperation() {
+		assertThat(service.capabilities().actions()).contains(
+				"AUTHOR_CANDIDATE_WITHOUT_INGESTION",
+				"AUTHOR_CANDIDATES_WITHOUT_INGESTION",
+				"READ_BLOCK_INGESTION",
+				"READ_SYNC_RUNTIME",
+				"READ_POW_RUNTIME",
+				"READ_EQUIVOCATION_RUNTIME");
+	}
+
+	@Test
 	void exactOneIsAsyncIdempotentAndPermitIsHeldUntilTerminalCompletion() {
 		CompletableFuture<ExactOneMiningOutcome> pending = new CompletableFuture<>();
 		when(miningService.mineExactlyOne(any())).thenReturn(pending);
@@ -154,6 +175,89 @@ class SandboxControlServiceTest {
 		when(miningService.mineExactlyOne(any())).thenReturn(new CompletableFuture<>());
 		assertThat(service.submitExactOne("second-key", body).operation().operationId())
 				.isNotEqualTo(first.operation().operationId());
+	}
+
+	@Test
+	void candidateAuthoringRequiresExplicitBypassAndQuiescentSandboxMining() {
+		assertThatThrownBy(() -> service.authorCandidate(new CandidateRequest(30_000L, false, false, List.of())))
+				.isInstanceOf(SandboxControlException.class)
+				.extracting("code").isEqualTo("INVALID_CANDIDATE_REQUEST");
+
+		when(miningService.getAutonomousMiningState()).thenReturn(new AutonomousMiningState(
+				true, false, false, false, false, EnumSet.noneOf(MiningSuspensionReason.class)));
+		assertThatThrownBy(() -> service.authorCandidate(new CandidateRequest(30_000L, true, false, List.of())))
+				.isInstanceOf(SandboxControlException.class)
+				.extracting("code").isEqualTo("MINING_NOT_QUIESCENT");
+
+		when(miningService.getAutonomousMiningState()).thenReturn(new AutonomousMiningState(
+				true, false, false, false, false, EnumSet.of(MiningSuspensionReason.SANDBOX_CONTROL)));
+		assertThatThrownBy(() -> service.authorCandidate(
+				new CandidateRequest(30_000L, true, true, List.of("not-base64"))))
+				.isInstanceOf(SandboxControlException.class)
+				.extracting("code").isEqualTo("INVALID_RETAINED_TRANSACTIONS");
+		when(miningService.authorSandboxCandidate(Duration.ofSeconds(30), false, List.of(), 0, 1)).thenReturn(
+				new SandboxCandidateAuthoringOutcome(
+						SandboxCandidateAuthoringOutcome.Code.TIMED_OUT, null, 11L, null));
+
+		assertThat(service.authorCandidate(new CandidateRequest(30_000L, true, false, List.of())))
+				.extracting("code", "blockHeight", "canonicalBlockBase64")
+				.containsExactly("TIMED_OUT", 11L, null);
+		verify(miningService).authorSandboxCandidate(Duration.ofSeconds(30), false, List.of(), 0, 1);
+	}
+
+	@Test
+	void candidateBatchPartitionsNonceSearchDeterministically() {
+		when(miningService.getAutonomousMiningState()).thenReturn(new AutonomousMiningState(
+				true, false, false, false, false, EnumSet.of(MiningSuspensionReason.SANDBOX_CONTROL)));
+		when(miningService.authorSandboxCandidate(any(Duration.class), eq(false), eq(List.of()), eq(0), eq(2))).thenReturn(
+				new SandboxCandidateAuthoringOutcome(
+						SandboxCandidateAuthoringOutcome.Code.TIMED_OUT, null, 11L, null));
+		when(miningService.authorSandboxCandidate(any(Duration.class), eq(false), eq(List.of()), eq(1), eq(2))).thenReturn(
+				new SandboxCandidateAuthoringOutcome(
+						SandboxCandidateAuthoringOutcome.Code.TIMED_OUT, null, 11L, null));
+
+		var batch = service.authorCandidates(new CandidateBatchRequest(2, 30_000L, true, false, List.of()));
+
+		assertThat(batch.candidates()).hasSize(2);
+		verify(miningService).authorSandboxCandidate(any(Duration.class), eq(false), eq(List.of()), eq(0), eq(2));
+		verify(miningService).authorSandboxCandidate(any(Duration.class), eq(false), eq(List.of()), eq(1), eq(2));
+	}
+
+	@Test
+	void candidateBatchPartitionsCapacityPlusOneSearchesWithoutReuse() {
+		int count = 17;
+		when(miningService.getAutonomousMiningState()).thenReturn(new AutonomousMiningState(
+				true, false, false, false, false, EnumSet.of(MiningSuspensionReason.SANDBOX_CONTROL)));
+		when(miningService.authorSandboxCandidate(
+				any(Duration.class), eq(false), eq(List.of()), anyInt(), eq(count))).thenReturn(
+				new SandboxCandidateAuthoringOutcome(
+						SandboxCandidateAuthoringOutcome.Code.TIMED_OUT, null, 11L, null));
+
+		var batch = service.authorCandidates(new CandidateBatchRequest(count, 30_000L, true, false, List.of()));
+
+		assertThat(batch.candidates()).hasSize(count);
+		ArgumentCaptor<Integer> offsets = ArgumentCaptor.forClass(Integer.class);
+		ArgumentCaptor<Duration> deadlines = ArgumentCaptor.forClass(Duration.class);
+		verify(miningService, times(count)).authorSandboxCandidate(
+				deadlines.capture(), eq(false), eq(List.of()), offsets.capture(), eq(count));
+		assertThat(offsets.getAllValues()).containsExactlyElementsOf(
+				IntStream.range(0, count).boxed().toList());
+		assertThat(deadlines.getAllValues()).allSatisfy(deadline -> {
+			assertThat(deadline).isGreaterThan(Duration.ZERO);
+			assertThat(deadline).isLessThanOrEqualTo(Duration.ofSeconds(30));
+		});
+		for (int index = 1; index < deadlines.getAllValues().size(); index++) {
+			assertThat(deadlines.getAllValues().get(index))
+					.isLessThanOrEqualTo(deadlines.getAllValues().get(index - 1));
+		}
+	}
+
+	@Test
+	void candidateBatchRejectsCountsAboveBoundBeforeMining() {
+		assertThatThrownBy(() -> service.authorCandidates(
+				new CandidateBatchRequest(65, 30_000L, true, false, List.of())))
+				.isInstanceOf(SandboxControlException.class)
+				.extracting("code").isEqualTo("INVALID_CANDIDATE_BATCH");
 	}
 
 	@Test

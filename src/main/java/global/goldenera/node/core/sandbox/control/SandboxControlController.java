@@ -42,6 +42,10 @@ import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AuditPage;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AutonomousRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AutonomousState;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Capabilities;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Candidate;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatch;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatchRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactOneRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Operation;
 import global.goldenera.node.core.sandbox.control.SandboxControlService.Submission;
@@ -83,6 +87,16 @@ public class SandboxControlController {
 		Submission submission = service.submitExactOne(idempotencyKey, request);
 		URI location = URI.create("/api/sandbox/v1/control/requests/" + submission.operation().operationId());
 		return ResponseEntity.accepted().location(location).body(submission.operation());
+	}
+
+	@PostMapping(path = "/author-candidate", consumes = "application/json")
+	Candidate authorCandidate(@RequestBody CandidateRequest request) {
+		return service.authorCandidate(request);
+	}
+
+	@PostMapping(path = "/author-candidates", consumes = "application/json")
+	CandidateBatch authorCandidates(@RequestBody CandidateBatchRequest request) {
+		return service.authorCandidates(request);
 	}
 
 	@GetMapping("/requests/{operationId}")

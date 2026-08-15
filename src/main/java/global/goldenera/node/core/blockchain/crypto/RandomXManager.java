@@ -155,6 +155,15 @@ public class RandomXManager {
 		return miningProperties.getMemoryMode();
 	}
 
+	public boolean isDatasetAllocated() {
+		lifecycleLock.readLock().lock();
+		try {
+			return currentResources != null && currentResources.dataset() != null;
+		} finally {
+			lifecycleLock.readLock().unlock();
+		}
+	}
+
 	/** Ensures mining resources correspond to the canonical RandomX epoch. */
 	public void ensureInitializedForHeight(long height) {
 		ensureResourcesForHeight(height, false);

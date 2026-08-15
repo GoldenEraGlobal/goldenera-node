@@ -42,6 +42,7 @@ import global.goldenera.node.shared.properties.GeneralProperties;
 public final class RuntimeNodeCapabilitiesProvider implements NodeCapabilitiesProvider {
 
 	private static final String CONTROL_ENABLED = "ge.sandbox.control-api.enabled";
+	public static final String MINING_ECONOMICS_V1 = "mining-economics-v1";
 
 	private final SandboxRuntimeContext runtimeContext;
 	private final AuthoritativeChainIdentityProvider identityProvider;
@@ -71,6 +72,7 @@ public final class RuntimeNodeCapabilitiesProvider implements NodeCapabilitiesPr
 		TreeSet<String> capabilities = new TreeSet<>();
 		capabilities.add("chain-identity-v1");
 		capabilities.add("core-readiness-v1");
+		capabilities.add(MINING_ECONOMICS_V1);
 		capabilities.add(switch (proofOfWorkMode) {
 			case RANDOMX_FULL -> "pow-randomx-full";
 			case RANDOMX_LIGHT -> "pow-randomx-light";
