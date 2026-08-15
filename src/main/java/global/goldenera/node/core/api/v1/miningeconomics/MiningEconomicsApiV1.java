@@ -32,7 +32,7 @@ import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.CoreApiSecurity;
 import lombok.RequiredArgsConstructor;
 
-@RestController
+@RestController("coreMiningEconomicsApiV1")
 @RequiredArgsConstructor
 @RequestMapping("/api/core/v1/blockchain/worldstate/mining-economics")
 public class MiningEconomicsApiV1 {

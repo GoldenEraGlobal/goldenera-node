@@ -44,7 +44,7 @@ import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.security.ExplorerApiSecurity;
 import lombok.RequiredArgsConstructor;
 
-@RestController
+@RestController("explorerMiningEconomicsApiV1")
 @RequiredArgsConstructor
 @ExplorerApiSecurity(ApiKeyPermission.READ_VALIDATOR)
 @RequestMapping("/api/explorer/v1/mining-economics")
