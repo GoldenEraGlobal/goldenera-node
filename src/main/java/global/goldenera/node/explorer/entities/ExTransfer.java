@@ -121,4 +121,7 @@ public class ExTransfer {
 	@Column(name = "message", nullable = true, updatable = false, columnDefinition = "BYTEA")
 	@Convert(converter = BytesConverter.class)
 	Bytes message;
+
+	@Column(name = "unlock_block_height", nullable = true, updatable = false)
+	Long unlockBlockHeight;
 }

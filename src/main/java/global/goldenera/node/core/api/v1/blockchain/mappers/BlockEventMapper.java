@@ -90,9 +90,10 @@ public class BlockEventMapper {
         public BlockEventDtoV1 map(BlockEvent event) {
                 return switch (event) {
                         case BlockReward e -> new BlockRewardDto(
-                                        e.minerAddress(),
-                                        e.rewardPoolAddress(),
-                                        e.amount());
+	                                        e.minerAddress(),
+	                                        e.rewardPoolAddress(),
+	                                        e.amount(),
+	                                        e.unlockBlockHeight());
 
                         case FeesCollected e -> new FeesCollectedDto(
                                         e.minerAddress(),

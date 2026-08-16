@@ -103,6 +103,7 @@ public class ExIndexerRevertService {
 				    UPDATE explorer_account_balance b
 				    SET
 				        balance = (l.old_value->>'b')::numeric,
+				        locked_mining_reward = COALESCE((l.old_value->>'lmr')::numeric, 0),
 				        updated_at_block_height = (l.old_value->>'uh')::bigint,
 				        updated_at_timestamp = (l.old_value->>'ut')::timestamp,
 						account_balance_version = (l.old_value->>'ver')::integer
@@ -343,6 +344,7 @@ public class ExIndexerRevertService {
 				        current_authority_count = (l.old_value->>'auth_cnt')::bigint,
 				        current_validator_count = (l.old_value->>'val_cnt')::bigint,
 				        validator_mining_window_blocks = (l.old_value->>'window')::bigint,
+				        mining_reward_vesting_blocks = (l.old_value->>'reward_vesting')::bigint,
 				        current_unlimited_validator_count = (l.old_value->>'unlimited_cnt')::bigint,
 				        updated_by_tx_hash = decode(replace(l.old_value->>'utx', '0x', ''), 'hex'),
 

@@ -151,8 +151,9 @@ public class BlockStateTransitions {
 				blockEvents = blockEventExtractor.extractEvents(
 						blockRewardFromPool,
 						totalFees,
-						block.getHeader().getCoinbase(),
-						worldState.getParams().getBlockRewardPoolAddress(),
+							block.getHeader().getCoinbase(),
+							executionResult.getMinerRewardPoolAddress(),
+							executionResult.getMinerRewardUnlockBlockHeight(),
 						worldState.getBipDiffs(),
 						worldState.getTokenDiffs(),
 						executionResult.getActualBurnAmounts(),

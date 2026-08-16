@@ -23,43 +23,50 @@
  */
 package global.goldenera.node.core.storage.blockchain.serialization.events;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.ethereum.Wei;
+import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
+import global.goldenera.rlp.RLP;
 import global.goldenera.rlp.RLPInput;
-import global.goldenera.rlp.RLPOutput;
 
-public class BlockRewardCodec implements BlockEventCodec<BlockReward> {
+class BlockRewardCodecTest {
 
-    public static final BlockRewardCodec INSTANCE = new BlockRewardCodec();
+	private static final Address MINER = Address.fromHexString("0x0000000000000000000000000000000000000001");
+	private static final Address POOL = Address.fromHexString("0x0000000000000000000000000000000000000002");
 
-    @Override
-	    public int currentVersion() {
-	        return 2;
-    }
+	@Test
+	void v2RoundTripPreservesUnlockBlockHeight() {
+		BlockReward expected = new BlockReward(MINER, POOL, Wei.valueOf(25), 123L);
 
-    @Override
-    public void encode(RLPOutput out, BlockReward event, int version) {
-        out.writeBytes(event.minerAddress());
-        out.writeBytes(event.rewardPoolAddress());
-	        out.writeWeiScalar(event.amount());
-		if (version >= 2) {
-			out.writeOptionalLongScalar(event.unlockBlockHeight());
-		}
-    }
+		assertThat(roundTrip(expected, 2)).isEqualTo(expected);
+	}
 
-    @Override
-    public BlockReward decode(RLPInput input, int version) {
-        Address minerAddress = Address.wrap(input.readBytes());
-        Address rewardPoolAddress = Address.wrap(input.readBytes());
-	        Wei amount = input.readWeiScalar();
-		Long unlockBlockHeight = version >= 2 ? input.readOptionalLongScalar() : null;
-	        return new BlockReward(minerAddress, rewardPoolAddress, amount, unlockBlockHeight);
-    }
+	@Test
+	void v1DecodeLeavesUnlockBlockHeightUnknown() {
+		BlockReward decoded = roundTrip(new BlockReward(MINER, POOL, Wei.valueOf(25), 123L), 1);
 
-    @Override
-    public boolean supportsVersion(int version) {
-	        return version == 1 || version == 2;
-    }
+		assertThat(decoded.minerAddress()).isEqualTo(MINER);
+		assertThat(decoded.rewardPoolAddress()).isEqualTo(POOL);
+		assertThat(decoded.amount()).isEqualTo(Wei.valueOf(25));
+		assertThat(decoded.unlockBlockHeight()).isNull();
+		assertThat(roundTrip(decoded, 2)).isEqualTo(decoded);
+	}
+
+	private BlockReward roundTrip(BlockReward event, int version) {
+		Bytes encoded = RLP.encode(out -> {
+			out.startList();
+			BlockRewardCodec.INSTANCE.encode(out, event, version);
+			out.endList();
+		});
+		RLPInput input = RLP.input(encoded);
+		input.enterList();
+		BlockReward decoded = BlockRewardCodec.INSTANCE.decode(input, version);
+		input.leaveList();
+		return decoded;
+	}
 }

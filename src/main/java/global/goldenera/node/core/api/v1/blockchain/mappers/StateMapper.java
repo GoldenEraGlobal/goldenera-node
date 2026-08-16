@@ -83,7 +83,9 @@ public class StateMapper {
     public AccountBalanceStateDtoV1 map(@NonNull AccountBalanceState in) {
         return AccountBalanceStateDtoV1.builder()
                 .version(in.getVersion())
-                .balance(in.getBalance())
+	                .balance(in.getBalance())
+				.lockedMiningReward(in.getLockedMiningReward())
+				.spendableBalance(in.getSpendableBalance())
                 .updatedAtBlockHeight(in.getUpdatedAtBlockHeight())
                 .updatedAtTimestamp(in.getUpdatedAtTimestamp())
                 .build();
@@ -172,9 +174,12 @@ public class StateMapper {
                 .minTxByteFee(in.getMinTxByteFee())
                 .currentAuthorityCount(in.getCurrentAuthorityCount())
                 .currentValidatorCount(in.getCurrentValidatorCount())
-                .validatorMiningWindowBlocks(in.getVersion() == NetworkParamsStateVersion.V2
-                        ? in.getValidatorMiningWindowBlocks()
-                        : null)
+	                .validatorMiningWindowBlocks(in.getVersion() == NetworkParamsStateVersion.V2
+	                        ? in.getValidatorMiningWindowBlocks()
+	                        : null)
+				.miningRewardVestingBlocks(in.getVersion() == NetworkParamsStateVersion.V2
+						? in.getMiningRewardVestingBlocks()
+						: null)
                 .currentUnlimitedValidatorCount(in.getCurrentUnlimitedValidatorCount())
                 .updatedByTxHash(in.getUpdatedByTxHash())
                 .updatedAtBlockHeight(in.getUpdatedAtBlockHeight())
@@ -288,7 +293,8 @@ public class StateMapper {
                 d.setMinDifficulty(p.getMinDifficulty());
                 d.setMinTxBaseFee(p.getMinTxBaseFee());
                 d.setMinTxByteFee(p.getMinTxByteFee());
-                d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
+	                d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
+				d.setMiningRewardVestingBlocks(p.getMiningRewardVestingBlocks());
                 yield d;
             }
             case TxBipTokenBurnPayload p -> {

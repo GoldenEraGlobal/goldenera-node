@@ -29,6 +29,7 @@
     "bipExpirationPeriodMs": 86400000,
     "bipApprovalThresholdBps": 5100,
     "validatorMiningWindowBlocks": 100,
+    "miningRewardVestingBlocks": 10,
     "minTransactionByteFee": 1,
     "minTransactionBaseFee": 10,
     "minDifficulty": 2500,

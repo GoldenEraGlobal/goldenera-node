@@ -57,7 +57,8 @@ public class TransferMapper {
 				in.getAmount(),
 				in.getFee(),
 				in.getNonce(),
-				in.getMessage());
+				in.getMessage(),
+				in.getUnlockBlockHeight());
 	}
 
 	public List<TransferDtoV1> map(@NonNull List<ExTransfer> in) {

@@ -226,6 +226,7 @@ public abstract sealed class TxPayloadDtoV1 permits
         Wei minTxBaseFee;
         Wei minTxByteFee;
         Long validatorMiningWindowBlocks;
+        Long miningRewardVestingBlocks;
 
         @Override
         @JsonProperty("payloadType")

@@ -106,8 +106,8 @@ class MiningEconomicsLiquibaseMigrationTest {
 		try (ClassLoaderResourceAccessor resources = new ClassLoaderResourceAccessor();
 				Liquibase liquibase = new Liquibase(MASTER_CHANGELOG, resources, database)) {
 			// Roll back bridge delivery, API-key webhook secret, and chain identity,
-			// plus the two mining-economics changesets asserted by this test.
-			liquibase.rollback(5, new Contexts(), new LabelExpression());
+			// plus the three mining-economics changesets asserted by this test.
+			liquibase.rollback(6, new Contexts(), new LabelExpression());
 		}
 	}
 
@@ -117,6 +117,23 @@ class MiningEconomicsLiquibaseMigrationTest {
 
 	private void insertLegacyRows(Connection connection) throws Exception {
 		Instant timestamp = Instant.parse("2026-01-01T00:00:00Z");
+		try (PreparedStatement balance = connection.prepareStatement("""
+				INSERT INTO explorer_account_balance
+				(address, token_address, balance, created_at_block_height, created_at_timestamp,
+				 updated_at_block_height, updated_at_timestamp, account_balance_version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				""")) {
+			balance.setBytes(1, new byte[20]);
+			balance.setBytes(2, new byte[20]);
+			balance.setLong(3, 123);
+			balance.setLong(4, 7);
+			balance.setObject(5, timestamp);
+			balance.setLong(6, 7);
+			balance.setObject(7, timestamp);
+			balance.setInt(8, 1);
+			balance.executeUpdate();
+		}
+
 		try (PreparedStatement validator = connection.prepareStatement("""
 				INSERT INTO explorer_validator
 				(address, created_at_block_height, created_at_timestamp, origin_tx_hash, validator_version)
@@ -164,9 +181,25 @@ class MiningEconomicsLiquibaseMigrationTest {
 				.isEqualTo(expected);
 		assertThat(columnExists(connection, "explorer_network_params", "current_unlimited_validator_count"))
 				.isEqualTo(expected);
+		assertThat(columnExists(connection, "explorer_network_params", "mining_reward_vesting_blocks"))
+				.isEqualTo(expected);
+		assertThat(columnExists(connection, "explorer_account_balance", "locked_mining_reward"))
+				.isEqualTo(expected);
+		assertThat(columnExists(connection, "explorer_transfer", "unlock_block_height"))
+				.isEqualTo(expected);
 	}
 
 	private void assertLegacyRowsRemainNullable(Connection connection) throws Exception {
+		try (Statement statement = connection.createStatement();
+				ResultSet balance = statement.executeQuery("""
+						SELECT balance, locked_mining_reward
+						FROM explorer_account_balance
+						""")) {
+			assertThat(balance.next()).isTrue();
+			assertThat(balance.getLong(1)).isEqualTo(123);
+			assertThat(balance.getLong(2)).isZero();
+		}
+
 		try (Statement statement = connection.createStatement();
 				ResultSet validator = statement.executeQuery("""
 						SELECT mining_limit_mode, mining_policy_source, max_mining_share_bps,
@@ -182,12 +215,14 @@ class MiningEconomicsLiquibaseMigrationTest {
 
 		try (Statement statement = connection.createStatement();
 				ResultSet params = statement.executeQuery("""
-						SELECT validator_mining_window_blocks, current_unlimited_validator_count
+						SELECT validator_mining_window_blocks, current_unlimited_validator_count,
+						       mining_reward_vesting_blocks
 						FROM explorer_network_params
 						""")) {
 			assertThat(params.next()).isTrue();
 			assertThat(params.getObject(1)).isNull();
 			assertThat(params.getObject(2)).isNull();
+			assertThat(params.getObject(3)).isNull();
 		}
 	}
 

@@ -536,9 +536,11 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					serialization.bipStateDeserializer(),
 					serialization.networkParamsSerializer(),
 					serialization.networkParamsDeserializer(),
-					serialization.miningWindowSerializer(),
-					serialization.miningWindowDeserializer(),
-					serialization.tokenSerializer(),
+						serialization.miningWindowSerializer(),
+						serialization.miningWindowDeserializer(),
+						serialization.miningRewardMaturitySerializer(),
+						serialization.miningRewardMaturityDeserializer(),
+						serialization.tokenSerializer(),
 					serialization.tokenDeserializer());
 
 			ValidatorMiningPolicyService policyService = new ValidatorMiningPolicyService();

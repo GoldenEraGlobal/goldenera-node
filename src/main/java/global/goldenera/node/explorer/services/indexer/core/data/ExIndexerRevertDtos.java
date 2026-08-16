@@ -50,13 +50,18 @@ import global.goldenera.node.shared.enums.MiningPolicySource;
 public class ExIndexerRevertDtos {
 
 	public static record BalanceRevertDto(
-			@JsonProperty("b") BigDecimal balance,
+				@JsonProperty("b") BigDecimal balance,
+				@JsonProperty("lmr") BigDecimal lockedMiningReward,
 			@JsonProperty("uh") long updatedAtBlockHeight,
 			@JsonProperty("ut") Instant updatedAtTimestamp,
 			@JsonProperty("ver") int version) {
-		public static BalanceRevertDto from(Wei balance, long uh, Instant ut, AccountBalanceStateVersion v) {
-			return new BalanceRevertDto(new BigDecimal(balance.toBigInteger()), uh, ut, v.getCode());
-		}
+			public static BalanceRevertDto from(Wei balance, Wei lockedMiningReward, long uh, Instant ut,
+					AccountBalanceStateVersion v) {
+				return new BalanceRevertDto(
+						new BigDecimal(balance.toBigInteger()),
+						new BigDecimal(lockedMiningReward.toBigInteger()),
+						uh, ut, v.getCode());
+			}
 	}
 
 	public static record NonceRevertDto(
@@ -172,6 +177,7 @@ public class ExIndexerRevertDtos {
 			@JsonProperty("auth_cnt") long currentAuthorityCount,
 			@JsonProperty("val_cnt") long currentValidatorCount,
 			@JsonProperty("window") Long validatorMiningWindowBlocks,
+			@JsonProperty("reward_vesting") Long miningRewardVestingBlocks,
 			@JsonProperty("unlimited_cnt") Long currentUnlimitedValidatorCount,
 			@JsonProperty("utx") String updatedByTxHashHex,
 			@JsonProperty("uh") long updatedAtBlockHeight,
@@ -191,6 +197,7 @@ public class ExIndexerRevertDtos {
 					state.getCurrentAuthorityCount(),
 					state.getCurrentValidatorCount(),
 					explicit ? state.getValidatorMiningWindowBlocks() : null,
+					explicit ? state.getMiningRewardVestingBlocks() : null,
 					explicit ? state.getCurrentUnlimitedValidatorCount() : null,
 					state.getUpdatedByTxHash().toHexString(),
 					state.getUpdatedAtBlockHeight(),

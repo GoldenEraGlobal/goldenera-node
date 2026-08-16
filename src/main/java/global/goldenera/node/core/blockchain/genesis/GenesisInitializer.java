@@ -111,7 +111,8 @@ public class GenesisInitializer {
 		if (miningEconomicsAtGenesis) {
 			paramsBuilder
 					.currentUnlimitedValidatorCount(validators.size())
-					.validatorMiningWindowBlocks(settings.genesisNetworkValidatorMiningWindowBlocks());
+					.validatorMiningWindowBlocks(settings.genesisNetworkValidatorMiningWindowBlocks())
+					.miningRewardVestingBlocks(settings.genesisNetworkMiningRewardVestingBlocks());
 		}
 		NetworkParamsStateImpl params = paramsBuilder.build();
 		worldState.setParams(params);

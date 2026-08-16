@@ -34,6 +34,7 @@ import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.AddressAliasState;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.MiningRewardMaturityState;
 import global.goldenera.cryptoj.common.state.MiningWindowState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
@@ -48,6 +49,8 @@ import global.goldenera.cryptoj.serialization.state.authority.AuthorityStateDeco
 import global.goldenera.cryptoj.serialization.state.authority.AuthorityStateEncoder;
 import global.goldenera.cryptoj.serialization.state.bip.BipStateDecoder;
 import global.goldenera.cryptoj.serialization.state.bip.BipStateEncoder;
+import global.goldenera.cryptoj.serialization.state.miningrewardmaturity.MiningRewardMaturityStateDecoder;
+import global.goldenera.cryptoj.serialization.state.miningrewardmaturity.MiningRewardMaturityStateEncoder;
 import global.goldenera.cryptoj.serialization.state.miningwindow.MiningWindowStateDecoder;
 import global.goldenera.cryptoj.serialization.state.miningwindow.MiningWindowStateEncoder;
 import global.goldenera.cryptoj.serialization.state.networkparams.NetworkParamsStateDecoder;
@@ -148,6 +151,16 @@ public class WorldStateSerialization {
 	@Bean
 	public Function<Bytes, MiningWindowState> miningWindowDeserializer() {
 		return MiningWindowStateDecoder.INSTANCE::decode;
+	}
+
+	@Bean
+	public Function<MiningRewardMaturityState, Bytes> miningRewardMaturitySerializer() {
+		return MiningRewardMaturityStateEncoder.INSTANCE::encode;
+	}
+
+	@Bean
+	public Function<Bytes, MiningRewardMaturityState> miningRewardMaturityDeserializer() {
+		return MiningRewardMaturityStateDecoder.INSTANCE::decode;
 	}
 
 	@Bean

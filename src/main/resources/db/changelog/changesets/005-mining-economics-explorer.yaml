@@ -57,10 +57,43 @@ databaseChangeLog:
               - column:
                   name: current_unlimited_validator_count
                   type: BIGINT
+              - column:
+                  name: mining_reward_vesting_blocks
+                  type: BIGINT
       rollback:
+        - dropColumn:
+            tableName: explorer_network_params
+            columnName: mining_reward_vesting_blocks
         - dropColumn:
             tableName: explorer_network_params
             columnName: current_unlimited_validator_count
         - dropColumn:
             tableName: explorer_network_params
             columnName: validator_mining_window_blocks
+
+  - changeSet:
+      id: 005-mining-economics-reward-vesting
+      author: goldenera
+      changes:
+        - addColumn:
+            tableName: explorer_account_balance
+            columns:
+              - column:
+                  name: locked_mining_reward
+                  type: NUMERIC(80, 0)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+        - addColumn:
+            tableName: explorer_transfer
+            columns:
+              - column:
+                  name: unlock_block_height
+                  type: BIGINT
+      rollback:
+        - dropColumn:
+            tableName: explorer_transfer
+            columnName: unlock_block_height
+        - dropColumn:
+            tableName: explorer_account_balance
+            columnName: locked_mining_reward

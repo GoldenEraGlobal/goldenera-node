@@ -37,6 +37,7 @@ import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.AddressAliasState;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.MiningRewardMaturityState;
 import global.goldenera.cryptoj.common.state.MiningWindowState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
@@ -67,6 +68,8 @@ public class WorldStateFactory {
 	public static final Bytes KEY_BIP_STATE = Bytes.wrap("bipstate".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_NETWORK_PARAMS = Bytes.wrap("network_params".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_MINING_WINDOW = Bytes.wrap("mining_window".getBytes(StandardCharsets.UTF_8));
+	public static final Bytes KEY_MINING_REWARD_MATURITY = Bytes.wrap(
+			"mining_reward_maturity".getBytes(StandardCharsets.UTF_8));
 	public static final Bytes KEY_TOKEN = Bytes.wrap("token".getBytes(StandardCharsets.UTF_8));
 
 	Function<Bytes, Bytes> rootStateSerializer;
@@ -95,6 +98,9 @@ public class WorldStateFactory {
 
 	Function<MiningWindowState, Bytes> miningWindowSerializer;
 	Function<Bytes, MiningWindowState> miningWindowDeserializer;
+
+	Function<MiningRewardMaturityState, Bytes> miningRewardMaturitySerializer;
+	Function<Bytes, MiningRewardMaturityState> miningRewardMaturityDeserializer;
 
 	Function<TokenState, Bytes> tokenSerializer;
 	Function<Bytes, TokenState> tokenDeserializer;
@@ -157,6 +163,11 @@ public class WorldStateFactory {
 		MerkleTrie<Bytes, MiningWindowState> miningWindowTrie = loadSubTrie(
 				mainTrie, KEY_MINING_WINDOW, nodeLoader, miningWindowSerializer, miningWindowDeserializer);
 
+		boolean miningRewardMaturityTriePresent = mainTrie.get(KEY_MINING_REWARD_MATURITY).isPresent();
+		MerkleTrie<Bytes, MiningRewardMaturityState> miningRewardMaturityTrie = loadSubTrie(
+				mainTrie, KEY_MINING_REWARD_MATURITY, nodeLoader,
+				miningRewardMaturitySerializer, miningRewardMaturityDeserializer);
+
 		MerkleTrie<Bytes, TokenState> tokenTrie = loadSubTrie(
 				mainTrie, KEY_TOKEN, nodeLoader, tokenSerializer, tokenDeserializer);
 
@@ -173,6 +184,8 @@ public class WorldStateFactory {
 				networkParamsTrie,
 				miningWindowTrie,
 				miningWindowTriePresent,
+				miningRewardMaturityTrie,
+				miningRewardMaturityTriePresent,
 				tokenTrie);
 	}
 

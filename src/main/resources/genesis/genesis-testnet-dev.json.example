@@ -20,7 +20,8 @@
     "minDifficulty": "500",
     "minTxBaseFee": "100000",
     "minTxByteFee": "1000",
-    "validatorMiningWindowBlocks": 100
+    "validatorMiningWindowBlocks": 100,
+    "miningRewardVestingBlocks": 10
   },
   "authorities": [
     "0x4B5C9d7CcB07466d658c2a67740b2D3D80D3CA76"

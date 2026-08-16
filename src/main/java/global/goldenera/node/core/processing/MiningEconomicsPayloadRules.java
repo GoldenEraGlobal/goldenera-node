@@ -80,6 +80,8 @@ public final class MiningEconomicsPayloadRules {
 					"NetworkParamsSet V2 is not active before MINING_ECONOMICS");
 			checkArgument(payload.getValidatorMiningWindowBlocks() == null,
 					"Legacy NetworkParamsSet cannot contain a mining window");
+			checkArgument(payload.getMiningRewardVestingBlocks() == null,
+					"Legacy NetworkParamsSet cannot contain mining reward vesting");
 			return;
 		}
 
@@ -87,6 +89,9 @@ public final class MiningEconomicsPayloadRules {
 				"NetworkParamsSet V2 is required after MINING_ECONOMICS");
 		if (payload.getValidatorMiningWindowBlocks() != null) {
 			MiningConsensusRules.validateWindowSize(payload.getValidatorMiningWindowBlocks());
+		}
+		if (payload.getMiningRewardVestingBlocks() != null) {
+			MiningConsensusRules.validateMiningRewardVestingBlocks(payload.getMiningRewardVestingBlocks());
 		}
 	}
 

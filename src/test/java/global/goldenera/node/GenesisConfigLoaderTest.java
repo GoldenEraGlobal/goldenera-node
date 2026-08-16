@@ -44,11 +44,17 @@ class GenesisConfigLoaderTest {
 		JsonNode testnet = productionGenesis("genesis/genesis-testnet-prod.json");
 		((ObjectNode) mainnet.get("networkParams")).remove("validatorMiningWindowBlocks");
 		((ObjectNode) testnet.get("networkParams")).remove("validatorMiningWindowBlocks");
+		((ObjectNode) mainnet.get("networkParams")).remove("miningRewardVestingBlocks");
+		((ObjectNode) testnet.get("networkParams")).remove("miningRewardVestingBlocks");
 
 		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(mainnet, Network.MAINNET)
 				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(1_000);
 		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(testnet, Network.TESTNET)
 				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(100);
+		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(mainnet, Network.MAINNET)
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
+		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(testnet, Network.TESTNET)
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
 	}
 
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -59,6 +65,10 @@ class GenesisConfigLoaderTest {
 				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(1000);
 		assertThat(GenesisConfigLoader.loadGenesisSettings(Network.TESTNET, "prod")
 				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(100);
+		assertThat(GenesisConfigLoader.loadGenesisSettings(Network.MAINNET, "prod")
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
+		assertThat(GenesisConfigLoader.loadGenesisSettings(Network.TESTNET, "prod")
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
 	}
 
 	@Test
@@ -97,6 +107,21 @@ class GenesisConfigLoaderTest {
 		assertThatThrownBy(() -> GenesisConfigLoader.parseGenesisSettings(root))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("consensus long field");
+	}
+
+	@Test
+	void miningRewardVestingIsRequiredAndValidated() throws Exception {
+		JsonNode missing = productionMainnet();
+		((ObjectNode) missing.get("networkParams")).remove("miningRewardVestingBlocks");
+		assertThatThrownBy(() -> GenesisConfigLoader.parseGenesisSettings(missing))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("miningRewardVestingBlocks");
+
+		JsonNode invalid = productionMainnet();
+		((ObjectNode) invalid.get("networkParams")).put("miningRewardVestingBlocks", -1);
+		assertThatThrownBy(() -> GenesisConfigLoader.parseGenesisSettings(invalid))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("Invalid networkParams.miningRewardVestingBlocks");
 	}
 
 	private JsonNode productionMainnet() throws Exception {

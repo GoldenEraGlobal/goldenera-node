@@ -130,8 +130,10 @@ public abstract sealed class BlockEventDtoV1 permits
         Address minerAddress;
         @Schema(description = "Reward pool address")
         Address rewardPoolAddress;
-        @Schema(description = "Reward amount")
-        Wei amount;
+	        @Schema(description = "Reward amount")
+	        Wei amount;
+		@Schema(description = "Block height at which the reward becomes spendable; null for legacy events")
+		Long unlockBlockHeight;
 
         @Override
         @JsonProperty("type")

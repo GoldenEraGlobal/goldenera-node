@@ -49,9 +49,9 @@ import global.goldenera.node.core.sandbox.manifest.SandboxManifestLoader;
 class SandboxManifestAuthoringServiceTest {
 
 	private static final String FIXTURE_HASH =
-			"0x0c89f2cc3222e9189cfc698ee3ed511023e2e83cac280772175e7c310ac1c690";
+			"0xcc97ffd200afec82890413f8bb113d9858619f65ea5f58ef6a3bcd9fc7b902df";
 	private static final String FIXTURE_FINGERPRINT =
-			"1443a3c090310cf84b849770ef117064297e1843aaa55d36779343c0ba2cd628";
+			"389180aae949eceb2103cbde98f87b484afdc7e86ddf33c4605dcf9a7e645ce3";
 
 	private final SandboxManifestAuthoringService service = new SandboxManifestAuthoringService();
 

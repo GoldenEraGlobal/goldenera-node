@@ -203,8 +203,10 @@ public class MempoolValidator {
 		switch (tx.getType()) {
 			case TRANSFER:
 				AccountBalanceState nativeBalance = worldstate.getBalance(sender, Address.NATIVE_TOKEN);
-				MempoolStore.ReservationSnapshot nativeReservation = mempoolStorage.nativeReservation(
-						sender, tx, nativeBalance.getBalance());
+				Wei projectedNativeBalance = projectedNativeSpendable(
+						worldstate, sender, nativeBalance, candidateBlockHeight);
+					MempoolStore.ReservationSnapshot nativeReservation = mempoolStorage.nativeReservation(
+							sender, tx, projectedNativeBalance);
 
 				if (!tx.getTokenAddress().equals(Address.NATIVE_TOKEN)) {
 					// Check custom token balance
@@ -221,16 +223,16 @@ public class MempoolValidator {
 					}
 				}
 				if (mode == ValidationMode.ADMISSION && !nativeReservation.affordable()) {
-					return MempoolValidationResult.invalid(insufficientFundsMessage(
-							"native", Address.NATIVE_TOKEN, nativeReservation));
+					return insufficientNativeFunds(nativeBalance, nativeReservation,
+							insufficientFundsMessage("native", Address.NATIVE_TOKEN, nativeReservation));
 				}
 				Map<Address, Wei> tokenBalances = new HashMap<>();
 				if (!Address.NATIVE_TOKEN.equals(tx.getTokenAddress())) {
 					tokenBalances.put(tx.getTokenAddress(),
 							worldstate.getBalance(sender, tx.getTokenAddress()).getBalance());
 				}
-				admissionConstraints = new MempoolStore.AdmissionConstraints(
-						nativeBalance.getBalance(), tokenBalances, null);
+					admissionConstraints = new MempoolStore.AdmissionConstraints(
+							projectedNativeBalance, tokenBalances, null);
 
 				// Early validation: Check if user is trying to burn a non-burnable token
 				if (tx.getRecipient().equals(Address.ZERO)) {
@@ -249,11 +251,14 @@ public class MempoolValidator {
 				// StateProcessor classifies governance fees as user-paid, so admission must
 				// reserve them just like transfer fees.
 				AccountBalanceState governanceBalance = worldstate.getBalance(sender, Address.NATIVE_TOKEN);
-				MempoolStore.ReservationSnapshot governanceReservation = mempoolStorage.nativeReservation(
-						sender, tx, governanceBalance.getBalance());
+				Wei projectedGovernanceBalance = projectedNativeSpendable(
+						worldstate, sender, governanceBalance, candidateBlockHeight);
+					MempoolStore.ReservationSnapshot governanceReservation = mempoolStorage.nativeReservation(
+							sender, tx, projectedGovernanceBalance);
 				if (mode == ValidationMode.ADMISSION && !governanceReservation.affordable()) {
-					return MempoolValidationResult.stateInvalid("Insufficient native funds for governance fee. "
-							+ reservationDiagnostic(governanceReservation));
+					return insufficientNativeFunds(governanceBalance, governanceReservation,
+							"Insufficient native funds for governance fee. "
+									+ reservationDiagnostic(governanceReservation));
 				}
 				if (!worldstate.getAuthority(sender).exists()) {
 					return MempoolValidationResult.stateInvalid("Sender is not an authority.");
@@ -272,7 +277,7 @@ public class MempoolValidator {
 					}
 				}
 				admissionConstraints = new MempoolStore.AdmissionConstraints(
-						governanceBalance.getBalance(), Map.of(), mintConstraint);
+						projectedGovernanceBalance, Map.of(), mintConstraint);
 				break;
 			default:
 				return MempoolValidationResult.stateInvalid("Unsupported user transaction type: " + tx.getType());
@@ -486,6 +491,20 @@ public class MempoolValidator {
 				+ reservationDiagnostic(reservation);
 	}
 
+	private MempoolValidationResult insufficientNativeFunds(AccountBalanceState balance,
+			MempoolStore.ReservationSnapshot reservation, String message) {
+		MempoolReasonCode reasonCode = reservation.required().compareTo(balance.getBalance()) <= 0
+				? MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE
+				: null;
+		return MempoolValidationResult.stateInvalid(reasonCode, message);
+	}
+
+	private Wei projectedNativeSpendable(WorldState worldState, Address sender,
+			AccountBalanceState balance, long candidateBlockHeight) {
+		Wei maturingReward = worldState.getMiningRewardMaturity(candidateBlockHeight).getRewards().get(sender);
+		return balance.getSpendableBalance().addExact(maturingReward == null ? Wei.ZERO : maturingReward);
+	}
+
 	private String reservationDiagnostic(MempoolStore.ReservationSnapshot reservation) {
 		return "available=" + reservation.available().toBigInteger()
 				+ ", reserved=" + reservation.reserved().toBigInteger()
@@ -511,12 +530,16 @@ public class MempoolValidator {
 	private MempoolReasonCode governanceValidationReason(TxPayload payload, long candidateBlockHeight) {
 		if (payload instanceof TxBipNetworkParamsSetPayload networkParams
 				&& Constants.isForkActive(ForkName.MINING_ECONOMICS, candidateBlockHeight)
-				&& networkParams.getPayloadVersion() == TxPayloadVersion.V2
-				&& networkParams.getValidatorMiningWindowBlocks() != null) {
-			long window = networkParams.getValidatorMiningWindowBlocks();
-			if (window < MiningConsensusRules.MIN_VALIDATOR_MINING_WINDOW_BLOCKS
-					|| window > MiningConsensusRules.MAX_VALIDATOR_MINING_WINDOW_BLOCKS) {
+				&& networkParams.getPayloadVersion() == TxPayloadVersion.V2) {
+			Long window = networkParams.getValidatorMiningWindowBlocks();
+			if (window != null && (window < MiningConsensusRules.MIN_VALIDATOR_MINING_WINDOW_BLOCKS
+					|| window > MiningConsensusRules.MAX_VALIDATOR_MINING_WINDOW_BLOCKS)) {
 				return MempoolReasonCode.MINING_WINDOW_OUT_OF_RANGE;
+			}
+			Long vestingBlocks = networkParams.getMiningRewardVestingBlocks();
+			if (vestingBlocks != null && (vestingBlocks < 0
+					|| vestingBlocks > MiningConsensusRules.MAX_MINING_REWARD_VESTING_BLOCKS)) {
+				return MempoolReasonCode.MINING_REWARD_VESTING_OUT_OF_RANGE;
 			}
 		}
 		return payload instanceof TxBipNetworkParamsSetPayload

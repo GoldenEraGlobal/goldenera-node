@@ -186,11 +186,15 @@ public class ValidatorMiningGovernanceService {
 		checkArgument(!state.isParamsChangedThisBlock(), "Double params change");
 		NetworkParamsStateImpl oldParams = requireParams(state, forkActive);
 		Long requestedWindow = payload.getValidatorMiningWindowBlocks();
+		Long requestedVestingBlocks = payload.getMiningRewardVestingBlocks();
 		if (requestedWindow != null) {
 			MiningConsensusRules.validateWindowSize(requestedWindow);
 			for (long bps : oldParams.getLimitedValidatorMiningSharesBps()) {
 				MiningConsensusRules.validateLimitedPolicyForWindow(requestedWindow, bps);
 			}
+		}
+		if (requestedVestingBlocks != null) {
+			MiningConsensusRules.validateMiningRewardVestingBlocks(requestedVestingBlocks);
 		}
 
 		NetworkParamsStateImpl newParams = oldParams.updateParams(
@@ -222,6 +226,7 @@ public class ValidatorMiningGovernanceService {
 	public void assertInvariant(NetworkParamsState params) {
 		checkArgument(params.getVersion() == NetworkParamsStateVersion.V2,
 				"Mining economics requires NetworkParamsState V2");
+		MiningConsensusRules.validateMiningRewardVestingBlocks(params.getMiningRewardVestingBlocks());
 		long validatorCount = params.getCurrentValidatorCount();
 		long unlimitedCount = params.getCurrentUnlimitedValidatorCount();
 		checkArgument(validatorCount >= 0, "Validator count cannot be negative");

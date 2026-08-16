@@ -53,7 +53,11 @@ public class AccountSummaryDtoV1 {
     /**
      * Native token balance.
      */
-    Wei nativeBalance;
+	    Wei nativeBalance;
+
+	Wei lockedMiningReward;
+
+	Wei spendableNativeBalance;
 
     /**
      * Current confirmed nonce (last used nonce).

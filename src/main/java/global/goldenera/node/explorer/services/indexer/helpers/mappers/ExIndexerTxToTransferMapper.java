@@ -46,6 +46,7 @@ import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.Constants;
 import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.explorer.entities.ExNetworkParams;
 import global.goldenera.node.explorer.entities.ExTransfer;
 import global.goldenera.node.explorer.enums.TransferType;
@@ -88,13 +89,25 @@ public class ExIndexerTxToTransferMapper {
 		Wei cleanBlockReward = reward.subtract(fees);
 
 		if (cleanBlockReward.compareTo(Wei.ZERO) > 0) {
+			BlockReward blockRewardEvent = event.getEvents().stream()
+					.filter(BlockReward.class::isInstance)
+					.map(BlockReward.class::cast)
+					.findFirst()
+					.orElse(null);
+			Address rewardSource = blockRewardEvent != null
+					? blockRewardEvent.rewardPoolAddress()
+					: currentRewardPool;
+			Long unlockBlockHeight = blockRewardEvent != null
+					? blockRewardEvent.unlockBlockHeight()
+					: null;
 			transfers.add(baseBuilder.build().toBuilder()
 					.txHash(null)
 					.type(TransferType.BLOCK_REWARD)
-					.from(currentRewardPool)
+					.from(rewardSource)
 					.to(block.getHeader().getCoinbase())
 					.amount(cleanBlockReward)
 					.tokenAddress(NATIVE_TOKEN_ADDRESS)
+					.unlockBlockHeight(unlockBlockHeight)
 					.build());
 		}
 

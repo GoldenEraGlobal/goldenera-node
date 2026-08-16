@@ -55,6 +55,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import global.goldenera.cryptoj.common.MiningConsensusRules;
 import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Clock;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.ClockMode;
@@ -297,10 +298,11 @@ public final class SandboxManifestLoader {
 
 	private Consensus parseConsensus(JsonNode node) {
 		String path = "$.consensus";
-		ObjectNode object = exactObject(node, path, Set.of(
-				"blockReward", "targetBlockIntervalMs", "asertHalfLifeBlocks", "minDifficulty",
-				"minTransactionBaseFee", "minTransactionByteFee", "validatorMiningWindowBlocks",
-				"bipApprovalThresholdBps", "bipExpirationPeriodMs", "maxHeaderSizeBytes",
+			ObjectNode object = exactObject(node, path, Set.of(
+					"blockReward", "targetBlockIntervalMs", "asertHalfLifeBlocks", "minDifficulty",
+					"minTransactionBaseFee", "minTransactionByteFee", "validatorMiningWindowBlocks",
+					"miningRewardVestingBlocks",
+					"bipApprovalThresholdBps", "bipExpirationPeriodMs", "maxHeaderSizeBytes",
 				"maxTransactionSizeBytes", "maxBlockSizeBytes", "maxTransactionsPerBlock"));
 		return new Consensus(
 				exactBigInteger(object, "blockReward", BigInteger.ZERO, MAX_UINT_256, path),
@@ -308,8 +310,10 @@ public final class SandboxManifestLoader {
 				exactLong(object, "asertHalfLifeBlocks", 1, 1_000_000, path),
 				exactBigInteger(object, "minDifficulty", BigInteger.ONE, MAX_UINT_256, path),
 				exactBigInteger(object, "minTransactionBaseFee", BigInteger.ZERO, MAX_UINT_256, path),
-				exactBigInteger(object, "minTransactionByteFee", BigInteger.ZERO, MAX_UINT_256, path),
-				exactLong(object, "validatorMiningWindowBlocks", 100, 10_000, path),
+					exactBigInteger(object, "minTransactionByteFee", BigInteger.ZERO, MAX_UINT_256, path),
+					exactLong(object, "validatorMiningWindowBlocks", 100, 10_000, path),
+					exactLong(object, "miningRewardVestingBlocks", 0,
+							MiningConsensusRules.MAX_MINING_REWARD_VESTING_BLOCKS, path),
 				exactInt(object, "bipApprovalThresholdBps", 1, 10_000, path),
 				exactLong(object, "bipExpirationPeriodMs", 1, Long.MAX_VALUE, path),
 				exactLong(object, "maxHeaderSizeBytes", 1, 16L * 1024 * 1024, path),
@@ -451,7 +455,8 @@ public final class SandboxManifestLoader {
 		consensus.put("minDifficulty", consensusValue.minDifficulty());
 		consensus.put("minTransactionBaseFee", consensusValue.minTransactionBaseFee());
 		consensus.put("minTransactionByteFee", consensusValue.minTransactionByteFee());
-		consensus.put("validatorMiningWindowBlocks", consensusValue.validatorMiningWindowBlocks());
+			consensus.put("validatorMiningWindowBlocks", consensusValue.validatorMiningWindowBlocks());
+			consensus.put("miningRewardVestingBlocks", consensusValue.miningRewardVestingBlocks());
 		consensus.put("bipApprovalThresholdBps", consensusValue.bipApprovalThresholdBps());
 		consensus.put("bipExpirationPeriodMs", consensusValue.bipExpirationPeriodMs());
 		consensus.put("maxHeaderSizeBytes", consensusValue.maxHeaderSizeBytes());

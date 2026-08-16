@@ -101,8 +101,9 @@ public class BlockEventExtractor {
         public List<BlockEvent> extractEvents(
                         Wei blockRewardAmount,
                         Wei feesAmount,
-                        Address minerAddress,
-                        Address rewardPoolAddress,
+	                        Address minerAddress,
+	                        Address rewardPoolAddress,
+	                        Long rewardUnlockBlockHeight,
                         Map<Hash, StateDiff<BipState>> bipDiffs,
                         Map<Address, StateDiff<TokenState>> tokenDiffs,
                         Map<Hash, Wei> actualBurnAmounts,
@@ -112,7 +113,9 @@ public class BlockEventExtractor {
 
                 // 1. Block reward event (from pool or minted - excludes fees)
                 if (blockRewardAmount != null && blockRewardAmount.compareTo(Wei.ZERO) > 0) {
-                        events.add(new BlockReward(minerAddress, rewardPoolAddress, blockRewardAmount));
+	                        events.add(new BlockReward(
+	                                        minerAddress, rewardPoolAddress, blockRewardAmount,
+	                                        rewardUnlockBlockHeight));
                 }
 
                 // 2. Fees collected event (tx fees paid by users)

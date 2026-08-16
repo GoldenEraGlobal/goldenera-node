@@ -48,6 +48,8 @@ public class AccountBalanceMapper {
                 in.getVersion(),
                 in.getAddress(),
                 in.getBalance(),
+                in.getLockedMiningReward(),
+                in.getSpendableBalance(),
                 in.getTokenAddress(),
                 in.getCreatedAtBlockHeight(),
                 in.getUpdatedAtBlockHeight(),

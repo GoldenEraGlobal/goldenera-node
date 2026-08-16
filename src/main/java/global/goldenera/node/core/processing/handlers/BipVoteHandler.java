@@ -238,7 +238,9 @@ public class BipVoteHandler implements TxHandler {
 
 		// 2. Calculate the actual amount to burn (Cap at user's balance)
 		Wei requestedAmount = p.getAmount();
-		Wei currentBalance = bal.getBalance();
+		Wei currentBalance = p.getTokenAddress().equals(Address.NATIVE_TOKEN)
+				? bal.getSpendableBalance()
+				: bal.getBalance();
 		Wei actualBurnAmount = requestedAmount;
 
 		if (currentBalance.compareTo(requestedAmount) < 0) {

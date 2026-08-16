@@ -149,6 +149,7 @@ public class TxMapper {
                 d.setMinTxBaseFee(p.getMinTxBaseFee());
                 d.setMinTxByteFee(p.getMinTxByteFee());
                 d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
+                d.setMiningRewardVestingBlocks(p.getMiningRewardVestingBlocks());
                 yield d;
             }
             case TxBipTokenBurnPayload p -> {

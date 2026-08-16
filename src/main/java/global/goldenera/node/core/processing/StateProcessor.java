@@ -40,12 +40,15 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.MiningRewardMaturityState;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AccountNonceStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningRewardMaturityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.node.core.exceptions.GETxValidationFailedException;
 import global.goldenera.node.core.processing.handlers.TxHandler;
 import global.goldenera.node.core.state.WorldState;
@@ -112,6 +115,7 @@ public class StateProcessor {
 		Wei totalSupplyIncrease = Wei.ZERO;
 		miningEconomicsActivationService.applyIfNeeded(worldState, block.getHeight());
 		params = worldState.getParams();
+		processMatureMiningRewards(worldState, block);
 
 		List<Tx> validTxs = new ArrayList<>(txs.size());
 		List<Tx> invalidTxs = new ArrayList<>();
@@ -144,17 +148,19 @@ public class StateProcessor {
 				}
 			}
 		}
-		Wei rewardFromPool = processRewardDistribution(worldState, block, params, totalFeesCollected,
+		RewardDistribution rewardDistribution = processRewardDistribution(worldState, block, params, totalFeesCollected,
 				totalSupplyIncrease);
 		validatorMiningPolicyService.appendAcceptedBlock(worldState, block);
-		Wei minerActualRewardPaid = rewardFromPool.addExact(totalFeesCollected);
+		Wei minerActualRewardPaid = rewardDistribution.blockReward().addExact(totalFeesCollected);
 		return ExecutionResult.builder()
 				.validTxs(validTxs)
 				.invalidTxs(invalidTxs)
 				.totalFeesCollected(totalFeesCollected)
 				.totalSupplyIncrease(totalSupplyIncrease)
 				.minerTotalFees(totalFeesCollected)
-				.minerActualRewardPaid(minerActualRewardPaid)
+					.minerActualRewardPaid(minerActualRewardPaid)
+					.minerRewardUnlockBlockHeight(rewardDistribution.unlockBlockHeight())
+					.minerRewardPoolAddress(rewardDistribution.rewardPoolAddress())
 				.actualBurnAmounts(actualBurnAmounts)
 				.build();
 	}
@@ -168,10 +174,11 @@ public class StateProcessor {
 	 * @return The amount of Native Token given to the miner as Block Reward
 	 *         (excluding fees).
 	 */
-	private Wei processRewardDistribution(WorldState state, SimpleBlock block, NetworkParamsState params, Wei totalFees,
-			Wei feeInflation) {
+	private RewardDistribution processRewardDistribution(WorldState state, SimpleBlock block, NetworkParamsState params,
+			Wei totalFees,
+				Wei feeInflation) {
 		if (block.getHeight() == 0) {
-			return Wei.ZERO;
+			return new RewardDistribution(Wei.ZERO, null, null);
 		}
 		Wei targetBlockReward = params.getBlockReward();
 		Wei actualBlockRewardPayload = Wei.ZERO; // The actual block reward paid to miner
@@ -195,7 +202,7 @@ public class StateProcessor {
 			if (!targetBlockReward.isZero()) {
 				AccountBalanceStateImpl poolBal = (AccountBalanceStateImpl) state.getBalance(poolAddress,
 						Address.NATIVE_TOKEN);
-				Wei poolBalance = poolBal.getBalance();
+			Wei poolBalance = poolBal.getSpendableBalance();
 
 				// If pool has enough, pay target. If not, pay whatever is left.
 				if (poolBalance.compareTo(targetBlockReward) >= 0) {
@@ -212,14 +219,37 @@ public class StateProcessor {
 			}
 		}
 
-		// Credit the Miner (Actual Block Reward + Transaction Fees)
-		Wei totalMinerCredit = actualBlockRewardPayload.addExact(totalFees);
-		if (!totalMinerCredit.isZero()) {
+		// Transaction fees are always immediately spendable.
+		if (!totalFees.isZero()) {
 			AccountBalanceStateImpl minerBal = (AccountBalanceStateImpl) state.getBalance(block.getCoinbase(),
 					Address.NATIVE_TOKEN);
-
 			state.setBalance(block.getCoinbase(), Address.NATIVE_TOKEN,
-					minerBal.credit(totalMinerCredit, block.getHeight(), block.getTimestamp()));
+					minerBal.credit(totalFees, block.getHeight(), block.getTimestamp()));
+		}
+
+		Long unlockBlockHeight = null;
+		if (!actualBlockRewardPayload.isZero()) {
+			long vestingBlocks = params.getMiningRewardVestingBlocks();
+			AccountBalanceStateImpl minerBal = (AccountBalanceStateImpl) state.getBalance(block.getCoinbase(),
+					Address.NATIVE_TOKEN);
+			if (vestingBlocks == 0) {
+				unlockBlockHeight = params.getVersion() == NetworkParamsStateVersion.V2
+						? block.getHeight()
+						: null;
+				state.setBalance(block.getCoinbase(), Address.NATIVE_TOKEN,
+						minerBal.credit(actualBlockRewardPayload, block.getHeight(), block.getTimestamp()));
+			} else {
+				unlockBlockHeight = Math.addExact(block.getHeight(), vestingBlocks);
+				state.setBalance(block.getCoinbase(), Address.NATIVE_TOKEN,
+						minerBal.creditLockedMiningReward(
+								actualBlockRewardPayload, block.getHeight(), block.getTimestamp()));
+				MiningRewardMaturityState maturity = state.getMiningRewardMaturity(unlockBlockHeight);
+				checkArgument(maturity instanceof MiningRewardMaturityStateImpl,
+						"Unsupported mining reward maturity state implementation");
+				MiningRewardMaturityStateImpl updated = ((MiningRewardMaturityStateImpl) maturity)
+						.addReward(block.getCoinbase(), actualBlockRewardPayload);
+				state.setMiningRewardMaturity(unlockBlockHeight, updated);
+			}
 		}
 
 		// Apply Minting to World State (Inflationary Block Reward + System Fees)
@@ -229,7 +259,24 @@ public class StateProcessor {
 					nat.mint(amountToMint, Hash.ZERO, block.getHeight(), block.getTimestamp()));
 		}
 
-		return actualBlockRewardPayload;
+		return new RewardDistribution(actualBlockRewardPayload, unlockBlockHeight, poolAddress);
+	}
+
+	private void processMatureMiningRewards(WorldState state, SimpleBlock block) {
+		MiningRewardMaturityState maturity = state.getMiningRewardMaturity(block.getHeight());
+		if (maturity.getRewards().isEmpty()) {
+			return;
+		}
+		maturity.getRewards().forEach((address, amount) -> {
+			AccountBalanceStateImpl balance = (AccountBalanceStateImpl) state.getBalance(
+					address, Address.NATIVE_TOKEN);
+			state.setBalance(address, Address.NATIVE_TOKEN,
+					balance.unlockMiningReward(amount, block.getHeight(), block.getTimestamp()));
+		});
+		state.removeMiningRewardMaturity(block.getHeight());
+	}
+
+	private record RewardDistribution(Wei blockReward, Long unlockBlockHeight, Address rewardPoolAddress) {
 	}
 
 	private void validateAndDeductFee(WorldState state, Tx tx, SimpleBlock block, NetworkParamsState params) {
@@ -311,6 +358,8 @@ public class StateProcessor {
 
 		Wei minerTotalFees;
 		Wei minerActualRewardPaid;
+		Long minerRewardUnlockBlockHeight;
+		Address minerRewardPoolAddress;
 
 		Map<Hash, Wei> actualBurnAmounts;
 	}

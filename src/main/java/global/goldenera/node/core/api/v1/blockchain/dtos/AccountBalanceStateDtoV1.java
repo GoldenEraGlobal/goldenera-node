@@ -47,7 +47,9 @@ import lombok.experimental.FieldDefaults;
 public class AccountBalanceStateDtoV1 {
 
     AccountBalanceStateVersion version;
-    Wei balance;
+	    Wei balance;
+	Wei lockedMiningReward;
+	Wei spendableBalance;
     long updatedAtBlockHeight;
     Instant updatedAtTimestamp;
 }

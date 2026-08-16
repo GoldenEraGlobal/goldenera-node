@@ -108,9 +108,11 @@ public final class IsolatedWorldStateStorage implements AutoCloseable {
 					serialization.authoritySerializer(), serialization.authorityDeserializer(),
 					serialization.validatorSerializer(), serialization.validatorDeserializer(),
 					serialization.bipStateSerializer(), serialization.bipStateDeserializer(),
-					serialization.networkParamsSerializer(), serialization.networkParamsDeserializer(),
-					serialization.miningWindowSerializer(), serialization.miningWindowDeserializer(),
-					serialization.tokenSerializer(), serialization.tokenDeserializer());
+						serialization.networkParamsSerializer(), serialization.networkParamsDeserializer(),
+						serialization.miningWindowSerializer(), serialization.miningWindowDeserializer(),
+						serialization.miningRewardMaturitySerializer(),
+						serialization.miningRewardMaturityDeserializer(),
+						serialization.tokenSerializer(), serialization.tokenDeserializer());
 			return new OpenedStorage(
 					databaseOptions, columnOptions, List.copyOf(handles), database, worldStateFactory);
 		} catch (Throwable failure) {

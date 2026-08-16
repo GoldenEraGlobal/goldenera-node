@@ -32,6 +32,7 @@ import static global.goldenera.node.core.mempool.MempoolTestFixtures.vote;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Answers.RETURNS_DEEP_STUBS;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -53,6 +54,7 @@ import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.impl.MiningRewardMaturityStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.TxPayloadVersion;
@@ -104,6 +106,7 @@ class MempoolValidatorTest {
 		when(params.getCurrentValidatorCount()).thenReturn(1L);
 		when(params.getCurrentUnlimitedValidatorCount()).thenReturn(1L);
 		when(worldState.getParams()).thenReturn(params);
+		when(worldState.getMiningRewardMaturity(anyLong())).thenReturn(MiningRewardMaturityStateImpl.ZERO);
 		AccountNonceState nonce = mock(AccountNonceState.class);
 		when(nonce.getNonce()).thenReturn(0L);
 		when(worldState.getNonce(any(Address.class))).thenReturn(nonce);
@@ -130,6 +133,7 @@ class MempoolValidatorTest {
 		MempoolValidationResult result = admit(candidate);
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isNull();
 		assertThat(result.getErrorMessage()).contains("Insufficient native funds");
 	}
 
@@ -178,6 +182,72 @@ class MempoolValidatorTest {
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
 		assertThat(result.getErrorMessage()).contains("governance fee");
+	}
+
+	@Test
+	void nativeAdmissionUsesSpendableBalanceInsteadOfTotalBalance() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 25, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(100));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(30));
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(30))))
+				.thenReturn(reservation(0, 0, 35, 30));
+
+		MempoolValidationResult result = admit(candidate);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
+		assertThat(result.getErrorMessage()).contains("Insufficient native funds");
+	}
+
+	@Test
+	void governanceAdmissionReportsLockedMiningRewardAsSpendabilityCause() {
+		MempoolEntry vote = vote(1, ALICE, 1, 10, hash(50));
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(100));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(store.nativeReservation(eq(ALICE), eq(vote.getTx()), eq(Wei.valueOf(5))))
+				.thenReturn(reservation(0, 0, 10, 5));
+
+		MempoolValidationResult result = admit(vote);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
+	}
+
+	@Test
+	void nativeTransferCanUseRewardMaturingAtCandidateBlockHeight() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 25, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(40));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(worldState.getMiningRewardMaturity(11)).thenReturn(
+				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(40))))
+				.thenReturn(reservation(0, 0, 35, 40));
+
+		assertThat(admit(candidate).getStatus()).isEqualTo(ValidationStatus.VALID);
+	}
+
+	@Test
+	void nativeTransferCannotUseRewardMaturingAfterCandidateBlockHeight() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 25, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(40));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(worldState.getMiningRewardMaturity(12)).thenReturn(
+				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(5))))
+				.thenReturn(reservation(0, 0, 35, 5));
+
+		MempoolValidationResult result = admit(candidate);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
 	}
 
 	@Test
@@ -350,6 +420,7 @@ class MempoolValidatorTest {
 	private void balance(Address token, long value) {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(value));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(value));
 		when(worldState.getBalance(ALICE, token)).thenReturn(balance);
 	}
 

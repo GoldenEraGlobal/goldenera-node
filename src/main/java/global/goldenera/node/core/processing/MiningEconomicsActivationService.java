@@ -52,7 +52,8 @@ public class MiningEconomicsActivationService {
 		NetworkParamsState params = worldState.getParams();
 		if (params.getVersion() == NetworkParamsStateVersion.V1) {
 			migrate(worldState, params, blockHeight,
-					Constants.getSettings().genesisNetworkValidatorMiningWindowBlocks());
+					Constants.getSettings().genesisNetworkValidatorMiningWindowBlocks(),
+					Constants.getSettings().genesisNetworkMiningRewardVestingBlocks());
 			return;
 		}
 		verifyMigratedState(worldState, params);
@@ -70,19 +71,26 @@ public class MiningEconomicsActivationService {
 	}
 
 	void applyIfNeeded(WorldState worldState, long blockHeight, boolean forkActive, long configuredWindow) {
+		applyIfNeeded(worldState, blockHeight, forkActive, configuredWindow, 0);
+	}
+
+	void applyIfNeeded(WorldState worldState, long blockHeight, boolean forkActive, long configuredWindow,
+			long configuredVestingBlocks) {
 		if (!forkActive) {
 			return;
 		}
 		NetworkParamsState params = worldState.getParams();
 		if (params.getVersion() == NetworkParamsStateVersion.V1) {
-			migrate(worldState, params, blockHeight, configuredWindow);
+			migrate(worldState, params, blockHeight, configuredWindow, configuredVestingBlocks);
 			return;
 		}
 		verifyMigratedState(worldState, params);
 	}
 
-	private void migrate(WorldState worldState, NetworkParamsState params, long blockHeight, long configuredWindow) {
+	private void migrate(WorldState worldState, NetworkParamsState params, long blockHeight, long configuredWindow,
+			long configuredVestingBlocks) {
 		MiningConsensusRules.validateWindowSize(configuredWindow);
+		MiningConsensusRules.validateMiningRewardVestingBlocks(configuredVestingBlocks);
 		NetworkParamsStateImpl migrated = NetworkParamsStateImpl.builder()
 				.version(NetworkParamsStateVersion.V2)
 				.blockReward(params.getBlockReward())
@@ -98,6 +106,7 @@ public class MiningEconomicsActivationService {
 				.currentValidatorCount(params.getCurrentValidatorCount())
 				.currentUnlimitedValidatorCount(params.getCurrentValidatorCount())
 				.validatorMiningWindowBlocks(configuredWindow)
+				.miningRewardVestingBlocks(configuredVestingBlocks)
 				.updatedAtBlockHeight(params.getUpdatedAtBlockHeight())
 				.updatedAtTimestamp(params.getUpdatedAtTimestamp())
 				.build();
@@ -111,6 +120,7 @@ public class MiningEconomicsActivationService {
 					+ params.getVersion());
 		}
 		MiningConsensusRules.validateWindowSize(params.getValidatorMiningWindowBlocks());
+		MiningConsensusRules.validateMiningRewardVestingBlocks(params.getMiningRewardVestingBlocks());
 		long validatorCount = params.getCurrentValidatorCount();
 		long unlimitedCount = params.getCurrentUnlimitedValidatorCount();
 		if (validatorCount < 0 || unlimitedCount < 0 || unlimitedCount > validatorCount

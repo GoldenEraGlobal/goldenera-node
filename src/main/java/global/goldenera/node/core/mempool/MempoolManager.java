@@ -317,6 +317,7 @@ public class MempoolManager {
 		List<Hash> toRemove = new ArrayList<>();
 		Map<Address, Long> chainNonces = new HashMap<>();
 		Set<Address> successfullyValidatedSenders = new HashSet<>();
+		Map<Address, Wei> projectedNativeBalances = new HashMap<>();
 
 		// Iterate over all transactions (snapshot iterator)
 		Iterator<MempoolEntry> it = mempoolStore.getAllTxs().iterator();
@@ -329,6 +330,10 @@ public class MempoolManager {
 					chainNonces.put(entry.getTx().getSender(), result.getCurrentChainNonce());
 					if (result.isValid()) {
 						successfullyValidatedSenders.add(entry.getTx().getSender());
+						if (result.getAdmissionConstraints() != null) {
+							projectedNativeBalances.put(entry.getTx().getSender(),
+									result.getAdmissionConstraints().nativeBalance());
+						}
 					}
 				}
 
@@ -354,14 +359,16 @@ public class MempoolManager {
 		}
 		if (!successfullyValidatedSenders.isEmpty()) {
 			try {
-				mempoolStore.reconcileSenderBalances(loadSenderBalances(successfullyValidatedSenders));
+				mempoolStore.reconcileSenderBalances(
+						loadSenderBalances(successfullyValidatedSenders, projectedNativeBalances));
 			} catch (RuntimeException exception) {
 				log.warn("Skipping mempool balance reconciliation because chain state is unavailable", exception);
 			}
 		}
 	}
 
-	private Map<Address, MempoolStore.SenderBalances> loadSenderBalances(Set<Address> senders) {
+	private Map<Address, MempoolStore.SenderBalances> loadSenderBalances(Set<Address> senders,
+			Map<Address, Wei> projectedNativeBalances) {
 		WorldState worldState = chainHeadStateService.getHeadState();
 		Map<Address, MempoolStore.SenderBalances> result = new HashMap<>();
 		for (Address sender : senders) {
@@ -373,7 +380,8 @@ public class MempoolManager {
 							token -> worldState.getBalance(sender, token).getBalance());
 				}
 			}
-			Wei nativeBalance = worldState.getBalance(sender, Address.NATIVE_TOKEN).getBalance();
+			Wei nativeBalance = projectedNativeBalances.getOrDefault(sender,
+					worldState.getBalance(sender, Address.NATIVE_TOKEN).getSpendableBalance());
 			result.put(sender, new MempoolStore.SenderBalances(nativeBalance, tokenBalances));
 		}
 		return result;
@@ -486,13 +494,15 @@ public class MempoolManager {
 		VALIDATION_TRANSIENT_ERROR,
 		LAST_UNLIMITED_REQUIRED,
 		LIMITED_QUOTA_ZERO,
-		MINING_WINDOW_OUT_OF_RANGE,
+			MINING_WINDOW_OUT_OF_RANGE,
+			MINING_REWARD_VESTING_OUT_OF_RANGE,
 		INVALID_POLICY_TRANSITION,
 		EXECUTION_REVALIDATION_FAILED,
 		REPLACEMENT_FEE_TOO_LOW,
 		DUPLICATE_HASH,
 		GOVERNANCE_CONFLICT,
 		INSUFFICIENT_FUNDS,
+		INSUFFICIENT_SPENDABLE_BALANCE,
 		TOKEN_SUPPLY_CONFLICT,
 		NONCE_STALE,
 		NONCE_TOO_FAR_FUTURE,

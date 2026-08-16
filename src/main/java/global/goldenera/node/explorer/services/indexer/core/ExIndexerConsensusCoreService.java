@@ -169,10 +169,11 @@ public class ExIndexerConsensusCoreService {
 				        current_authority_count,
 				        current_validator_count,
 				        validator_mining_window_blocks,
+				        mining_reward_vesting_blocks,
 				        current_unlimited_validator_count,
 				        updated_at_block_height,
 				        updated_at_timestamp
-				    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				    ON CONFLICT (id) DO UPDATE SET
 				        network_params_version = EXCLUDED.network_params_version,
 				        block_reward = EXCLUDED.block_reward,
@@ -187,6 +188,7 @@ public class ExIndexerConsensusCoreService {
 				        current_authority_count = EXCLUDED.current_authority_count,
 				        current_validator_count = EXCLUDED.current_validator_count,
 				        validator_mining_window_blocks = EXCLUDED.validator_mining_window_blocks,
+				        mining_reward_vesting_blocks = EXCLUDED.mining_reward_vesting_blocks,
 				        current_unlimited_validator_count = EXCLUDED.current_unlimited_validator_count,
 				        updated_at_block_height = EXCLUDED.updated_at_block_height,
 				        updated_at_timestamp = EXCLUDED.updated_at_timestamp
@@ -233,13 +235,16 @@ public class ExIndexerConsensusCoreService {
 				// 13. Validator mining window
 				miningEconomicsState ? state.getValidatorMiningWindowBlocks() : null,
 
-				// 14. Unlimited validator count
+				// 14. Mining reward vesting
+				miningEconomicsState ? state.getMiningRewardVestingBlocks() : null,
+
+				// 15. Unlimited validator count
 				miningEconomicsState ? state.getCurrentUnlimitedValidatorCount() : null,
 
-				// 15. Updated Height
+				// 16. Updated Height
 				state.getUpdatedAtBlockHeight(),
 
-				// 16. Updated Time
+				// 17. Updated Time
 				Timestamp.from(state.getUpdatedAtTimestamp()));
 	}
 

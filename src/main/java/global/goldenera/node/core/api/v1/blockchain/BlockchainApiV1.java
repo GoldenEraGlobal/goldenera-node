@@ -321,7 +321,9 @@ public class BlockchainApiV1 {
         AccountBalanceState balanceState = state.getBalance(address, Address.NATIVE_TOKEN);
         AccountNonceState nonceState = state.getNonce(address);
 
-        Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
+	        Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
+		Wei lockedMiningReward = balanceState.exists() ? balanceState.getLockedMiningReward() : Wei.ZERO;
+		Wei spendableNativeBalance = balanceState.exists() ? balanceState.getSpendableBalance() : Wei.ZERO;
         // If account never sent a tx, confirmedNonce is -1
         long confirmedNonce = nonceState.exists() ? nonceState.getNonce() : -1L;
         int pendingTxCount = mempoolStore.getPendingTxCount(address);
@@ -332,7 +334,9 @@ public class BlockchainApiV1 {
 
         AccountSummaryDtoV1.AccountSummaryDtoV1Builder builder = AccountSummaryDtoV1.builder()
                 .address(address)
-                .nativeBalance(nativeBalance)
+	                .nativeBalance(nativeBalance)
+				.lockedMiningReward(lockedMiningReward)
+				.spendableNativeBalance(spendableNativeBalance)
                 .nonce(confirmedNonce)
                 .nextNonce(nextNonce)
                 .pendingTxCount(pendingTxCount);

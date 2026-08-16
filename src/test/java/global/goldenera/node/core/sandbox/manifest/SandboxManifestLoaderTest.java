@@ -45,7 +45,7 @@ class SandboxManifestLoaderTest {
 	private static final String VALID_RESOURCE = "sandbox/manifest/manifest-v1-valid.json";
 	private static final String CANONICAL_RESOURCE = "sandbox/manifest/manifest-v1-canonical.json";
 	private static final String GOLDEN_FINGERPRINT =
-			"f39e05d5a4ef05450625e57304b68f801e2a6ab887d5f3b3b57e5c8ca8449d3d";
+			"b7a4965f2cf6157dcdd6985f1fa07a541205d55f0cd6884a999db330b841841d";
 
 	private final SandboxManifestLoader loader = new SandboxManifestLoader();
 

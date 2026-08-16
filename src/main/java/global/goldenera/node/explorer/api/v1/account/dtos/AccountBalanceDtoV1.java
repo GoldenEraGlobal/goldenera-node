@@ -49,6 +49,8 @@ public class AccountBalanceDtoV1 {
 	AccountBalanceStateVersion version;
 	Address address;
 	Wei balance;
+	Wei lockedMiningReward;
+	Wei spendableBalance;
 	Address tokenAddress;
 	long createdAtBlockHeight;
 	long updatedAtBlockHeight;

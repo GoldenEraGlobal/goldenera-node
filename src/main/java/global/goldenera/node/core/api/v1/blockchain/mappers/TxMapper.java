@@ -139,7 +139,8 @@ public class TxMapper {
                 d.setMinDifficulty(p.getMinDifficulty());
                 d.setMinTxBaseFee(p.getMinTxBaseFee());
                 d.setMinTxByteFee(p.getMinTxByteFee());
-                d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
+	                d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
+				d.setMiningRewardVestingBlocks(p.getMiningRewardVestingBlocks());
                 yield d;
             }
             case TxBipTokenBurnPayload p -> {

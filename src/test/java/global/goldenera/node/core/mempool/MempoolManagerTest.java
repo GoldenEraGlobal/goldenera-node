@@ -240,6 +240,7 @@ class MempoolManagerTest {
 		WorldState worldState = mock(WorldState.class);
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(90));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(90));
 		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
 		when(chainHead.getHeadState()).thenReturn(worldState);
 

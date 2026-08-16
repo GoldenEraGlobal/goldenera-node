@@ -57,6 +57,9 @@ public class NetworkParamsMapper {
                 in.getVersion() == NetworkParamsStateVersion.V2
                         ? in.getValidatorMiningWindowBlocks()
                         : null,
+                in.getVersion() == NetworkParamsStateVersion.V2
+                        ? in.getMiningRewardVestingBlocks()
+                        : null,
                 in.getCurrentUnlimitedValidatorCount(),
                 in.getUpdatedAtBlockHeight(),
                 in.getUpdatedAtTimestamp());
@@ -78,6 +81,8 @@ public class NetworkParamsMapper {
 				in.getCurrentValidatorCount(),
 				in.getVersion() == NetworkParamsStateVersion.V2
 						? in.getValidatorMiningWindowBlocks() : null,
+				in.getVersion() == NetworkParamsStateVersion.V2
+						? in.getMiningRewardVestingBlocks() : null,
 				in.getCurrentUnlimitedValidatorCount(),
 				in.getUpdatedAtBlockHeight(),
 				in.getUpdatedAtTimestamp());

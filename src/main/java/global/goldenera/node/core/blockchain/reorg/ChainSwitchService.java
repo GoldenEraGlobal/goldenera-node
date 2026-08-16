@@ -204,8 +204,9 @@ public class ChainSwitchService {
                         List<BlockEvent> blockEvents = blockEventExtractor.extractEvents(
                                 blockRewardFromPool,
                                 totalFees,
-                                blockToConnect.getHeader().getCoinbase(),
-                                params.getBlockRewardPoolAddress(),
+								blockToConnect.getHeader().getCoinbase(),
+								result.getMinerRewardPoolAddress(),
+								result.getMinerRewardUnlockBlockHeight(),
                                 worldState.getBipDiffs(),
                                 worldState.getTokenDiffs(),
                                 result.getActualBurnAmounts(),

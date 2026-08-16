@@ -90,17 +90,20 @@ class ExIndexerRevertDtosTest {
 				.blockRewardPoolAddress(NetworkParamsStateImpl.ZERO.getBlockRewardPoolAddress())
 				.minDifficulty(NetworkParamsStateImpl.ZERO.getMinDifficulty())
 				.minTxBaseFee(NetworkParamsStateImpl.ZERO.getMinTxBaseFee())
-				.minTxByteFee(NetworkParamsStateImpl.ZERO.getMinTxByteFee())
-				.updatedByTxHash(Hash.ZERO)
-				.updatedAtTimestamp(TIME)
-				.validatorMiningWindowBlocks(100)
-				.currentValidatorCount(3)
+					.minTxByteFee(NetworkParamsStateImpl.ZERO.getMinTxByteFee())
+					.updatedByTxHash(Hash.ZERO)
+					.updatedAtTimestamp(TIME)
+					.validatorMiningWindowBlocks(100)
+					.miningRewardVestingBlocks(50)
+					.currentValidatorCount(3)
 				.currentUnlimitedValidatorCount(2)
 				.build());
 
 		assertThat(legacy.validatorMiningWindowBlocks()).isNull();
+		assertThat(legacy.miningRewardVestingBlocks()).isNull();
 		assertThat(legacy.currentUnlimitedValidatorCount()).isNull();
 		assertThat(explicit.validatorMiningWindowBlocks()).isEqualTo(100);
+		assertThat(explicit.miningRewardVestingBlocks()).isEqualTo(50);
 		assertThat(explicit.currentUnlimitedValidatorCount()).isEqualTo(2);
 	}
 }

@@ -62,6 +62,7 @@ public record GenesisSettings(
                 Wei genesisNetworkMinTxBaseFee,
                 Wei genesisNetworkMinTxByteFee,
                 long genesisNetworkValidatorMiningWindowBlocks,
+                long genesisNetworkMiningRewardVestingBlocks,
 
                 // Genesis authorities
                 List<Address> genesisAuthorityAddresses,

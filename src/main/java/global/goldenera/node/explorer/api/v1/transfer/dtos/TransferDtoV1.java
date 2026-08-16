@@ -62,5 +62,6 @@ public class TransferDtoV1 {
 	Wei fee;
 	Long nonce;
 	Bytes message;
+	Long unlockBlockHeight;
 
 }

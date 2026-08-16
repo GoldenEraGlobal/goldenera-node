@@ -100,10 +100,15 @@ public class GenesisConfigLoader {
 	}
 
 	static GenesisSettings parseProductionGenesisSettings(JsonNode root, Network network) {
-		return parseGenesisSettings(root, legacyMiningWindowDefault(network));
+		return parseGenesisSettings(root, legacyMiningWindowDefault(network), legacyMiningRewardVestingDefault(network));
 	}
 
 	private static GenesisSettings parseGenesisSettings(JsonNode root, Long missingMiningWindowDefault) {
+		return parseGenesisSettings(root, missingMiningWindowDefault, null);
+	}
+
+	private static GenesisSettings parseGenesisSettings(JsonNode root, Long missingMiningWindowDefault,
+			Long missingMiningRewardVestingDefault) {
         // Size limits
         JsonNode limits = requireNode(root, "limits");
         long maxHeaderSizeInBytes = requireLong(limits, "maxHeaderSizeInBytes");
@@ -130,12 +135,21 @@ public class GenesisConfigLoader {
         long validatorMiningWindowBlocks = networkParams.has("validatorMiningWindowBlocks")
 				? requireConsensusLong(networkParams, "validatorMiningWindowBlocks")
 				: requireLegacyMiningWindowDefault(missingMiningWindowDefault);
-        try {
-            MiningConsensusRules.validateWindowSize(validatorMiningWindowBlocks);
+	        try {
+	            MiningConsensusRules.validateWindowSize(validatorMiningWindowBlocks);
         } catch (RuntimeException e) {
             throw new IllegalStateException("Invalid networkParams.validatorMiningWindowBlocks: "
                     + validatorMiningWindowBlocks, e);
-        }
+	        }
+		long miningRewardVestingBlocks = networkParams.has("miningRewardVestingBlocks")
+				? requireConsensusLong(networkParams, "miningRewardVestingBlocks")
+				: requireLegacyMiningRewardVestingDefault(missingMiningRewardVestingDefault);
+		try {
+			MiningConsensusRules.validateMiningRewardVestingBlocks(miningRewardVestingBlocks);
+		} catch (RuntimeException e) {
+			throw new IllegalStateException("Invalid networkParams.miningRewardVestingBlocks: "
+					+ miningRewardVestingBlocks, e);
+		}
 
         // Authorities
         JsonNode authoritiesNode = requireNode(root, "authorities");
@@ -181,8 +195,9 @@ public class GenesisConfigLoader {
                 asertHalfLifeBlocks,
                 minDifficulty,
                 minTxBaseFee,
-                minTxByteFee,
-                validatorMiningWindowBlocks,
+	                minTxByteFee,
+	                validatorMiningWindowBlocks,
+	                miningRewardVestingBlocks,
                 authorities,
                 initialMintForAuthority,
                 validators,
@@ -206,10 +221,23 @@ public class GenesisConfigLoader {
 		return value;
 	}
 
+	private static long requireLegacyMiningRewardVestingDefault(Long value) {
+		if (value == null) {
+			throw new IllegalStateException("Missing required field: miningRewardVestingBlocks");
+		}
+		return value;
+	}
+
 	private static long legacyMiningWindowDefault(Network network) {
 		return switch (network) {
 			case MAINNET -> 1_000L;
 			case TESTNET -> 100L;
+		};
+	}
+
+	private static long legacyMiningRewardVestingDefault(Network network) {
+		return switch (network) {
+			case MAINNET, TESTNET -> 86_400L;
 		};
 	}
 

@@ -60,6 +60,7 @@ public class NetworkParamsDtoV1 {
     long currentAuthorityCount;
     long currentValidatorCount;
     Long validatorMiningWindowBlocks;
+    Long miningRewardVestingBlocks;
     long currentUnlimitedValidatorCount;
     long updatedAtBlockHeight;
     Instant updatedAtTimestamp;

@@ -88,10 +88,11 @@ public sealed interface BlockEvent {
      * @param amount
      *            The reward amount
      */
-    record BlockReward(
-            Address minerAddress,
-            Address rewardPoolAddress,
-            Wei amount) implements BlockEvent {
+	    record BlockReward(
+	            Address minerAddress,
+	            Address rewardPoolAddress,
+	            Wei amount,
+	            Long unlockBlockHeight) implements BlockEvent {
 
         @Override
         public BlockEventType type() {
