@@ -140,10 +140,8 @@ public class NetworkSettingsProvider {
      */
     public static Network getActiveNetwork() {
         if (!initialized) {
-            // Fallback for very early initialization (before Spring context loads)
-            String networkEnv = System.getenv().getOrDefault("NETWORK", "MAINNET");
-            log.warn("NetworkSettingsProvider not yet initialized by Spring, using env fallback: {}", networkEnv);
-            return Network.valueOf(networkEnv);
+            throw new IllegalStateException(
+                    "NetworkSettingsProvider is not initialized; ge.general.network is unavailable");
         }
         return activeNetwork;
     }
@@ -153,10 +151,8 @@ public class NetworkSettingsProvider {
      */
     public static String getActiveProfile() {
         if (!initialized) {
-            String profileEnv = System.getenv().getOrDefault("SPRING_PROFILES_ACTIVE", "prod");
-            log.warn("NetworkSettingsProvider not yet initialized by Spring, using env fallback profile: {}",
-                    profileEnv);
-            return profileEnv.contains("dev") ? "dev" : "prod";
+            throw new IllegalStateException(
+                    "NetworkSettingsProvider is not initialized; Spring profiles are unavailable");
         }
         return activeProfile;
     }

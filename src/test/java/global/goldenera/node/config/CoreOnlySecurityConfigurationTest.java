@@ -89,6 +89,7 @@ class CoreOnlySecurityConfigurationTest {
 				"coreOnlySecurityConfigurationTest",
 				Map.of(
 						"ge.general.explorer-enable", "false",
+						"ge.general.postgresql-enable", "false",
 						"test.core-api-security-enabled", Boolean.toString(coreApiSecurityEnabled))));
 		context.register(CoreOnlySecurityConfiguration.class, WebTestConfiguration.class, TestBeans.class);
 		context.refresh();

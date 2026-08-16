@@ -40,7 +40,10 @@ import global.goldenera.node.shared.components.AESGCMComponent;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.exceptions.GEFailedException;
+import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.utils.StringUtil;
 import global.goldenera.node.shared.utils.WebhookValidator;
@@ -62,11 +65,15 @@ public class WebhookService {
 
 	AESGCMComponent aesGcmComponent;
 	WebhookCoreService webhookCoreService;
+	GeneralProperties generalProperties;
 
 	@Transactional(rollbackFor = Exception.class)
 	public CreatedWebhook createWebhook(
 			@NonNull ApiKey apiKey,
 			@NonNull WebhookCreateInDtoV1 payload) {
+		if (payload.getType() == WebhookType.EXPLORER && !generalProperties.isExplorerEnable()) {
+			throw new GEValidationException("Explorer webhooks require ge.general.explorer-enable=true");
+		}
 		String label = WebhookValidator.label(payload.getLabel());
 		String description = WebhookValidator.description(payload.getDescription());
 		UrlData urlData = WebhookValidator.url(payload.getUrl());

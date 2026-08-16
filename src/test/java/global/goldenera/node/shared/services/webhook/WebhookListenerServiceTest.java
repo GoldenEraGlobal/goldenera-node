@@ -54,6 +54,8 @@ import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent.RemoveReason;
 import global.goldenera.node.core.config.CoreAsyncConfig;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
+import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
+import global.goldenera.node.explorer.services.webhook.ExplorerWebhookListenerService;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
@@ -65,7 +67,6 @@ class WebhookListenerServiceTest {
 	void springSelectsTheObjectFactoryConstructor() {
 		try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
 			context.getBeanFactory().registerSingleton("webhookDispatchService", mock(WebhookDispatchService.class));
-			context.getBeanFactory().registerSingleton("explorerRuntimeReadiness", readyExplorer());
 			context.getBeanFactory().registerSingleton(CoreAsyncConfig.WEBHOOK_EVENT_EXECUTOR,
 					(Executor) Runnable::run);
 			context.register(WebhookListenerService.class);
@@ -101,7 +102,7 @@ class WebhookListenerServiceTest {
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
 		when(event.getBlock()).thenReturn(block);
 		when(event.getEvents()).thenReturn(List.of());
-		WebhookListenerService listener = new WebhookListenerService(dispatch, readyExplorer(), executor);
+		WebhookListenerService listener = new WebhookListenerService(dispatch, executor);
 
 		try {
 			listener.handleBlockConnected(event);
@@ -121,7 +122,7 @@ class WebhookListenerServiceTest {
 	@EnumSource(value = RemoveReason.class, names = { "EVICTED_FULL", "INSUFFICIENT_FUNDS" })
 	void capacityAndBalanceEvictionsProduceDroppedWebhookStatus(RemoveReason reason) {
 		WebhookDispatchService dispatch = mock(WebhookDispatchService.class);
-		WebhookListenerService listener = new WebhookListenerService(dispatch, readyExplorer(), Runnable::run);
+		WebhookListenerService listener = new WebhookListenerService(dispatch, Runnable::run);
 		Tx tx = mock(Tx.class);
 		MempoolEntry entry = mock(MempoolEntry.class);
 		when(entry.getTx()).thenReturn(tx);
@@ -141,10 +142,9 @@ class WebhookListenerServiceTest {
 		WebhookDispatchService dispatch = mock(WebhookDispatchService.class);
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		ExecutorResolutionProbe executor = new ExecutorResolutionProbe();
-		WebhookListenerService listener = new WebhookListenerService(dispatch, readiness, executor::resolve);
-		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
-
-		listener.handleBlockConnected(event);
+		ExplorerWebhookListenerService listener = new ExplorerWebhookListenerService(
+				dispatch, readiness, executor::resolve);
+		listener.handleExBlockConnected(mock(ExBlockConnectedEvent.class));
 
 		assertThat(executor.resolved).isFalse();
 		verify(dispatch, never()).processNewBlockEvent(any(), anyList(), any());
@@ -156,9 +156,10 @@ class WebhookListenerServiceTest {
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		when(readiness.isReady()).thenReturn(true, false);
 		AtomicReference<Runnable> queued = new AtomicReference<>();
-		WebhookListenerService listener = new WebhookListenerService(dispatch, readiness, queued::set);
+		ExplorerWebhookListenerService listener = new ExplorerWebhookListenerService(
+				dispatch, readiness, () -> queued::set);
 
-		listener.handleBlockConnected(mock(BlockConnectedEvent.class));
+		listener.handleExBlockConnected(mock(ExBlockConnectedEvent.class));
 		assertThat(queued.get()).isNotNull();
 
 		queued.get().run();
@@ -166,10 +167,29 @@ class WebhookListenerServiceTest {
 		verify(dispatch, never()).processNewBlockEvent(any(), anyList(), any());
 	}
 
-	private ExplorerRuntimeReadiness readyExplorer() {
+	@Test
+	void readyExplorerEmitsConfirmedAddressActivityForEveryIndexedTransaction() {
+		WebhookDispatchService dispatch = mock(WebhookDispatchService.class);
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		when(readiness.isReady()).thenReturn(true);
-		return readiness;
+		Tx first = mock(Tx.class);
+		Tx second = mock(Tx.class);
+		Block block = mock(Block.class);
+		when(block.getHash()).thenReturn(Hash.ZERO);
+		when(block.getTxs()).thenReturn(List.of(first, second));
+		ExBlockConnectedEvent event = mock(ExBlockConnectedEvent.class);
+		when(event.getBlock()).thenReturn(block);
+		when(event.getEvents()).thenReturn(List.of());
+		ExplorerWebhookListenerService listener = new ExplorerWebhookListenerService(
+				dispatch, readiness, () -> Runnable::run);
+
+		listener.handleExBlockConnected(event);
+
+		verify(dispatch).processNewBlockEvent(block, List.of(), WebhookType.EXPLORER);
+		verify(dispatch).processAddressActivityEvent(
+				block, first, WebhookTxStatus.CONFIRMED, 0, WebhookType.EXPLORER);
+		verify(dispatch).processAddressActivityEvent(
+				block, second, WebhookTxStatus.CONFIRMED, 1, WebhookType.EXPLORER);
 	}
 
 	private static final class ExecutorResolutionProbe {

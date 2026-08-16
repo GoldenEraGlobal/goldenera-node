@@ -49,6 +49,10 @@ public class GeneralProperties {
 
 	boolean explorerEnable;
 
+	boolean postgresqlEnable;
+
+	boolean webhookEnable;
+
 	public Address getBeneficiaryAddress() {
 		if (beneficiaryAddress == null || beneficiaryAddress.isEmpty()) {
 			throw new GEFailedException("Beneficiary address is not set in properties file.");

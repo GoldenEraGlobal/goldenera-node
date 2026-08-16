@@ -180,9 +180,11 @@ public class WebhookValidator {
 
             switch (event.getType()) {
                 case NEW_BLOCK:
+                case REORG:
                     if (event.getAddressFilter() != null || event.getTokenAddressFilter() != null) {
                         return new ValidationError(index, "event.addressFilter",
-                                "Invalid event for NEW_BLOCK: 'addressFilter' and 'tokenAddressFilter' must be null.");
+                                "Invalid event for " + event.getType()
+                                        + ": 'addressFilter' and 'tokenAddressFilter' must be null.");
                     }
                     break;
 

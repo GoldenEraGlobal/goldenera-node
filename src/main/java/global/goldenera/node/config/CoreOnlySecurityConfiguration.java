@@ -41,9 +41,9 @@ import global.goldenera.node.shared.properties.SecurityProperties;
 @Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
 @ConditionalOnProperty(
-		prefix = "ge.general",
-		name = "explorer-enable",
-		havingValue = "false")
+			prefix = "ge.general",
+			name = "postgresql-enable",
+			havingValue = "false")
 public class CoreOnlySecurityConfiguration {
 
 	private final SecurityProperties securityProperties;

@@ -41,9 +41,8 @@ import org.springframework.core.env.MapPropertySource;
 import org.springframework.util.StringUtils;
 
 /**
- * Converts the explicit explorer disable switch into an early SQL auto-config
- * boundary. The default remains explorer-enabled; this processor never guesses
- * core-only mode from a failed database connection.
+ * Converts the explicit PostgreSQL disable switch into an early SQL auto-config
+ * boundary and rejects feature combinations that require PostgreSQL.
  */
 public final class CoreOnlyPersistenceEnvironmentPostProcessor
 		implements EnvironmentPostProcessor, Ordered {
@@ -51,7 +50,9 @@ public final class CoreOnlyPersistenceEnvironmentPostProcessor
 	static final String PROPERTY_SOURCE = "goldeneraCoreOnlyPersistence";
 
 	private static final String EXPLORER_ENABLED = "ge.general.explorer-enable";
-	private static final String EXPLORER_ENABLED_ENV = "EXPLORER_ENABLE";
+	private static final String POSTGRESQL_ENABLED = "ge.general.postgresql-enable";
+	private static final String WEBHOOK_ENABLED = "ge.general.webhook-enable";
+	private static final String CORE_API_SECURITY_ENABLED = "ge.security.core-api-enabled";
 	private static final String AUTO_CONFIG_EXCLUDES = "spring.autoconfigure.exclude";
 
 	private static final Set<String> SQL_AUTO_CONFIGURATIONS = Set.of(
@@ -63,7 +64,13 @@ public final class CoreOnlyPersistenceEnvironmentPostProcessor
 
 	@Override
 	public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
-		if (explorerEnabled(environment)) {
+		boolean explorerEnabled = enabled(environment, EXPLORER_ENABLED, true);
+		boolean postgresqlEnabled = enabled(environment, POSTGRESQL_ENABLED, explorerEnabled);
+		boolean webhookEnabled = enabled(environment, WEBHOOK_ENABLED, postgresqlEnabled);
+		boolean coreApiSecurityEnabled = enabled(environment, CORE_API_SECURITY_ENABLED, false);
+
+		validateDependencies(explorerEnabled, postgresqlEnabled, webhookEnabled, coreApiSecurityEnabled);
+		if (postgresqlEnabled) {
 			return;
 		}
 		Set<String> exclusions = new LinkedHashSet<>();
@@ -80,12 +87,35 @@ public final class CoreOnlyPersistenceEnvironmentPostProcessor
 				"spring.liquibase.enabled", "false")));
 	}
 
-	private boolean explorerEnabled(ConfigurableEnvironment environment) {
-		String configured = environment.getProperty(EXPLORER_ENABLED);
-		if (!StringUtils.hasText(configured)) {
-			configured = environment.getProperty(EXPLORER_ENABLED_ENV);
+	private boolean enabled(
+			ConfigurableEnvironment environment,
+			String property,
+			boolean defaultValue) {
+		String configured = environment.getProperty(property);
+		return StringUtils.hasText(configured) ? Boolean.parseBoolean(configured) : defaultValue;
+	}
+
+	private void validateDependencies(
+			boolean explorerEnabled,
+			boolean postgresqlEnabled,
+			boolean webhookEnabled,
+			boolean coreApiSecurityEnabled) {
+		if (postgresqlEnabled) {
+			return;
 		}
-		return !StringUtils.hasText(configured) || Boolean.parseBoolean(configured);
+		if (explorerEnabled) {
+			throw dependencyError(EXPLORER_ENABLED);
+		}
+		if (webhookEnabled) {
+			throw dependencyError(WEBHOOK_ENABLED);
+		}
+		if (coreApiSecurityEnabled) {
+			throw dependencyError(CORE_API_SECURITY_ENABLED);
+		}
+	}
+
+	private IllegalStateException dependencyError(String feature) {
+		return new IllegalStateException(feature + "=true requires " + POSTGRESQL_ENABLED + "=true");
 	}
 
 	@Override

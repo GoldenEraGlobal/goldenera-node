@@ -35,21 +35,20 @@ import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
 		prefix = "ge.general",
-		name = "explorer-enable",
+		name = "postgresql-enable",
 		havingValue = "true",
 		matchIfMissing = true)
 @ComponentScan(basePackages = {
-		"global.goldenera.node.explorer"
+		"global.goldenera.node.admin",
+		"global.goldenera.node.shared.services.core"
 })
 @EnableJpaRepositories(
-		value = {
-				"global.goldenera.node.explorer.repositories"
-		},
+		value = "global.goldenera.node.shared.repositories",
 		repositoryBaseClass = BaseJpaRepositoryImpl.class,
 		bootstrapMode = BootstrapMode.LAZY)
 @EntityScan(basePackages = {
-		"global.goldenera.node.explorer.entities",
-		"global.goldenera.node.explorer.converters"
+		"global.goldenera.node.shared.converters",
+		"global.goldenera.node.shared.entities"
 })
-public class ExplorerPersistenceConfiguration {
+public class SharedPersistenceConfiguration {
 }

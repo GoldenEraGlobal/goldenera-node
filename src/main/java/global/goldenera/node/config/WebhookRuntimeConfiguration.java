@@ -24,32 +24,23 @@
 package global.goldenera.node.config;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-import org.springframework.data.repository.config.BootstrapMode;
+import org.springframework.context.annotation.Import;
 
-import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
+import global.goldenera.node.shared.config.WebhookAsyncConfig;
+import global.goldenera.node.shared.config.WebhookHttpConfig;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
 		prefix = "ge.general",
-		name = "explorer-enable",
+		name = "webhook-enable",
 		havingValue = "true",
 		matchIfMissing = true)
 @ComponentScan(basePackages = {
-		"global.goldenera.node.explorer"
+		"global.goldenera.node.shared.services.webhook",
+		"global.goldenera.node.shared.api.v1.webhook"
 })
-@EnableJpaRepositories(
-		value = {
-				"global.goldenera.node.explorer.repositories"
-		},
-		repositoryBaseClass = BaseJpaRepositoryImpl.class,
-		bootstrapMode = BootstrapMode.LAZY)
-@EntityScan(basePackages = {
-		"global.goldenera.node.explorer.entities",
-		"global.goldenera.node.explorer.converters"
-})
-public class ExplorerPersistenceConfiguration {
+@Import({ WebhookAsyncConfig.class, WebhookHttpConfig.class })
+public class WebhookRuntimeConfiguration {
 }

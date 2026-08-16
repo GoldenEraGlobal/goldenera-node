@@ -59,7 +59,7 @@ import lombok.extern.slf4j.Slf4j;
 @Configuration
 @ConditionalOnProperty(
                 prefix = "ge.general",
-                name = "explorer-enable",
+                name = "postgresql-enable",
                 havingValue = "true",
                 matchIfMissing = true)
 @EnableWebSecurity

@@ -152,9 +152,15 @@ SPRING_PROFILES_ACTIVE="prod"
 # Admin PORT & Explorer PORT
 LISTEN_PORT=8080
 
-# Explorer/SQL runtime is enabled by default.
-# Set false for an explicit core-only node; PostgreSQL, JPA and Liquibase are then not initialized.
+# PostgreSQL-backed shared services (API keys and webhooks) are enabled by default.
+# Set false only for a SQL-free node. Explorer, webhooks and protected core API then must also be disabled.
+POSTGRESQL_ENABLE=true
+
+# Explorer/indexer runtime. Requires POSTGRESQL_ENABLE=true.
 EXPLORER_ENABLE=true
+
+# Blockchain and explorer webhook runtime. Requires POSTGRESQL_ENABLE=true.
+WEBHOOK_ENABLE=true
 
 # Node
 NODE_IDENTITY_FILE="./node_data/.node_identity"
@@ -285,6 +291,7 @@ POSTGRESQL_PASSWORD="postgres"
 SECURITY_HMAC_SECRET=""
 SECURITY_AES_GCM_SECRET=""
 # If true, core-api security will be enabled (all endpoints will require API key)
+# Requires POSTGRESQL_ENABLE=true so API keys can be managed and authenticated.
 SECURITY_CORE_API_ENABLED=false
 SECURITY_EXPLORER_API_ENABLED=true
 

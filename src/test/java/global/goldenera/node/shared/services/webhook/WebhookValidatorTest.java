@@ -21,35 +21,29 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.config;
+package global.goldenera.node.shared.services.webhook;
 
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.context.annotation.ComponentScan;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
-import org.springframework.data.repository.config.BootstrapMode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
+import java.util.List;
 
-@Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(
-		prefix = "ge.general",
-		name = "explorer-enable",
-		havingValue = "true",
-		matchIfMissing = true)
-@ComponentScan(basePackages = {
-		"global.goldenera.node.explorer"
-})
-@EnableJpaRepositories(
-		value = {
-				"global.goldenera.node.explorer.repositories"
-		},
-		repositoryBaseClass = BaseJpaRepositoryImpl.class,
-		bootstrapMode = BootstrapMode.LAZY)
-@EntityScan(basePackages = {
-		"global.goldenera.node.explorer.entities",
-		"global.goldenera.node.explorer.converters"
-})
-public class ExplorerPersistenceConfiguration {
+import org.junit.jupiter.api.Test;
+
+import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookEventDtoV1;
+import global.goldenera.node.shared.enums.WebhookEventType;
+import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.utils.WebhookValidator;
+
+class WebhookValidatorTest {
+
+	@Test
+	void reorgSubscriptionRejectsAddressAndTokenFilters() {
+		WebhookEventDtoV1 event = new WebhookEventDtoV1(
+				WebhookEventType.REORG, Address.ZERO, null);
+
+		assertThatThrownBy(() -> WebhookValidator.WebhookEvent.validateEvents(List.of(event)))
+				.isInstanceOf(GEValidationException.class)
+				.hasMessage("Validation failed for one or more items.");
+	}
 }

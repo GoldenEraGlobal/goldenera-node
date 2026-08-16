@@ -33,27 +33,19 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
-import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
-import global.goldenera.node.explorer.events.ExBlockReorgEvent;
-import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Listens for blockchain and explorer application events and forwards them
- * to the dispatch service for filtering and queuing.
- * Routes events to webhooks based on their WebhookType (BLOCKCHAIN or
- * EXPLORER).
+ * Listens for core blockchain events and forwards them to BLOCKCHAIN webhooks.
  */
 @Slf4j
 @Service
@@ -61,24 +53,20 @@ import lombok.extern.slf4j.Slf4j;
 public class WebhookListenerService {
 
 	WebhookDispatchService webhookDispatchService;
-	ExplorerRuntimeReadiness explorerReadiness;
 	ObjectFactory<Executor> webhookEventExecutor;
 
 	@Autowired
 	public WebhookListenerService(
 			WebhookDispatchService webhookDispatchService,
-			ExplorerRuntimeReadiness explorerReadiness,
 			@Qualifier(WEBHOOK_EVENT_EXECUTOR) ObjectFactory<Executor> webhookEventExecutor) {
 		this.webhookDispatchService = webhookDispatchService;
-		this.explorerReadiness = explorerReadiness;
 		this.webhookEventExecutor = webhookEventExecutor;
 	}
 
 	WebhookListenerService(
 			WebhookDispatchService webhookDispatchService,
-			ExplorerRuntimeReadiness explorerReadiness,
 			Executor webhookEventExecutor) {
-		this(webhookDispatchService, explorerReadiness, () -> webhookEventExecutor);
+		this(webhookDispatchService, () -> webhookEventExecutor);
 	}
 
 	// ==================== BLOCKCHAIN EVENTS ====================
@@ -173,47 +161,8 @@ public class WebhookListenerService {
 		}
 	}
 
-	// ==================== EXPLORER EVENTS ====================
-
-	/**
-	 * Handles new blocks indexed by explorer.
-	 * Sends to EXPLORER type webhooks.
-	 */
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	public void handleExBlockConnected(ExBlockConnectedEvent event) {
-		submitWebhookEvent("explorer block connected", () -> processExBlockConnected(event));
-	}
-
-	private void processExBlockConnected(ExBlockConnectedEvent event) {
-		log.debug("Processing ExBlockConnectedEvent: {}", event.getBlock().getHash());
-		webhookDispatchService.processNewBlockEvent(event.getBlock(), event.getEvents(), WebhookType.EXPLORER);
-	}
-
-	/**
-	 * Handles explorer reorganization events.
-	 * Sends to EXPLORER type webhooks.
-	 */
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	public void handleExBlockReorg(ExBlockReorgEvent event) {
-		submitWebhookEvent("explorer block reorg", () -> processExBlockReorg(event));
-	}
-
-	private void processExBlockReorg(ExBlockReorgEvent event) {
-		log.debug("Processing ExBlockReorgEvent: old=#{} -> new=#{}", event.getOldHeight(), event.getNewHeight());
-		webhookDispatchService.processReorgEvent(
-				event.getOldHeight(), event.getOldHash(),
-				event.getNewHeight(), event.getNewHash(),
-				WebhookType.EXPLORER);
-	}
-
 	private void submitWebhookEvent(String eventType, Runnable action) {
-		if (!explorerReadiness.isReady()) {
-			return;
-		}
 		webhookEventExecutor.getObject().execute(() -> {
-			if (!explorerReadiness.isReady()) {
-				return;
-			}
 			try {
 				action.run();
 			} catch (RuntimeException exception) {

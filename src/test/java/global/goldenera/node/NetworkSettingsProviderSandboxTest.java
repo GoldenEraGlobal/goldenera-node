@@ -64,6 +64,12 @@ class NetworkSettingsProviderSandboxTest {
 
 	@Test
 	void refusesClasspathFallbackBeforeSpringInitialization() {
+		assertThatThrownBy(NetworkSettingsProvider::getActiveNetwork)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("ge.general.network is unavailable");
+		assertThatThrownBy(NetworkSettingsProvider::getActiveProfile)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("Spring profiles are unavailable");
 		assertThatThrownBy(NetworkSettingsProvider::getSettings)
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("refusing an unverified classpath fallback");

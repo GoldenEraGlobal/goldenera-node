@@ -24,6 +24,7 @@
 package global.goldenera.node.config;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.List;
 import java.util.Map;
@@ -73,6 +74,58 @@ class CoreOnlyPersistenceEnvironmentPostProcessorTest {
 
 		assertThat(environment.getPropertySources()
 				.contains(CoreOnlyPersistenceEnvironmentPostProcessor.PROPERTY_SOURCE)).isFalse();
+	}
+
+	@Test
+	void postgresqlCanRemainEnabledWithoutExplorer() {
+		MockEnvironment environment = new MockEnvironment()
+				.withProperty("ge.general.explorer-enable", "false")
+				.withProperty("ge.general.postgresql-enable", "true");
+
+		new CoreOnlyPersistenceEnvironmentPostProcessor()
+				.postProcessEnvironment(environment, new SpringApplication());
+
+		assertThat(environment.getPropertySources()
+				.contains(CoreOnlyPersistenceEnvironmentPostProcessor.PROPERTY_SOURCE)).isFalse();
+	}
+
+	@Test
+	void coreApiSecurityRequiresPostgresql() {
+		MockEnvironment environment = new MockEnvironment()
+				.withProperty("ge.general.explorer-enable", "false")
+				.withProperty("ge.general.postgresql-enable", "false")
+				.withProperty("ge.security.core-api-enabled", "true");
+
+		assertThatThrownBy(() -> new CoreOnlyPersistenceEnvironmentPostProcessor()
+				.postProcessEnvironment(environment, new SpringApplication()))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("ge.security.core-api-enabled=true requires ge.general.postgresql-enable=true");
+	}
+
+	@Test
+	void webhooksRequirePostgresql() {
+		MockEnvironment environment = new MockEnvironment()
+				.withProperty("ge.general.explorer-enable", "false")
+				.withProperty("ge.general.postgresql-enable", "false")
+				.withProperty("ge.general.webhook-enable", "true");
+
+		assertThatThrownBy(() -> new CoreOnlyPersistenceEnvironmentPostProcessor()
+				.postProcessEnvironment(environment, new SpringApplication()))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("ge.general.webhook-enable=true requires ge.general.postgresql-enable=true");
+	}
+
+	@Test
+	void explorerRequiresPostgresql() {
+		MockEnvironment environment = new MockEnvironment()
+				.withProperty("ge.general.explorer-enable", "true")
+				.withProperty("ge.general.postgresql-enable", "false")
+				.withProperty("ge.general.webhook-enable", "false");
+
+		assertThatThrownBy(() -> new CoreOnlyPersistenceEnvironmentPostProcessor()
+				.postProcessEnvironment(environment, new SpringApplication()))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("ge.general.explorer-enable=true requires ge.general.postgresql-enable=true");
 	}
 
 	@Test

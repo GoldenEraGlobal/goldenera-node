@@ -420,7 +420,8 @@ class SandboxControlWebTest {
 				Map.of(
 						"ge.sandbox.control-api.enabled", Boolean.toString(controlEnabled),
 						"ge.sandbox.control-api.token-file", tokenPath.toString(),
-						"ge.general.explorer-enable", Boolean.toString(explorerEnabled))));
+						"ge.general.explorer-enable", Boolean.toString(explorerEnabled),
+						"ge.general.postgresql-enable", Boolean.toString(explorerEnabled))));
 		SandboxRuntimeContext runtimeContext = runtime(manifestCapability);
 		context.addBeanFactoryPostProcessor(beanFactory ->
 				beanFactory.registerSingleton("sandboxRuntimeContext", runtimeContext));
