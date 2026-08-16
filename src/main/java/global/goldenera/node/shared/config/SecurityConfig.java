@@ -104,12 +104,34 @@ public class SecurityConfig {
         }
 
         /**
+         * Filter chain for the bridge API, always protected by API Keys.
+         */
+        @Bean
+        @Order(2)
+        public SecurityFilterChain bridgeApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        ThrottlingFilter throttlingFilter)
+                        throws Exception {
+                http
+                                .securityMatcher("/api/bridge/**")
+                                .cors(Customizer.withDefaults())
+                                .csrf(csrf -> csrf.disable())
+                                .httpBasic(basic -> basic.disable())
+                                .formLogin(login -> login.disable());
+
+                http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                                .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+                                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
+                return http.build();
+        }
+
+        /**
          * Filter chain for the shared API, always protected by API Keys.
          * <p>
          * Unlike explorer API, shared API always requires authentication.
          */
         @Bean
-        @Order(2)
+        @Order(3)
         public SecurityFilterChain sharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
@@ -137,7 +159,7 @@ public class SecurityConfig {
          * explorerApiEnabled property.
          */
         @Bean
-        @Order(3)
+        @Order(4)
         public SecurityFilterChain explorerApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
@@ -166,7 +188,7 @@ public class SecurityConfig {
          * Filter chain for the CORE API
          */
         @Bean
-        @Order(4)
+        @Order(5)
         public SecurityFilterChain coreApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
                         ThrottlingFilter throttlingFilter) throws Exception {
                 http

@@ -98,7 +98,13 @@ public class Webhook {
 	@Column(name = "url", nullable = false, updatable = false, length = 2048)
 	String url;
 
-	@Column(name = "secret_key", nullable = false, updatable = false, columnDefinition = "BYTEA")
+	@Column(name = "bridge_destination_key", nullable = true, updatable = false, length = 2048)
+	String bridgeDestinationKey;
+
+	/**
+	 * Per-webhook signing secret retained only for webhooks created before API-key-owned secrets were introduced.
+	 */
+	@Column(name = "secret_key", nullable = true, updatable = false, columnDefinition = "BYTEA")
 	@Convert(converter = BytesConverter.class)
 	Bytes secretKey;
 
@@ -120,7 +126,7 @@ public class Webhook {
 	@Column(name = "headers", columnDefinition = "jsonb", nullable = true, updatable = true)
 	Map<String, Object> headers;
 
-	public Webhook(WebhookType type, Integer dtoVersion, String label, String description, String url, Bytes secretKey,
+	public Webhook(WebhookType type, Integer dtoVersion, String label, String description, String url,
 			ApiKey createdByApiKey,
 			Map<String, Object> queryParams, Map<String, Object> headers) {
 		this.type = type;
@@ -128,7 +134,6 @@ public class Webhook {
 		this.label = label;
 		this.description = description;
 		this.url = url;
-		this.secretKey = secretKey;
 		this.enabled = true;
 		this.createdAt = Instant.now();
 		this.createdByApiKey = createdByApiKey;

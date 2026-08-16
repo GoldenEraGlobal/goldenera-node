@@ -34,6 +34,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import global.goldenera.node.shared.entities.Webhook;
+import global.goldenera.node.shared.enums.WebhookType;
 import io.hypersistence.utils.spring.repository.BaseJpaRepository;
 
 @Repository
@@ -43,15 +44,24 @@ public interface WebhookCoreRepository extends BaseJpaRepository<Webhook, UUID>,
 	@Query("SELECT w FROM Webhook w WHERE w.createdByApiKey.id = :apiKeyId")
 	List<Webhook> findByApiKeyId(@Param("apiKeyId") long apiKeyId);
 
-	@Query("SELECT COUNT(w) FROM Webhook w WHERE w.createdByApiKey.id = :apiKeyId")
-	long countByApiKeyId(@Param("apiKeyId") long apiKeyId);
+	@Query("SELECT COUNT(w) FROM Webhook w WHERE w.createdByApiKey.id = :apiKeyId AND w.type <> :excludedType")
+	long countByApiKeyIdAndTypeNot(
+			@Param("apiKeyId") long apiKeyId,
+			@Param("excludedType") WebhookType excludedType);
 
-	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey k WHERE w.enabled = true AND k.enabled = true")
-	List<Webhook> findAllEnabledWithEvents();
+	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey k WHERE w.enabled = true AND k.enabled = true AND w.type <> :excludedType")
+	List<Webhook> findAllEnabledWithEvents(@Param("excludedType") WebhookType excludedType);
 
-	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey k WHERE w.createdByApiKey.id = :apiKeyId AND w.enabled = true AND k.enabled = true")
-	List<Webhook> findEnabledByApiKeyIdWithEvents(@Param("apiKeyId") long apiKeyId);
+	@Deprecated(forRemoval = false)
+	default List<Webhook> findAllEnabledWithEvents() {
+		return findAllEnabledWithEvents(WebhookType.BRIDGE);
+	}
 
-	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events WHERE w.id = :id")
+	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey k WHERE w.createdByApiKey.id = :apiKeyId AND w.enabled = true AND k.enabled = true AND w.type <> :excludedType")
+	List<Webhook> findEnabledByApiKeyIdWithEvents(
+			@Param("apiKeyId") long apiKeyId,
+			@Param("excludedType") WebhookType excludedType);
+
+	@Query("SELECT w FROM Webhook w LEFT JOIN FETCH w.events JOIN FETCH w.createdByApiKey WHERE w.id = :id")
 	Optional<Webhook> findByIdWithEvents(@Param("id") UUID id);
 }

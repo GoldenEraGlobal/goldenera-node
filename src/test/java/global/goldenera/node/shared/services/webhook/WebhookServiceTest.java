@@ -23,15 +23,20 @@
  */
 package global.goldenera.node.shared.services.webhook;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookCreateInDtoV1;
-import global.goldenera.node.shared.components.AESGCMComponent;
 import global.goldenera.node.shared.entities.ApiKey;
+import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.enums.WebhookType;
+import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
@@ -39,16 +44,71 @@ import global.goldenera.node.shared.services.core.WebhookCoreService;
 class WebhookServiceTest {
 
 	@Test
+	void bridgeDestinationCannotBeCreatedThroughSharedWebhookApi() {
+		WebhookService service = new WebhookService(
+				mock(WebhookCoreService.class), new GeneralProperties());
+		WebhookCreateInDtoV1 payload = new WebhookCreateInDtoV1();
+		payload.setType(WebhookType.BRIDGE);
+
+		assertThatThrownBy(() -> service.createWebhook(mock(ApiKey.class), payload))
+				.isInstanceOf(GEValidationException.class)
+				.hasMessageContaining("managed by the bridge API");
+	}
+
+	@Test
 	void explorerWebhookRequiresExplorerRuntime() {
 		GeneralProperties generalProperties = new GeneralProperties();
 		generalProperties.setExplorerEnable(false);
 		WebhookService service = new WebhookService(
-				mock(AESGCMComponent.class), mock(WebhookCoreService.class), generalProperties);
+				mock(WebhookCoreService.class), generalProperties);
 		WebhookCreateInDtoV1 payload = new WebhookCreateInDtoV1();
 		payload.setType(WebhookType.EXPLORER);
 
 		assertThatThrownBy(() -> service.createWebhook(mock(ApiKey.class), payload))
 				.isInstanceOf(GEValidationException.class)
 				.hasMessage("Explorer webhooks require ge.general.explorer-enable=true");
+	}
+
+	@Test
+	void legacyApiKeyWithoutSigningSecretCannotCreateWebhook() {
+		GeneralProperties generalProperties = new GeneralProperties();
+		generalProperties.setExplorerEnable(true);
+		WebhookCoreService coreService = mock(WebhookCoreService.class);
+		WebhookService service = new WebhookService(coreService, generalProperties);
+		ApiKey apiKey = mock(ApiKey.class);
+		when(apiKey.hasPermission(ApiKeyPermission.READ_WRITE_WEBHOOK)).thenReturn(true);
+		when(apiKey.getId()).thenReturn(1L);
+		when(apiKey.getMaxWebhooks()).thenReturn(10L);
+		WebhookCreateInDtoV1 payload = new WebhookCreateInDtoV1();
+		payload.setType(WebhookType.EXPLORER);
+		payload.setLabel("legacy_hook");
+		payload.setUrl("https://example.com/webhook");
+
+		assertThatThrownBy(() -> service.createWebhook(apiKey, payload))
+				.isInstanceOf(GEFailedException.class)
+				.hasMessageContaining("legacy API key has no webhook signing secret");
+	}
+
+	@Test
+	void newWebhookUsesApiKeySecretWithoutPersistingItsOwnSecret() {
+		GeneralProperties generalProperties = new GeneralProperties();
+		generalProperties.setExplorerEnable(true);
+		WebhookCoreService coreService = mock(WebhookCoreService.class);
+		when(coreService.create(any())).thenAnswer(invocation -> invocation.getArgument(0));
+		WebhookService service = new WebhookService(coreService, generalProperties);
+		ApiKey apiKey = mock(ApiKey.class);
+		when(apiKey.hasPermission(ApiKeyPermission.READ_WRITE_WEBHOOK)).thenReturn(true);
+		when(apiKey.getId()).thenReturn(1L);
+		when(apiKey.getMaxWebhooks()).thenReturn(10L);
+		when(apiKey.getWebhookSecretKey()).thenReturn(Bytes.wrap(new byte[] { 1 }));
+		WebhookCreateInDtoV1 payload = new WebhookCreateInDtoV1();
+		payload.setType(WebhookType.EXPLORER);
+		payload.setLabel("bridge_hook");
+		payload.setUrl("https://example.com/webhook");
+
+		WebhookService.CreatedWebhook created = service.createWebhook(apiKey, payload);
+
+		assertThat(created.getWebhook().getSecretKey()).isNull();
+		assertThat(created.getWebhook().getCreatedByApiKey()).isSameAs(apiKey);
 	}
 }

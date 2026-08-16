@@ -43,12 +43,17 @@ import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
 		"global.goldenera.node.shared.services.core"
 })
 @EnableJpaRepositories(
-		value = "global.goldenera.node.shared.repositories",
+		value = {
+				"global.goldenera.node.shared.repositories",
+				"global.goldenera.node.bridge.repositories"
+		},
 		repositoryBaseClass = BaseJpaRepositoryImpl.class,
 		bootstrapMode = BootstrapMode.LAZY)
 @EntityScan(basePackages = {
 		"global.goldenera.node.shared.converters",
-		"global.goldenera.node.shared.entities"
+		"global.goldenera.node.shared.entities",
+		"global.goldenera.node.bridge.entities",
+		"global.goldenera.node.bridge.converters"
 })
 public class SharedPersistenceConfiguration {
 }

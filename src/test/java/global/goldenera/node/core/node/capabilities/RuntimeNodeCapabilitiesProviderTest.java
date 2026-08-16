@@ -85,15 +85,32 @@ class RuntimeNodeCapabilitiesProviderTest {
 		assertThat(snapshot.capabilityIds()).isSorted().doesNotHaveDuplicates();
 	}
 
+	@Test
+	void advertisesBridgeWithExplorer() {
+		RuntimeNodeCapabilitiesProvider provider = provider(
+				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.MAINNET, Optional.empty()),
+				mock(RandomXProofOfWorkProvider.class),
+				RandomXMiningMemoryMode.FULL,
+				true);
+
+		assertThat(provider.snapshot().capabilityIds()).contains("bridge-v1", "explorer-v1");
+	}
+
 	private RuntimeNodeCapabilitiesProvider provider(SandboxRuntimeContext runtimeContext,
 			ProofOfWorkProvider proofOfWorkProvider, RandomXMiningMemoryMode memoryMode) {
+		return provider(runtimeContext, proofOfWorkProvider, memoryMode, false);
+	}
+
+	private RuntimeNodeCapabilitiesProvider provider(SandboxRuntimeContext runtimeContext,
+			ProofOfWorkProvider proofOfWorkProvider, RandomXMiningMemoryMode memoryMode,
+			boolean explorerEnabled) {
 		AuthoritativeChainIdentityProvider identityProvider = mock(AuthoritativeChainIdentityProvider.class);
 		when(identityProvider.identity()).thenReturn(new StoredChainIdentity(
 				1, 0, "mainnet", "0x" + "01".repeat(32), null));
 		MiningProperties miningProperties = new MiningProperties();
 		miningProperties.setMemoryMode(memoryMode);
 		GeneralProperties generalProperties = new GeneralProperties();
-		generalProperties.setExplorerEnable(false);
+		generalProperties.setExplorerEnable(explorerEnabled);
 		return new RuntimeNodeCapabilitiesProvider(
 				runtimeContext,
 				identityProvider,

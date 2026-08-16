@@ -60,7 +60,8 @@ public class ThrottlingFilter extends OncePerRequestFilter {
         }
 
         String path = request.getRequestURI();
-        if (path.startsWith("/api/core") || path.startsWith("/api/explorer") || path.startsWith("/api/shared")) {
+        if (path.startsWith("/api/core") || path.startsWith("/api/explorer") || path.startsWith("/api/shared")
+                || path.startsWith("/api/bridge")) {
             String limitKey;
             boolean isApiKey = false;
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();

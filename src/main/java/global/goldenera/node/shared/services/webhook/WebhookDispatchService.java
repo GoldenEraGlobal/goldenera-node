@@ -170,7 +170,14 @@ public class WebhookDispatchService {
 	}
 
 	private void updateConfigCache(Webhook webhook) {
-		Bytes secretKey = webhook.getSecretKey();
+		Bytes secretKey = webhook.getSecretKey() != null
+				? webhook.getSecretKey()
+				: webhook.getCreatedByApiKey().getWebhookSecretKey();
+		if (secretKey == null) {
+			log.error("Skipping webhook {} because API key {} has no webhook signing secret",
+					webhook.getId(), webhook.getCreatedByApiKey().getId());
+			return;
+		}
 		Bytes decryptedSecretKey = aesGCMComponent.decrypt(secretKey);
 		webhookConfigs.put(webhook.getId(), new WebhookConfig(
 				webhook.getUrl(),
@@ -210,7 +217,8 @@ public class WebhookDispatchService {
 			case CREATE_WEBHOOK:
 			case UPDATE_WEBHOOK:
 				Webhook webhook = webhookCoreService.findWebhookByIdWithEvents(webhookId).orElse(null);
-				if (webhook != null && webhook.isEnabled() && webhook.getCreatedByApiKey().isEnabled()) {
+				if (webhook != null && webhook.getType() != WebhookType.BRIDGE
+						&& webhook.isEnabled() && webhook.getCreatedByApiKey().isEnabled()) {
 					registerWebhookInMemory(webhook);
 					log.info("Updated cache for webhook {}", webhookId);
 				} else {

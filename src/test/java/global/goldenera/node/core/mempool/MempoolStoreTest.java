@@ -118,8 +118,12 @@ class MempoolStoreTest {
 		assertThat(store.getTxByHash(oldEntry.getHash())).isEmpty();
 		assertThat(store.getTxByHash(replacement.getHash())).containsSame(replacement);
 		assertThat(executable()).containsExactly(replacement);
-		assertThat(removeEvents(MempoolTxRemoveEvent.RemoveReason.RBF)).extracting(MempoolTxRemoveEvent::getEntry)
-				.containsExactly(oldEntry);
+		assertThat(removeEvents(MempoolTxRemoveEvent.RemoveReason.RBF))
+				.singleElement()
+				.satisfies(event -> {
+					assertThat(event.getEntry()).isSameAs(oldEntry);
+					assertThat(event.getReplacementTxHash()).isEqualTo(replacement.getHash());
+				});
 		assertInvariants();
 	}
 

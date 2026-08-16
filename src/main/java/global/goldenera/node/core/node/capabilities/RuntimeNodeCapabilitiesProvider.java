@@ -79,6 +79,7 @@ public final class RuntimeNodeCapabilitiesProvider implements NodeCapabilitiesPr
 			case DETERMINISTIC_SHA256_V1 -> "pow-deterministic-sha256-v1";
 		});
 		if (generalProperties.isExplorerEnable()) {
+			capabilities.add("bridge-v1");
 			capabilities.add("explorer-v1");
 		}
 		runtimeContext.manifestContext().ifPresent(context -> addSandboxCapabilities(

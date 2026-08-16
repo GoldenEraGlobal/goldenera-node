@@ -82,6 +82,16 @@ class CoreOnlySecurityConfigurationTest {
 		}
 	}
 
+	@Test
+	void bridgeApiIsDeniedWhenSqlApiKeysAreUnavailable() throws Exception {
+		try (Fixture fixture = fixture(false)) {
+			fixture.mockMvc.perform(get("/api/bridge/v1/probe"))
+					.andExpect(status().isForbidden());
+
+			assertThat(fixture.controllerCalls.get()).isZero();
+		}
+	}
+
 	private Fixture fixture(boolean coreApiSecurityEnabled) {
 		AnnotationConfigWebApplicationContext context = new AnnotationConfigWebApplicationContext();
 		context.setServletContext(new MockServletContext());
@@ -159,6 +169,12 @@ class CoreOnlySecurityConfigurationTest {
 		String live() {
 			calls.incrementAndGet();
 			return "UP";
+		}
+
+		@GetMapping("/api/bridge/v1/probe")
+		String bridge() {
+			calls.incrementAndGet();
+			return "ok";
 		}
 	}
 

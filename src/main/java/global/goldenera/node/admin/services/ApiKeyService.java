@@ -34,6 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.node.admin.utils.ApiKeyValidator;
+import global.goldenera.node.shared.components.AESGCMComponent;
 import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
@@ -54,8 +55,10 @@ import lombok.extern.slf4j.Slf4j;
 public class ApiKeyService {
 
 	static final int ACCESS_TOKEN_LENGTH = 64;
+	static final int WEBHOOK_SECRET_LENGTH = 64;
 
 	HmacComponent hmacComponent;
+	AESGCMComponent aesGcmComponent;
 	ApiKeyCoreService apiKeyCoreService;
 
 	@Transactional(rollbackFor = Exception.class)
@@ -75,6 +78,9 @@ public class ApiKeyService {
 		String secret = StringUtil.generateSafeString(ACCESS_TOKEN_LENGTH);
 		String fullApiKey = prefix + "_" + secret;
 		Bytes hashedSecret = hmacComponent.hash(Bytes.wrap(secret.getBytes(StandardCharsets.UTF_8)));
+		String webhookSecret = StringUtil.generateSafeString(WEBHOOK_SECRET_LENGTH);
+		Bytes encryptedWebhookSecret = aesGcmComponent.encrypt(
+				Bytes.wrap(webhookSecret.getBytes(StandardCharsets.UTF_8)));
 
 		ApiKey apiKey = apiKeyCoreService
 				.create(new ApiKey(
@@ -83,11 +89,12 @@ public class ApiKeyService {
 						description,
 						prefix,
 						hashedSecret,
+						encryptedWebhookSecret,
 						true,
 						maxWebhooks,
 						expiresAt));
 
-		return new CreatedApiKey(apiKey, fullApiKey);
+		return new CreatedApiKey(apiKey, fullApiKey, webhookSecret);
 	}
 
 	@Transactional(rollbackFor = Exception.class)
@@ -129,5 +136,7 @@ public class ApiKeyService {
 		ApiKey apiKey;
 		@NonNull
 		String secretKey;
+		@NonNull
+		String webhookSecretKey;
 	}
 }

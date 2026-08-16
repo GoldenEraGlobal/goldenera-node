@@ -34,7 +34,7 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public enum WebhookType {
-    BLOCKCHAIN(0), EXPLORER(1);
+    BLOCKCHAIN(0), EXPLORER(1), BRIDGE(2);
 
     int code;
 

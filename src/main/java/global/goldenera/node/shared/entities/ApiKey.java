@@ -96,6 +96,10 @@ public class ApiKey {
 	@Convert(converter = BytesConverter.class)
 	Bytes secretKey;
 
+	@Column(name = "webhook_secret_key", nullable = true, updatable = false, columnDefinition = "BYTEA")
+	@Convert(converter = BytesConverter.class)
+	Bytes webhookSecretKey;
+
 	@Column(name = "enabled", nullable = false)
 	boolean enabled;
 
@@ -114,6 +118,7 @@ public class ApiKey {
 			String description,
 			@NonNull String keyPrefix,
 			@NonNull Bytes secretKey,
+			@NonNull Bytes webhookSecretKey,
 			boolean enabled,
 			Long maxWebhooks,
 			Instant expiresAt) {
@@ -122,6 +127,7 @@ public class ApiKey {
 		this.description = description;
 		this.keyPrefix = keyPrefix;
 		this.secretKey = secretKey;
+		this.webhookSecretKey = webhookSecretKey;
 		this.enabled = enabled;
 		this.maxWebhooks = maxWebhooks;
 		this.expiresAt = expiresAt;

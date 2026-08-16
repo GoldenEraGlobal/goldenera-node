@@ -53,6 +53,7 @@ public final class NodeOpenApiGroupsProvider {
 		List<NodeOpenApiGroup> groups = new ArrayList<>();
 		groups.add(group("CORE API"));
 		if (generalProperties.isExplorerEnable()) {
+			groups.add(group("Bridge API"));
 			groups.add(group("Explorer API"));
 			groups.add(group("Node Admin API"));
 			groups.add(group("Shared API"));

@@ -11,3 +11,7 @@ databaseChangeLog:
                   file: db/changelog/changesets/005-mining-economics-explorer.yaml
         - include:
                   file: db/changelog/changesets/006-explorer-chain-identity.yaml
+        - include:
+                  file: db/changelog/changesets/007-api-key-webhook-secret.yaml
+        - include:
+                  file: db/changelog/changesets/008-bridge-delivery.yaml

@@ -26,9 +26,14 @@ package global.goldenera.node.shared.services.webhook;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -47,6 +52,7 @@ import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.entities.WebhookEvent;
 import global.goldenera.node.shared.enums.WebhookEventType;
 import global.goldenera.node.shared.enums.WebhookType;
+import global.goldenera.node.shared.events.WebhookUpdateEvent;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import okhttp3.OkHttpClient;
@@ -87,15 +93,78 @@ class WebhookDispatchServiceTest {
 		dispatch.processNewBlockEvent(mock(Block.class), List.of(), WebhookType.EXPLORER);
 
 		assertThat(queueSize(registry, explorerWebhookId)).isEqualTo(1.0);
+		verify(encryption, times(3)).decrypt(blockWebhook.getCreatedByApiKey().getWebhookSecretKey());
+	}
+
+	@Test
+	void webhookUpdateReloadsApiKeyOwnedSecret() {
+		UUID webhookId = UUID.randomUUID();
+		Webhook webhook = webhook(webhookId, WebhookType.EXPLORER, WebhookEventType.NEW_BLOCK);
+		when(webhook.isEnabled()).thenReturn(true);
+		when(webhook.getCreatedByApiKey().isEnabled()).thenReturn(true);
+		WebhookCoreService coreService = mock(WebhookCoreService.class);
+		when(coreService.findWebhookByIdWithEvents(webhookId)).thenReturn(Optional.of(webhook));
+		AESGCMComponent encryption = mock(AESGCMComponent.class);
+		when(encryption.decrypt(any(Bytes.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		WebhookDispatchService dispatch = new WebhookDispatchService(
+				mock(OkHttpClient.class), new ObjectMapper(), mock(TaskScheduler.class), coreService,
+				new SimpleMeterRegistry(), encryption, mock(BlockchainTxMapper.class),
+				mock(BlockchainBlockHeaderMapper.class));
+
+		dispatch.handleWebhookUpdate(new WebhookUpdateEvent(this,
+				WebhookUpdateEvent.UpdateType.CREATE_WEBHOOK, webhookId, Optional.of(webhook)));
+
+		verify(encryption).decrypt(webhook.getCreatedByApiKey().getWebhookSecretKey());
+	}
+
+	@Test
+	void internalBridgeDestinationIsNotLoadedIntoSharedDispatcher() {
+		UUID webhookId = UUID.randomUUID();
+		Webhook webhook = webhook(webhookId, WebhookType.BRIDGE, WebhookEventType.NEW_BLOCK);
+		when(webhook.isEnabled()).thenReturn(true);
+		when(webhook.getCreatedByApiKey().isEnabled()).thenReturn(true);
+		WebhookCoreService coreService = mock(WebhookCoreService.class);
+		when(coreService.findWebhookByIdWithEvents(webhookId)).thenReturn(Optional.of(webhook));
+		AESGCMComponent encryption = mock(AESGCMComponent.class);
+		WebhookDispatchService dispatch = new WebhookDispatchService(
+				mock(OkHttpClient.class), new ObjectMapper(), mock(TaskScheduler.class), coreService,
+				new SimpleMeterRegistry(), encryption, mock(BlockchainTxMapper.class),
+				mock(BlockchainBlockHeaderMapper.class));
+
+		dispatch.handleWebhookUpdate(new WebhookUpdateEvent(this,
+				WebhookUpdateEvent.UpdateType.CREATE_WEBHOOK, webhookId, Optional.of(webhook)));
+
+		verifyNoInteractions(encryption);
+	}
+
+	@Test
+	void legacyWebhookSecretTakesPrecedenceOverApiKeySecret() {
+		UUID webhookId = UUID.randomUUID();
+		Webhook webhook = webhook(webhookId, WebhookType.EXPLORER, WebhookEventType.NEW_BLOCK);
+		Bytes legacySecret = Bytes.wrap(new byte[] { 1 });
+		when(webhook.getSecretKey()).thenReturn(legacySecret);
+		WebhookCoreService coreService = mock(WebhookCoreService.class);
+		when(coreService.getAllEnabledWebhooksWithEvents()).thenReturn(List.of(webhook));
+		AESGCMComponent encryption = mock(AESGCMComponent.class);
+		when(encryption.decrypt(legacySecret)).thenReturn(Bytes.wrap(new byte[] { 3 }));
+		WebhookDispatchService dispatch = new WebhookDispatchService(
+				mock(OkHttpClient.class), new ObjectMapper(), mock(TaskScheduler.class), coreService,
+				new SimpleMeterRegistry(), encryption, mock(BlockchainTxMapper.class),
+				mock(BlockchainBlockHeaderMapper.class));
+
+		dispatch.loadIndexOnStartup();
+
+		verify(encryption).decrypt(legacySecret);
+		verifyNoMoreInteractions(encryption);
 	}
 
 	private static Webhook webhook(UUID id, WebhookType webhookType, WebhookEventType eventType) {
 		ApiKey apiKey = mock(ApiKey.class);
 		when(apiKey.getId()).thenReturn((long) id.hashCode());
+		when(apiKey.getWebhookSecretKey()).thenReturn(Bytes.wrap(new byte[32]));
 		Webhook webhook = mock(Webhook.class);
 		when(webhook.getId()).thenReturn(id);
 		when(webhook.getCreatedByApiKey()).thenReturn(apiKey);
-		when(webhook.getSecretKey()).thenReturn(Bytes.wrap(new byte[32]));
 		when(webhook.getDtoVersion()).thenReturn(1);
 		when(webhook.getType()).thenReturn(webhookType);
 		when(webhook.getUrl()).thenReturn("https://example.invalid/webhook");

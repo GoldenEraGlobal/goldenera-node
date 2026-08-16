@@ -76,5 +76,7 @@ public class ApiKeyDtoV1 {
         ApiKeyDtoV1 apiKey;
         @NonNull
         String secretKey;
+        @NonNull
+        String webhookSecretKey;
     }
 }

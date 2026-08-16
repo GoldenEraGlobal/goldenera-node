@@ -68,7 +68,7 @@ public class CoreOnlySecurityConfiguration {
 	@Bean
 	@Order(1)
 	SecurityFilterChain coreOnlyAdminApiFilterChain(HttpSecurity http) throws Exception {
-		http.securityMatcher("/api/admin/**", "/api/shared/**", "/api/explorer/**")
+		http.securityMatcher("/api/admin/**", "/api/shared/**", "/api/explorer/**", "/api/bridge/**")
 				.cors(Customizer.withDefaults())
 				.csrf(csrf -> csrf.disable())
 				.formLogin(login -> login.disable())

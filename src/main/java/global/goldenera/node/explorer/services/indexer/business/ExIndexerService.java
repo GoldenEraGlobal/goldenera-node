@@ -100,10 +100,11 @@ public class ExIndexerService {
 					ExStatus status = exStatusCoreService.getStatusOrThrow();
 					Hash oldHash = status.getSyncedBlockHash();
 					Long oldHeight = status.getSyncedBlockHeight();
+					Block orphanBlock = chainQueryService.getStoredBlockByHashOrThrow(oldHash).getBlock();
 					exRevertService.revertBlock(oldHash, oldHeight);
 					// Publish reorg event after successful revert
 					eventPublisher.publishEvent(new ExBlockReorgEvent(
-							this, oldHeight, oldHash, block.getHeight(), block.getHash()));
+							this, oldHeight, oldHash, block.getHeight(), block.getHash(), orphanBlock));
 					continue;
 				} catch (Exception ex) {
 					log.error("Automatic Revert Failed! Explorer is stuck.", ex);
@@ -174,7 +175,17 @@ public class ExIndexerService {
 	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
 	public void handleBlockDisconnected(BlockDisconnectedEvent event) {
 		checkRevertContinuity(event.getBlock());
-		exRevertService.revertBlock(event.getBlock().getHash(), event.getBlock().getHeight());
+		Block orphanBlock = chainQueryService.getStoredBlockByHash(event.getBlock().getHash())
+				.map(StoredBlock::getBlock)
+				.orElse(event.getBlock());
+		exRevertService.revertBlock(orphanBlock.getHash(), orphanBlock.getHeight());
+		eventPublisher.publishEvent(new ExBlockReorgEvent(
+				this,
+				orphanBlock.getHeight(),
+				orphanBlock.getHash(),
+				orphanBlock.getHeight() - 1L,
+				orphanBlock.getHeader().getPreviousHash(),
+				orphanBlock));
 	}
 
 	private void checkContinuity(Block block) throws ChainSplitException, AlreadyIndexedException {

@@ -105,9 +105,9 @@ class MiningEconomicsLiquibaseMigrationTest {
 				.findCorrectDatabaseImplementation(new JdbcConnection(connection));
 		try (ClassLoaderResourceAccessor resources = new ClassLoaderResourceAccessor();
 				Liquibase liquibase = new Liquibase(MASTER_CHANGELOG, resources, database)) {
-			// Roll back the chain-identity table plus the two mining-economics
-			// changesets that this compatibility test is asserting.
-			liquibase.rollback(3, new Contexts(), new LabelExpression());
+			// Roll back bridge delivery, API-key webhook secret, and chain identity,
+			// plus the two mining-economics changesets asserted by this test.
+			liquibase.rollback(5, new Contexts(), new LabelExpression());
 		}
 	}
 

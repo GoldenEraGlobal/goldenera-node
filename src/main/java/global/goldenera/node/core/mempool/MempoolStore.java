@@ -702,7 +702,7 @@ public class MempoolStore {
 						if (replacement != null) {
 							removeGlobalIndexes(replacement);
 							events.add(new MempoolTxRemoveEvent(
-									this, replacement, MempoolTxRemoveEvent.RemoveReason.RBF));
+									this, replacement, MempoolTxRemoveEvent.RemoveReason.RBF, entry.getHash()));
 						}
 						refreshExecutableIndex(pool);
 					}

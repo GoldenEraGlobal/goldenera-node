@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import org.springframework.context.ApplicationEvent;
 
+import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Hash;
 import lombok.Getter;
 import lombok.NonNull;
@@ -44,12 +45,16 @@ public class ExBlockReorgEvent extends ApplicationEvent {
 	Long newHeight;
 	@NonNull
 	Hash newHash;
+	@NonNull
+	Block orphanBlock;
 
-	public ExBlockReorgEvent(Object source, Long oldHeight, Hash oldHash, Long newHeight, Hash newHash) {
+	public ExBlockReorgEvent(Object source, Long oldHeight, Hash oldHash, Long newHeight, Hash newHash,
+			Block orphanBlock) {
 		super(source);
 		this.oldHeight = oldHeight;
 		this.oldHash = oldHash;
 		this.newHeight = newHeight;
 		this.newHash = newHash;
+		this.orphanBlock = orphanBlock;
 	}
 }

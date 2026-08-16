@@ -1,0 +1,210 @@
+databaseChangeLog:
+  - changeSet:
+      id: 20260816-02-bridge-subscription-delivery
+      author: goldenera
+      comment: Add durable bridge destinations, address subscriptions, and ordered delivery outbox.
+      changes:
+        - addColumn:
+            tableName: webhook
+            columns:
+              - column:
+                  name: bridge_destination_key
+                  type: VARCHAR(2048)
+        - createSequence:
+            sequenceName: bridge_delivery_id_seq
+            startValue: 1
+            incrementBy: 1
+        - createTable:
+            tableName: bridge_subscription
+            columns:
+              - column:
+                  name: id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: bridge_subscriptionPK
+                    nullable: false
+              - column:
+                  name: destination_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: network
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: address
+                  type: BYTEA
+                  constraints:
+                    nullable: false
+              - column:
+                  name: enabled
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  constraints:
+                    nullable: false
+        - createTable:
+            tableName: bridge_delivery
+            columns:
+              - column:
+                  name: id
+                  type: BIGINT
+                  defaultValueSequenceNext: bridge_delivery_id_seq
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: bridge_deliveryPK
+                    nullable: false
+              - column:
+                  name: version
+                  type: BIGINT
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: delivery_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: destination_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: body
+                  type: TEXT
+              - column:
+                  name: state
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: attempts
+                  type: INT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: next_attempt_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: lease_owner
+                  type: VARCHAR(128)
+              - column:
+                  name: lease_until
+                  type: TIMESTAMP(6) WITH TIME ZONE
+              - column:
+                  name: last_http_status
+                  type: INT
+              - column:
+                  name: last_error
+                  type: VARCHAR(2048)
+              - column:
+                  name: created_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  constraints:
+                    nullable: false
+        - addForeignKeyConstraint:
+            baseTableName: bridge_subscription
+            baseColumnNames: destination_id
+            referencedTableName: webhook
+            referencedColumnNames: id
+            constraintName: fk_bridge_subscription_destination
+        - addForeignKeyConstraint:
+            baseTableName: bridge_delivery
+            baseColumnNames: destination_id
+            referencedTableName: webhook
+            referencedColumnNames: id
+            constraintName: fk_bridge_delivery_destination
+        - addUniqueConstraint:
+            tableName: bridge_subscription
+            columnNames: destination_id, network, address
+            constraintName: uc_bridge_subscription_destination_network_address
+        - addUniqueConstraint:
+            tableName: bridge_delivery
+            columnNames: delivery_id
+            constraintName: uc_bridge_delivery_delivery_id
+        - addUniqueConstraint:
+            tableName: bridge_delivery
+            columnNames: destination_id, event_id
+            constraintName: uc_bridge_delivery_destination_event
+        - createIndex:
+            tableName: bridge_subscription
+            indexName: idx_bridge_subscription_route
+            columns:
+              - column:
+                  name: network
+              - column:
+                  name: address
+              - column:
+                  name: enabled
+        - createIndex:
+            tableName: bridge_subscription
+            indexName: idx_bridge_subscription_destination
+            columns:
+              - column:
+                  name: destination_id
+              - column:
+                  name: enabled
+        - createIndex:
+            tableName: bridge_delivery
+            indexName: idx_bridge_delivery_claim
+            columns:
+              - column:
+                  name: state
+              - column:
+                  name: next_attempt_at
+              - column:
+                  name: lease_until
+              - column:
+                  name: id
+        - createIndex:
+            tableName: bridge_delivery
+            indexName: idx_bridge_delivery_destination_order
+            columns:
+              - column:
+                  name: destination_id
+              - column:
+                  name: id
+        - sql:
+            dbms: postgresql
+            sql: >-
+              CREATE UNIQUE INDEX uc_bridge_webhook_destination
+              ON webhook (created_by_api_key_id, bridge_destination_key)
+              WHERE type = 2
+        - sql:
+            dbms: postgresql
+            sql: >-
+              ALTER TABLE bridge_delivery
+              ADD CONSTRAINT ck_bridge_delivery_state CHECK (state BETWEEN 0 AND 4),
+              ADD CONSTRAINT ck_bridge_delivery_attempts CHECK (attempts >= 0)
+      rollback:
+        - sql:
+            dbms: postgresql
+            sql: DROP INDEX IF EXISTS uc_bridge_webhook_destination
+        - dropTable:
+            tableName: bridge_delivery
+        - dropTable:
+            tableName: bridge_subscription
+        - dropSequence:
+            sequenceName: bridge_delivery_id_seq
+        - dropColumn:
+            tableName: webhook
+            columnName: bridge_destination_key

@@ -60,6 +60,6 @@ class NodeOpenApiGroupsProviderTest {
 				new MockEnvironment());
 
 		assertThat(provider.groups()).extracting(NodeOpenApiGroup::id)
-				.containsExactly("CORE API", "Explorer API", "Node Admin API", "Shared API");
+				.containsExactly("Bridge API", "CORE API", "Explorer API", "Node Admin API", "Shared API");
 	}
 }
