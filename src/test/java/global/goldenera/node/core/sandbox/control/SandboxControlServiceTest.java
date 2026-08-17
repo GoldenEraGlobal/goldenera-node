@@ -25,6 +25,7 @@ package global.goldenera.node.core.sandbox.control;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -266,14 +267,13 @@ class SandboxControlServiceTest {
 		ExactOneRequest body = new ExactOneRequest(null, 1L);
 		String operationId = service.submitExactOne("deadline-key", body).operation().operationId();
 
-		long timeoutNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-		while ("PENDING".equals(service.operation(operationId).status()) && System.nanoTime() < timeoutNanos) {
-			TimeUnit.MILLISECONDS.sleep(10);
-		}
-
-		assertThat(service.operation(operationId).outcome().code()).isEqualTo("TIMED_OUT");
-		assertThat(auditLog.page(0, 100).events()).anyMatch(event ->
-				"TIMED_OUT".equals(event.result()) && operationId.equals(event.operationId()));
+		await().atMost(Duration.ofSeconds(3)).untilAsserted(() -> {
+			var operation = service.operation(operationId);
+			assertThat(operation.outcome()).isNotNull();
+			assertThat(operation.outcome().code()).isEqualTo("TIMED_OUT");
+			assertThat(auditLog.page(0, 100).events()).anyMatch(event ->
+					"TIMED_OUT".equals(event.result()) && operationId.equals(event.operationId()));
+		});
 		assertThat(service.submitExactOne("after-timeout", new ExactOneRequest(null, 30_000L))
 				.operation().operationId()).isNotEqualTo(operationId);
 	}

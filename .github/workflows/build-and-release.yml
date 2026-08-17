@@ -58,7 +58,8 @@ jobs:
           CRYPTOJ_JAR="$HOME/.m2/repository/global/goldenera/cryptoj/goldenera-cryptoj/${CRYPTOJ_VERSION}/goldenera-cryptoj-${CRYPTOJ_VERSION}.jar"
           CRYPTOJ_SHA256=$(sha256sum "$CRYPTOJ_JAR" | cut -d ' ' -f 1)
           BUILD_GIT_COMMIT=$(printf '%s' "$GITHUB_SHA" | tr '[:upper:]' '[:lower:]')
-          mvn clean verify -B -T 1C -Prelease-artifact \
+          mvn clean verify -B -T 1C -s ~/.m2/settings.xml
+          mvn package -B -T 1C -DskipTests -Prelease-artifact \
             -Dgoldenera.git.commit="$BUILD_GIT_COMMIT" \
             -Dgoldenera.cryptoj.sha256="$CRYPTOJ_SHA256" \
             -s ~/.m2/settings.xml
