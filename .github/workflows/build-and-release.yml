@@ -3,8 +3,7 @@ name: Build, Release & Docker
 on:
   push:
     branches:
-      - main
-      - master
+      - "**"
     tags:
       - "v*"
 
@@ -80,6 +79,7 @@ jobs:
 
       - name: Check if release exists
         id: check_release
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         run: |
           if gh release view "v${{ env.VERSION }}" > /dev/null 2>&1; then
             echo "release_exists=true" >> $GITHUB_ENV
@@ -90,12 +90,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Delete existing release
-        if: env.release_exists == 'true'
+        if: (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && env.release_exists == 'true'
         run: gh release delete "v${{ env.VERSION }}" --yes --cleanup-tag
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         run: |
           gh release create "v${{ env.VERSION }}" \
             --title "GoldenEra Node v${{ env.VERSION }}" \
@@ -254,6 +255,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,enable=${{ github.ref != 'refs/heads/main' }}
             type=semver,pattern={{version}}
             type=sha,format=short
 
