@@ -49,6 +49,7 @@ public class AccountBalanceStateDtoV1 {
     AccountBalanceStateVersion version;
 	    Wei balance;
 	Wei lockedMiningReward;
+	Wei pendingMiningRewardCancellation;
 	Wei spendableBalance;
     long updatedAtBlockHeight;
     Instant updatedAtTimestamp;

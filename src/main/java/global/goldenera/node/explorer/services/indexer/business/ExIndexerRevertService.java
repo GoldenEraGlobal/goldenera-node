@@ -104,6 +104,7 @@ public class ExIndexerRevertService {
 				    SET
 				        balance = (l.old_value->>'b')::numeric,
 				        locked_mining_reward = COALESCE((l.old_value->>'lmr')::numeric, 0),
+				        pending_mining_reward_cancellation = COALESCE((l.old_value->>'pmrc')::numeric, 0),
 				        updated_at_block_height = (l.old_value->>'uh')::bigint,
 				        updated_at_timestamp = (l.old_value->>'ut')::timestamp,
 						account_balance_version = (l.old_value->>'ver')::integer

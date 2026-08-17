@@ -238,9 +238,7 @@ public class BipVoteHandler implements TxHandler {
 
 		// 2. Calculate the actual amount to burn (Cap at user's balance)
 		Wei requestedAmount = p.getAmount();
-		Wei currentBalance = p.getTokenAddress().equals(Address.NATIVE_TOKEN)
-				? bal.getSpendableBalance()
-				: bal.getBalance();
+		Wei currentBalance = bal.getBalance();
 		Wei actualBurnAmount = requestedAmount;
 
 		if (currentBalance.compareTo(requestedAmount) < 0) {
@@ -260,8 +258,10 @@ public class BipVoteHandler implements TxHandler {
 				token.burn(actualBurnAmount, bipHash, block.getHeight(), block.getTimestamp()));
 
 		// 4. Debit User with the ACTUAL amount
-		state.setBalance(target, p.getTokenAddress(),
-				bal.debit(actualBurnAmount, block.getHeight(), block.getTimestamp()));
+		AccountBalanceStateImpl updatedBalance = p.getTokenAddress().equals(Address.NATIVE_TOKEN)
+				? bal.burnIncludingLockedMiningReward(actualBurnAmount, block.getHeight(), block.getTimestamp())
+				: bal.debit(actualBurnAmount, block.getHeight(), block.getTimestamp());
+		state.setBalance(target, p.getTokenAddress(), updatedBalance);
 	}
 
 	private void processAuthorityAdd(WorldState state, TxBipAuthorityAddPayload p, SimpleBlock block, Hash bipHash) {

@@ -74,6 +74,7 @@ public class ExIndexerAccountHelperService {
 				BalanceRevertDto dto = BalanceRevertDto.from(
 						diff.getOldValue().getBalance(),
 						diff.getOldValue().getLockedMiningReward(),
+						diff.getOldValue().getPendingMiningRewardCancellation(),
 						diff.getOldValue().getUpdatedAtBlockHeight(),
 						diff.getOldValue().getUpdatedAtTimestamp(),
 						diff.getOldValue().getVersion());

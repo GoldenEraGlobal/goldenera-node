@@ -502,7 +502,14 @@ public class MempoolValidator {
 	private Wei projectedNativeSpendable(WorldState worldState, Address sender,
 			AccountBalanceState balance, long candidateBlockHeight) {
 		Wei maturingReward = worldState.getMiningRewardMaturity(candidateBlockHeight).getRewards().get(sender);
-		return balance.getSpendableBalance().addExact(maturingReward == null ? Wei.ZERO : maturingReward);
+		if (maturingReward == null) {
+			return balance.getSpendableBalance();
+		}
+		Wei cancellation = balance.getPendingMiningRewardCancellation();
+		Wei actualUnlock = maturingReward.compareTo(cancellation) > 0
+				? maturingReward.subtractExact(cancellation)
+				: Wei.ZERO;
+		return balance.getSpendableBalance().addExact(actualUnlock);
 	}
 
 	private String reservationDiagnostic(MempoolStore.ReservationSnapshot reservation) {

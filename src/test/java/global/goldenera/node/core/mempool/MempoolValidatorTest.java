@@ -190,6 +190,7 @@ class MempoolValidatorTest {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(100));
 		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(30));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
 		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
 		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(30))))
 				.thenReturn(reservation(0, 0, 35, 30));
@@ -207,6 +208,7 @@ class MempoolValidatorTest {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(100));
 		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
 		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
 		when(store.nativeReservation(eq(ALICE), eq(vote.getTx()), eq(Wei.valueOf(5))))
 				.thenReturn(reservation(0, 0, 10, 5));
@@ -223,6 +225,7 @@ class MempoolValidatorTest {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(40));
 		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
 		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
 		when(worldState.getMiningRewardMaturity(11)).thenReturn(
 				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
@@ -238,6 +241,7 @@ class MempoolValidatorTest {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(40));
 		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
 		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
 		when(worldState.getMiningRewardMaturity(12)).thenReturn(
 				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
@@ -248,6 +252,25 @@ class MempoolValidatorTest {
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
 		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
+	}
+
+	@Test
+	void cancelledMaturityIsNotProjectedAsSpendableAtCandidateHeight() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 1, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.valueOf(35));
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(worldState.getMiningRewardMaturity(11)).thenReturn(
+				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(5))))
+				.thenReturn(reservation(0, 0, 11, 5));
+
+		MempoolValidationResult result = admit(candidate);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isNull();
 	}
 
 	@Test
@@ -421,6 +444,7 @@ class MempoolValidatorTest {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(value));
 		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(value));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
 		when(worldState.getBalance(ALICE, token)).thenReturn(balance);
 	}
 

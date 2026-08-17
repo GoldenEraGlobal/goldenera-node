@@ -84,6 +84,12 @@ databaseChangeLog:
                   defaultValueNumeric: 0
                   constraints:
                     nullable: false
+              - column:
+                  name: pending_mining_reward_cancellation
+                  type: NUMERIC(80, 0)
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
         - addColumn:
             tableName: explorer_transfer
             columns:
@@ -94,6 +100,9 @@ databaseChangeLog:
         - dropColumn:
             tableName: explorer_transfer
             columnName: unlock_block_height
+        - dropColumn:
+            tableName: explorer_account_balance
+            columnName: pending_mining_reward_cancellation
         - dropColumn:
             tableName: explorer_account_balance
             columnName: locked_mining_reward

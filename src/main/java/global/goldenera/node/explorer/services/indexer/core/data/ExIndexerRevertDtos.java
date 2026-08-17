@@ -52,14 +52,17 @@ public class ExIndexerRevertDtos {
 	public static record BalanceRevertDto(
 				@JsonProperty("b") BigDecimal balance,
 				@JsonProperty("lmr") BigDecimal lockedMiningReward,
+				@JsonProperty("pmrc") BigDecimal pendingMiningRewardCancellation,
 			@JsonProperty("uh") long updatedAtBlockHeight,
 			@JsonProperty("ut") Instant updatedAtTimestamp,
 			@JsonProperty("ver") int version) {
-			public static BalanceRevertDto from(Wei balance, Wei lockedMiningReward, long uh, Instant ut,
+			public static BalanceRevertDto from(Wei balance, Wei lockedMiningReward,
+					Wei pendingMiningRewardCancellation, long uh, Instant ut,
 					AccountBalanceStateVersion v) {
 				return new BalanceRevertDto(
 						new BigDecimal(balance.toBigInteger()),
 						new BigDecimal(lockedMiningReward.toBigInteger()),
+						new BigDecimal(pendingMiningRewardCancellation.toBigInteger()),
 						uh, ut, v.getCode());
 			}
 	}

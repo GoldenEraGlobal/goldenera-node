@@ -57,6 +57,8 @@ public class AccountSummaryDtoV1 {
 
 	Wei lockedMiningReward;
 
+	Wei pendingMiningRewardCancellation;
+
 	Wei spendableNativeBalance;
 
     /**

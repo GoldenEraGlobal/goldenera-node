@@ -50,6 +50,7 @@ public class AccountBalanceDtoV1 {
 	Address address;
 	Wei balance;
 	Wei lockedMiningReward;
+	Wei pendingMiningRewardCancellation;
 	Wei spendableBalance;
 	Address tokenAddress;
 	long createdAtBlockHeight;

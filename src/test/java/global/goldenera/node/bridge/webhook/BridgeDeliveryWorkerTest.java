@@ -40,6 +40,7 @@ import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.TaskScheduler;
 
 import global.goldenera.node.bridge.webhook.BridgeDeliveryStore.ClaimedDelivery;
@@ -74,6 +75,13 @@ class BridgeDeliveryWorkerTest {
 		when(httpClient.newCall(any())).thenReturn(call);
 		when(encryption.decrypt(any())).thenReturn(Bytes.wrap("secret".getBytes(StandardCharsets.UTF_8)));
 		when(signatures.sign(any(), any(), any())).thenReturn("test-signature");
+	}
+
+	@Test
+	void productionConstructorIsExplicitlySelectedForSpringInjection() {
+		assertThat(BridgeDeliveryWorker.class.getConstructors())
+				.filteredOn(constructor -> constructor.isAnnotationPresent(Autowired.class))
+				.hasSize(1);
 	}
 
 	@Test

@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.TaskScheduler;
@@ -79,6 +80,7 @@ public class BridgeDeliveryWorker {
 	String workerId;
 	AtomicBoolean running = new AtomicBoolean();
 
+	@Autowired
 	public BridgeDeliveryWorker(
 			@Qualifier("webhookOkHttpClient") OkHttpClient httpClient,
 			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler scheduler,

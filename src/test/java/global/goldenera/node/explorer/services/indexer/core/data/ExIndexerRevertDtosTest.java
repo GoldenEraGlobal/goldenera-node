@@ -27,20 +27,36 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Instant;
 
+import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
+import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BalanceRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.NetworkParamsRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.ValidatorRevertDto;
 
 class ExIndexerRevertDtosTest {
 
 	private static final Instant TIME = Instant.parse("2026-01-01T00:00:00Z");
+
+	@Test
+	void balanceSnapshotCarriesNonzeroPendingMiningRewardCancellation() {
+		BalanceRevertDto dto = BalanceRevertDto.from(
+				Wei.valueOf(70), Wei.valueOf(40), Wei.valueOf(30), 11, TIME,
+				AccountBalanceStateVersion.V2);
+
+		assertThat(dto.balance()).isEqualByComparingTo("70");
+		assertThat(dto.lockedMiningReward()).isEqualByComparingTo("40");
+		assertThat(dto.pendingMiningRewardCancellation()).isEqualByComparingTo("30");
+		assertThat(dto.updatedAtBlockHeight()).isEqualTo(11);
+		assertThat(dto.version()).isEqualTo(AccountBalanceStateVersion.V2.getCode());
+	}
 
 	@Test
 	void legacyValidatorSnapshotKeepsPolicyColumnsNull() {

@@ -62,6 +62,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.MiningWindowStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
+import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -72,6 +73,7 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
+import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
@@ -230,6 +232,64 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.containsExactly(MINER_B, MINER_B, MINER_B)
 					.doesNotContain(MINER_A);
 			assertThat(reorged.calculateRootHash()).isEqualTo(forkThirteen.getHeader().getStateRootHash());
+		}
+	}
+
+	@Test
+	void higherWorkForkReplaysRewardMaturitiesFromCommonAncestor() throws Exception {
+		try (Fixture fixture = new Fixture(databaseDirectory)) {
+			StoredBlock base = fixture.seedRewardVestingCanonicalBlock();
+			Block canonicalEleven = fixture.buildValidChild(base.getBlock(), MINER_A_KEY);
+			Block canonicalTwelve = fixture.buildValidChild(canonicalEleven, MINER_A_KEY);
+			Block canonicalThirteen = fixture.buildValidChild(canonicalTwelve, MINER_A_KEY);
+			fixture.ingest(canonicalEleven);
+			fixture.ingest(canonicalTwelve);
+			fixture.ingest(canonicalThirteen);
+
+			Hash losingRoot = canonicalThirteen.getHeader().getStateRootHash();
+			WorldState losingState = fixture.worldStateFactory.createForValidation(losingRoot);
+			assertThat(losingState.calculateRootHash()).isEqualTo(losingRoot);
+			assertThat(losingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getSpendableBalance())
+					.isEqualTo(Wei.valueOf(100));
+			assertThat(losingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(200));
+			assertThat(losingState.getMiningRewardMaturity(13).getRewards()).isEmpty();
+			assertThat(losingState.getMiningRewardMaturity(14).getRewards())
+					.containsEntry(BENEFICIARY, Wei.valueOf(100));
+			assertThat(losingState.getMiningRewardMaturity(15).getRewards())
+					.containsEntry(BENEFICIARY, Wei.valueOf(100));
+
+			Block forkEleven = fixture.buildValidChild(base.getBlock(), MINER_B_KEY);
+			Block forkTwelve = fixture.buildValidChild(forkEleven, MINER_B_KEY);
+			Block forkThirteen = fixture.buildValidChild(forkTwelve, MINER_B_KEY);
+			Block forkFourteen = fixture.buildValidChild(forkThirteen, MINER_B_KEY);
+			fixture.ingest(forkEleven);
+			fixture.ingest(forkTwelve);
+			fixture.ingest(forkThirteen);
+			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash())
+					.isEqualTo(canonicalThirteen.getHash());
+
+			assertThat(fixture.ingest(forkFourteen)).isEqualTo(BlockIngestionOutcome.Code.ACCEPTED);
+			StoredBlock winningHead = fixture.chainQuery.getLatestStoredBlockOrThrow();
+			WorldState winningState = fixture.stateAt(forkFourteen);
+			assertThat(winningHead.getHash()).isEqualTo(forkFourteen.getHash());
+			assertThat(winningState.calculateRootHash()).isEqualTo(forkFourteen.getHeader().getStateRootHash());
+			assertThat(winningState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getSpendableBalance())
+					.isEqualTo(Wei.valueOf(200));
+			assertThat(winningState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(200));
+			assertThat(winningState.getMiningRewardMaturity(14).getRewards()).isEmpty();
+			assertThat(winningState.getMiningRewardMaturity(15).getRewards())
+					.containsEntry(BENEFICIARY, Wei.valueOf(100));
+			assertThat(winningState.getMiningRewardMaturity(16).getRewards())
+					.containsEntry(BENEFICIARY, Wei.valueOf(100));
+
+			WorldState persistedLosingState = fixture.worldStateFactory.createForValidation(losingRoot);
+			assertThat(persistedLosingState.calculateRootHash()).isEqualTo(losingRoot);
+			assertThat(persistedLosingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN)
+					.getLockedMiningReward()).isEqualTo(Wei.valueOf(200));
+			assertThat(persistedLosingState.getMiningRewardMaturity(14).getRewards())
+					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 		}
 	}
 
@@ -639,6 +699,26 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			return stored;
 		}
 
+		private StoredBlock seedRewardVestingCanonicalBlock() {
+			WorldState state = worldStateFactory.create(Hash.wrap(MerkleTrie.EMPTY_TRIE_NODE_HASH), false);
+			initializeRewardVestingState(state);
+			Hash root = state.calculateRootHash();
+			WorldState expectedState = expectedStates.createEmpty(false);
+			initializeRewardVestingState(expectedState);
+			try {
+				assertThat(expectedStates.persist(expectedState)).isEqualTo(root);
+			} catch (Exception exception) {
+				throw new IllegalStateException("Unable to seed expected reward vesting state", exception);
+			}
+			Block block = signedBlock(10, Hash.ZERO, root, MINER_B_KEY);
+			StoredBlock stored = stored(block, BigInteger.valueOf(11));
+			rocksRepository.executeAtomicBatch(batch -> {
+				state.persistToBatch(batch);
+				blockRepository.addBlockToBatch(batch, stored);
+			});
+			return stored;
+		}
+
 		private Block buildValidChild(Block parent, PrivateKey minerKey) {
 			return buildValidChild(parent, minerKey, List.of());
 		}
@@ -680,6 +760,15 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			state.addAuthority(MINER_A, authority());
 			state.addValidator(MINER_A, explicitValidator(MiningLimitMode.LIMITED, 4_000));
 			state.addValidator(MINER_B, explicitValidator(MiningLimitMode.UNLIMITED, 0));
+		}
+
+		private void initializeRewardVestingState(WorldState state) {
+			initializeActiveState(state);
+			state.setParams(activeParams().toBuilder()
+					.blockReward(Wei.valueOf(100))
+					.miningRewardVestingBlocks(2)
+					.build());
+			state.setToken(Address.NATIVE_TOKEN, nativeToken());
 		}
 
 		private BlockIngestionOutcome.Code ingest(Block block) {
@@ -779,6 +868,22 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.limitedValidatorMiningSharesBps(List.of(4_000L))
 					.validatorMiningWindowBlocks(100)
 					.updatedAtBlockHeight(10)
+					.updatedAtTimestamp(BASE_TIME)
+					.build();
+		}
+
+		private TokenStateImpl nativeToken() {
+			return TokenStateImpl.builder()
+					.version(TokenStateVersion.getLatest())
+					.name("Native")
+					.smallestUnitName("NAT")
+					.numberOfDecimals(0)
+					.maxSupply(BigInteger.valueOf(Long.MAX_VALUE))
+					.userBurnable(true)
+					.originTxHash(Hash.ZERO)
+					.updatedByTxHash(Hash.ZERO)
+					.totalSupply(Wei.valueOf(1_000_000))
+					.updatedAtBlockHeight(0)
 					.updatedAtTimestamp(BASE_TIME)
 					.build();
 		}

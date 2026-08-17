@@ -36,6 +36,8 @@ import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.state.NetworkParamsState;
+import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
@@ -88,5 +90,35 @@ class ExIndexerTxToTransferMapperTest {
 		assertThat(mapper.map(event)).filteredOn(transfer -> transfer.getType() == TransferType.BLOCK_REWARD)
 				.singleElement()
 				.satisfies(transfer -> assertThat(transfer.getUnlockBlockHeight()).isNull());
+	}
+
+	@Test
+	void sameBlockPoolChangeUsesPoolCapturedByRewardEvent() {
+		ExIndexerTxToTransferMapper mapper = new ExIndexerTxToTransferMapper(mock(ExNetworkParamsRepository.class));
+		Address miner = Address.fromHexString("0x0000000000000000000000000000000000000001");
+		Address oldPool = Address.fromHexString("0x0000000000000000000000000000000000000002");
+		Address newPool = Address.fromHexString("0x0000000000000000000000000000000000000003");
+		BlockHeader header = mock(BlockHeader.class);
+		when(header.getCoinbase()).thenReturn(miner);
+		when(header.getTimestamp()).thenReturn(Instant.parse("2026-08-16T00:00:00Z"));
+		Block block = mock(Block.class);
+		when(block.getHeight()).thenReturn(11L);
+		when(block.getHash()).thenReturn(Hash.ZERO);
+		when(block.getHeader()).thenReturn(header);
+		when(block.getTxs()).thenReturn(List.of());
+		NetworkParamsState newParams = mock(NetworkParamsState.class);
+		when(newParams.getBlockRewardPoolAddress()).thenReturn(newPool);
+		StateDiff<NetworkParamsState> paramsDiff = mock(StateDiff.class);
+		when(paramsDiff.getNewValue()).thenReturn(newParams);
+		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
+		when(event.getBlock()).thenReturn(block);
+		when(event.getMinerActualRewardPaid()).thenReturn(Wei.valueOf(10));
+		when(event.getMinerTotalFees()).thenReturn(Wei.ZERO);
+		when(event.getNetworkParamsDiff()).thenReturn(paramsDiff);
+		when(event.getEvents()).thenReturn(List.of(new BlockReward(miner, oldPool, Wei.valueOf(10), 14L)));
+
+		assertThat(mapper.map(event))
+				.singleElement()
+				.satisfies(transfer -> assertThat(transfer.getFrom()).isEqualTo(oldPool));
 	}
 }

@@ -323,6 +323,9 @@ public class BlockchainApiV1 {
 
 	        Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
 		Wei lockedMiningReward = balanceState.exists() ? balanceState.getLockedMiningReward() : Wei.ZERO;
+		Wei pendingMiningRewardCancellation = balanceState.exists()
+				? balanceState.getPendingMiningRewardCancellation()
+				: Wei.ZERO;
 		Wei spendableNativeBalance = balanceState.exists() ? balanceState.getSpendableBalance() : Wei.ZERO;
         // If account never sent a tx, confirmedNonce is -1
         long confirmedNonce = nonceState.exists() ? nonceState.getNonce() : -1L;
@@ -336,6 +339,7 @@ public class BlockchainApiV1 {
                 .address(address)
 	                .nativeBalance(nativeBalance)
 				.lockedMiningReward(lockedMiningReward)
+				.pendingMiningRewardCancellation(pendingMiningRewardCancellation)
 				.spendableNativeBalance(spendableNativeBalance)
                 .nonce(confirmedNonce)
                 .nextNonce(nextNonce)

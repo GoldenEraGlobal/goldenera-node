@@ -27,9 +27,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Map;
 
+import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -48,11 +50,13 @@ import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
+import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.explorer.enums.EntityType;
 import global.goldenera.node.explorer.enums.OperationType;
 import global.goldenera.node.explorer.services.indexer.business.ExIndexerRevertService;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerConsensusCoreService;
+import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BalanceRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.ValidatorRevertDto;
 import liquibase.Liquibase;
 import liquibase.database.Database;
@@ -122,6 +126,51 @@ class ExplorerValidatorPostgresIntegrationTest {
 
 		consensusService.bulkUpsertValidators(Map.of(VALIDATOR, limitedBranch));
 		assertExplicitRow(MiningLimitMode.LIMITED, 2_500, hash(2), 10);
+	}
+
+	@Test
+	void balanceRevertRestoresNonzeroPendingMiningRewardCancellation() throws Exception {
+		Hash blockHash = hash(20);
+		jdbcTemplate.update("""
+				INSERT INTO explorer_account_balance
+				(address, token_address, balance, locked_mining_reward, pending_mining_reward_cancellation,
+				 created_at_block_height, created_at_timestamp, updated_at_block_height,
+				 updated_at_timestamp, account_balance_version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				VALIDATOR.toArray(), Address.NATIVE_TOKEN.toArray(), 25, 10, 5,
+				1, Timestamp.from(CREATED_AT), 20, Timestamp.from(CREATED_AT.plusSeconds(20)),
+				AccountBalanceStateVersion.V2.getCode());
+		BalanceRevertDto previous = BalanceRevertDto.from(
+				Wei.valueOf(70), Wei.valueOf(40), Wei.valueOf(30), 11,
+				CREATED_AT.plusSeconds(11), AccountBalanceStateVersion.V2);
+		jdbcTemplate.update("""
+				INSERT INTO explorer_revert_log
+				(block_height, block_hash, entity_type, operation_type, ref_key_1, ref_key_2, old_value)
+				VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
+				""",
+				20,
+				blockHash.toArray(),
+				EntityType.ACCOUNT_BALANCE.getCode(),
+				OperationType.UPDATE.getCode(),
+				VALIDATOR.toArray(),
+				Address.NATIVE_TOKEN.toArray(),
+				JSON.writeValueAsString(previous));
+
+		ReflectionTestUtils.invokeMethod(revertService, "revertBalances", blockHash.toArray());
+
+		Map<String, Object> row = jdbcTemplate.queryForMap("""
+				SELECT balance, locked_mining_reward, pending_mining_reward_cancellation,
+				       updated_at_block_height, account_balance_version
+				FROM explorer_account_balance
+				WHERE address = ? AND token_address = ?
+				""", VALIDATOR.toArray(), Address.NATIVE_TOKEN.toArray());
+		assertThat((Number) row.get("balance")).hasToString("70");
+		assertThat((Number) row.get("locked_mining_reward")).hasToString("40");
+		assertThat((Number) row.get("pending_mining_reward_cancellation")).hasToString("30");
+		assertThat(((Number) row.get("updated_at_block_height")).longValue()).isEqualTo(11);
+		assertThat(((Number) row.get("account_balance_version")).intValue())
+				.isEqualTo(AccountBalanceStateVersion.V2.getCode());
 	}
 
 	private void applyBranchAndRecordLegacySnapshot(

@@ -85,6 +85,7 @@ public class StateMapper {
                 .version(in.getVersion())
 	                .balance(in.getBalance())
 				.lockedMiningReward(in.getLockedMiningReward())
+				.pendingMiningRewardCancellation(in.getPendingMiningRewardCancellation())
 				.spendableBalance(in.getSpendableBalance())
                 .updatedAtBlockHeight(in.getUpdatedAtBlockHeight())
                 .updatedAtTimestamp(in.getUpdatedAtTimestamp())

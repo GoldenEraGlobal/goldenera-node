@@ -185,19 +185,26 @@ class MiningEconomicsLiquibaseMigrationTest {
 				.isEqualTo(expected);
 		assertThat(columnExists(connection, "explorer_account_balance", "locked_mining_reward"))
 				.isEqualTo(expected);
+		assertThat(columnExists(connection, "explorer_account_balance", "pending_mining_reward_cancellation"))
+				.isEqualTo(expected);
 		assertThat(columnExists(connection, "explorer_transfer", "unlock_block_height"))
 				.isEqualTo(expected);
+		if (expected) {
+			assertRequiredZeroDefault(connection, "explorer_account_balance",
+					"pending_mining_reward_cancellation");
+		}
 	}
 
 	private void assertLegacyRowsRemainNullable(Connection connection) throws Exception {
 		try (Statement statement = connection.createStatement();
 				ResultSet balance = statement.executeQuery("""
-						SELECT balance, locked_mining_reward
+						SELECT balance, locked_mining_reward, pending_mining_reward_cancellation
 						FROM explorer_account_balance
 						""")) {
 			assertThat(balance.next()).isTrue();
 			assertThat(balance.getLong(1)).isEqualTo(123);
 			assertThat(balance.getLong(2)).isZero();
+			assertThat(balance.getLong(3)).isZero();
 		}
 
 		try (Statement statement = connection.createStatement();
@@ -241,6 +248,16 @@ class MiningEconomicsLiquibaseMigrationTest {
 		try (ResultSet columns = metadata.getColumns(null, null,
 				table.toUpperCase(Locale.ROOT), column.toUpperCase(Locale.ROOT))) {
 			return columns.next();
+		}
+	}
+
+	private void assertRequiredZeroDefault(Connection connection, String table, String column) throws Exception {
+		DatabaseMetaData metadata = connection.getMetaData();
+		try (ResultSet columns = metadata.getColumns(null, null,
+				table.toUpperCase(Locale.ROOT), column.toUpperCase(Locale.ROOT))) {
+			assertThat(columns.next()).isTrue();
+			assertThat(columns.getInt("NULLABLE")).isEqualTo(DatabaseMetaData.columnNoNulls);
+			assertThat(columns.getString("COLUMN_DEF")).contains("0");
 		}
 	}
 }

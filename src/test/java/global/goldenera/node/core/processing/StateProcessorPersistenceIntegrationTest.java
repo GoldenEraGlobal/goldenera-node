@@ -40,6 +40,7 @@ import global.goldenera.cryptoj.builder.TxBuilder;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningRewardMaturityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -229,6 +230,32 @@ class StateProcessorPersistenceIntegrationTest {
 			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
 					.isEqualTo(Wei.valueOf(40));
 			assertThat(state.getMiningRewardMaturity(32).getRewards()).containsEntry(MINER, Wei.valueOf(40));
+		}
+	}
+
+	@Test
+	void snapshotRollbackRestoresMaturityConsumedAtBlockBoundary() throws Exception {
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState state = storage.createEmpty(true);
+			state.setToken(Address.NATIVE_TOKEN, existingToken(Wei.valueOf(1_000_000)));
+			state.setParams(vestingParams(2).toBuilder().blockReward(Wei.ZERO).build());
+			state.setBalance(MINER, Address.NATIVE_TOKEN,
+					((AccountBalanceStateImpl) AccountBalanceStateImpl.ZERO)
+							.creditLockedMiningReward(Wei.valueOf(100), 10, BLOCK_TIME));
+			state.setMiningRewardMaturity(12,
+					MiningRewardMaturityStateImpl.empty().addReward(MINER, Wei.valueOf(100)));
+			state = storage.reload(storage.persist(state), true);
+			Object snapshot = state.createSnapshot();
+
+			processor(new TransferHandler()).executeTransactions(state, block(12), List.of(), state.getParams());
+
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward()).isEqualTo(Wei.ZERO);
+			assertThat(state.getMiningRewardMaturity(12).getRewards()).isEmpty();
+
+			state.revertToSnapshot(snapshot);
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(100));
+			assertThat(state.getMiningRewardMaturity(12).getRewards()).containsEntry(MINER, Wei.valueOf(100));
 		}
 	}
 
