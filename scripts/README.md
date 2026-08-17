@@ -15,6 +15,19 @@ This directory contains build and deployment scripts for the GoldenEra Node.
   - Builds Docker image with secure token handling
   - Tags image as `goldenera-node:local`
 
+- **`install.sh`** - Interactive Ubuntu, Debian, and macOS installer
+  - Installs Docker when needed
+  - Generates a secure Compose deployment and management command
+  - Supports public-image updates and local sandbox images
+
+- **`install.ps1`** - Equivalent Windows PowerShell installer
+
+- **`tests/install-smoke.sh`** and **`tests/install-smoke.ps1`**
+  - Validate generated configuration without changing the host
+
+- **`tests/install-e2e.sh`**
+  - Starts and probes the real local sandbox image
+
 ## Usage
 
 ### Building Local Docker Image
@@ -34,4 +47,12 @@ GITHUB_TOKEN=your_token
 After building:
 ```bash
 docker compose -f docker-compose.local.yml up -d
+```
+
+### Testing the automated installer
+
+```bash
+./scripts/build-sandbox-image.sh
+./scripts/tests/install-smoke.sh
+./scripts/tests/install-e2e.sh
 ```

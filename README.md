@@ -25,7 +25,8 @@ To run a node successfully, your system **must** meet the following minimum requ
 
 ## 🛠️ Prerequisites
 
-Before proceeding with the installation, ensure that **Docker** and the **Docker Compose** plugin are installed on your system.
+The automated installer below installs **Docker** and the **Docker Compose**
+plugin when they are missing. For a manual installation, install them first.
 
 * **Install Docker Engine:** Follow the official instructions for your operating system (Ubuntu, Debian, CentOS, etc.) here: [Install Docker Engine](https://docs.docker.com/engine/install/)
 * **Verify Installation:** Run the following commands to ensure Docker is running correctly:
@@ -37,6 +38,66 @@ Before proceeding with the installation, ensure that **Docker** and the **Docker
 ---
 
 ## 🚀 Installation & Setup
+
+### Automated installer (recommended)
+
+The installer detects the operating system, installs Docker when it is missing,
+asks for the installation directory, network, public P2P address, ports, mining
+settings, reward address, node identity, and the built-in Explorer/indexer. It
+generates secrets and starts the node from Docker Compose.
+
+Ubuntu, Debian, or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.sh | bash
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.ps1 | iex
+```
+
+The macOS and Windows paths install Docker Desktop when necessary. Docker
+Desktop is a third-party product with its own license terms and may require an
+administrator prompt, WSL2 setup on Windows, or one restart.
+
+The installer creates a management command inside the selected directory:
+
+```bash
+~/goldenera-node/goldenera status
+~/goldenera-node/goldenera logs
+~/goldenera-node/goldenera update
+~/goldenera-node/goldenera restart
+~/goldenera-node/goldenera stop
+```
+
+On Windows, use the equivalent PowerShell controller:
+
+```powershell
+& "$env:LOCALAPPDATA\GoldenEra\Node\goldenera.ps1" update
+```
+
+`update` pulls the newest configured public image and recreates the containers
+without deleting blockchain or PostgreSQL data. A local image configured with
+`--local-image` is never pulled.
+
+The mnemonic option configures the node's persistent P2P identity. Mining does
+not use that private key; mining rewards are sent to `BENEFICIARY_ADDRESS`.
+
+### Installer test with the local node image
+
+From a clean committed worktree with the project dependencies installed:
+
+```bash
+./scripts/build-sandbox-image.sh
+./scripts/tests/install-smoke.sh
+./scripts/tests/install-e2e.sh
+```
+
+The end-to-end test generates a temporary installation configured with
+`goldenera-node:sandbox-local`, starts the real node, verifies its liveness API,
+and removes the test containers and temporary data.
 
 ### Reproducible local sandbox image
 
