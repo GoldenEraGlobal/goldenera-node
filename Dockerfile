@@ -51,14 +51,6 @@ RUN --mount=type=secret,id=github_token \
 # ==============================================================================
 FROM ubuntu:24.04 AS runtime-base
 
-ARG BUILD_GIT_COMMIT
-ARG CRYPTOJ_SHA256
-ARG RANDOMX_SOURCE_COMMIT
-
-LABEL org.opencontainers.image.revision="${BUILD_GIT_COMMIT}" \
-      global.goldenera.cryptoj.sha256="${CRYPTOJ_SHA256}" \
-      global.goldenera.randomx.source.commit="${RANDOMX_SOURCE_COMMIT}"
-
 ENV JAVA_HOME=/opt/java/openjdk
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
 ENV DEBIAN_FRONTEND=noninteractive
@@ -76,6 +68,7 @@ RUN wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | tee
     && apt-get update && apt-get install -y temurin-21-jdk && rm -rf /var/lib/apt/lists/*
 
 # 3. Clone RandomX Fork
+ARG RANDOMX_SOURCE_COMMIT
 WORKDIR /usr/src
 RUN printf '%s' "${RANDOMX_SOURCE_COMMIT}" | grep -Eq '^[0-9a-f]{40}$' \
     && git init goldenera-randomx \
@@ -105,12 +98,47 @@ VOLUME ["/app/node_data", "/app/node_logs"]
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
+# Compile the CPU-native RandomX library once in a cacheable local-sandbox layer.
+# The production target intentionally does not consume this stage: production
+# nodes continue to compile on first boot for the CPU on which they actually run.
+FROM runtime-base AS sandbox-randomx-builder
+RUN mkdir -p /tmp/randomx-build \
+    && cd /tmp/randomx-build \
+    && cmake /usr/src/goldenera-randomx/RandomX \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DARCH=native \
+      -DBUILD_SHARED_LIBS=ON \
+      -DCMAKE_C_FLAGS="-fPIC" \
+      -DCMAKE_SHARED_LINKER_FLAGS="-z noexecstack" > /dev/null \
+    && make -j"$(nproc)" > /dev/null \
+    && mkdir -p /sandbox-native \
+    && case "$(uname -m)" in \
+         x86_64) target=librandomx_linux_x86_64.so ;; \
+         aarch64) target=librandomx_linux_aarch64.so ;; \
+         *) echo "Unsupported sandbox architecture: $(uname -m)" >&2; exit 1 ;; \
+       esac \
+    && cp librandomx.so "/sandbox-native/${target}"
+
 # Local sandbox builds consume the exact release-metadata JAR built through the
 # host mise toolchain. This keeps unpublished local Maven artifacts out of the
 # Docker build graph while preserving the same runtime image.
 FROM runtime-base AS sandbox-local-runtime
+ARG BUILD_GIT_COMMIT
+ARG CRYPTOJ_SHA256
+ARG RANDOMX_SOURCE_COMMIT
+LABEL org.opencontainers.image.revision="${BUILD_GIT_COMMIT}" \
+      global.goldenera.cryptoj.sha256="${CRYPTOJ_SHA256}" \
+      global.goldenera.randomx.source.commit="${RANDOMX_SOURCE_COMMIT}"
 COPY --chown=blockchain:blockchain target/goldenera-node-*.jar ${APP_HOME}/app.jar
+COPY --from=sandbox-randomx-builder --chown=blockchain:blockchain \
+    /sandbox-native/ ${APP_HOME}/overrides/native/
 
 # Published/release builds remain self-contained and build the JAR in Docker.
 FROM runtime-base AS release-runtime
+ARG BUILD_GIT_COMMIT
+ARG CRYPTOJ_SHA256
+ARG RANDOMX_SOURCE_COMMIT
+LABEL org.opencontainers.image.revision="${BUILD_GIT_COMMIT}" \
+      global.goldenera.cryptoj.sha256="${CRYPTOJ_SHA256}" \
+      global.goldenera.randomx.source.commit="${RANDOMX_SOURCE_COMMIT}"
 COPY --from=app-builder --chown=blockchain:blockchain /app/target/*.jar ${APP_HOME}/app.jar

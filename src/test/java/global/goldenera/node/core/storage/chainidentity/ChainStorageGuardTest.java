@@ -24,9 +24,11 @@
 package global.goldenera.node.core.storage.chainidentity;
 
 import static global.goldenera.node.core.storage.chainidentity.ChainStorageGuardResult.BACKFILLED_VERIFIED_PRODUCTION;
+import static global.goldenera.node.core.storage.chainidentity.ChainStorageGuardResult.BACKFILLED_VERIFIED_DEVELOPMENT;
 import static global.goldenera.node.core.storage.chainidentity.ChainStorageGuardResult.INITIALIZED_FRESH;
 import static global.goldenera.node.core.storage.chainidentity.ChainStorageGuardResult.VERIFIED_EXISTING;
 import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_PRODUCTION;
+import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_DEVELOPMENT;
 import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.DENY;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
@@ -45,6 +47,8 @@ class ChainStorageGuardTest {
 			1, 1, "sandbox-other", GENESIS, "c".repeat(64));
 	private static final StoredChainIdentity PRODUCTION = new StoredChainIdentity(
 			1, 0, "mainnet", GENESIS, null);
+	private static final StoredChainIdentity DEVELOPMENT = new StoredChainIdentity(
+			1, 1, "development-testnet", GENESIS, null);
 
 	@Test
 	void bindsOnlyTheAuthoritativeRocksIdentityAndIsIdempotent() {
@@ -94,6 +98,15 @@ class ChainStorageGuardTest {
 	}
 
 	@Test
+	void verifiedDevelopmentLegacyBackfillIsDistinctFromProductionAuthorization() {
+		MemoryStore allowed = new MemoryStore();
+		assertThat(new ChainStorageGuard(allowed).verifyAndBind(
+				new ChainStorageGuardRequest(DEVELOPMENT, false, true, ALLOW_VERIFIED_DEVELOPMENT)))
+				.isEqualTo(BACKFILLED_VERIFIED_DEVELOPMENT);
+		assertThat(allowed.identity).contains(DEVELOPMENT);
+	}
+
+	@Test
 	void rechecksRocksAfterBindingAndRejectsConcurrentWrongIdentity() {
 		MemoryStore rocks = new MemoryStore();
 		rocks.identityOnBind = OTHER;
@@ -109,6 +122,8 @@ class ChainStorageGuardTest {
 				new ChainStorageGuardRequest(PRODUCTION, true, false, DENY));
 		assertThatIllegalArgumentException().isThrownBy(() ->
 				new ChainStorageGuardRequest(SANDBOX, true, false, ALLOW_VERIFIED_PRODUCTION));
+		assertThatIllegalArgumentException().isThrownBy(() ->
+				new ChainStorageGuardRequest(SANDBOX, true, false, ALLOW_VERIFIED_DEVELOPMENT));
 	}
 
 	private ChainStorageGuardRequest sandboxRequest(boolean rocksHasData) {

@@ -67,11 +67,16 @@ import global.goldenera.node.core.sandbox.control.SandboxControlDtos.AutonomousR
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatchRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactOneRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactBatchRequest;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestLoader;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
+import global.goldenera.node.core.p2p.manager.NodeConnectionManager;
+import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
+import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.sync.BlockIngestionOutcome;
+import global.goldenera.node.core.sync.BlockSyncManagerService;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import ch.qos.logback.classic.Logger;
@@ -84,6 +89,8 @@ class SandboxControlServiceTest {
 	Path temporaryDirectory;
 
 	MiningService miningService;
+	NodeConnectionManager connectionManager;
+	P2PHeadAnnouncementService headAnnouncementService;
 	SandboxControlOperationRegistry operations;
 	SandboxControlAuditLog auditLog;
 	SandboxControlService service;
@@ -96,6 +103,8 @@ class SandboxControlServiceTest {
 	@BeforeEach
 	void setUp() throws Exception {
 		miningService = mock(MiningService.class);
+		connectionManager = mock(NodeConnectionManager.class);
+		headAnnouncementService = mock(P2PHeadAnnouncementService.class);
 		auditLog = new SandboxControlAuditLog();
 		operations = new SandboxControlOperationRegistry(auditLog);
 		SandboxManifestContext manifest = controlManifest();
@@ -121,7 +130,11 @@ class SandboxControlServiceTest {
 				new DeterministicSandboxChainClock(runtime),
 				new MiningProperties(),
 				identityProvider,
-				() -> true);
+				() -> true,
+				connectionManager,
+				headAnnouncementService,
+				mock(BlockSyncManagerService.class),
+				mock(MempoolManager.class));
 	}
 
 	@Test
@@ -173,9 +186,30 @@ class SandboxControlServiceTest {
 
 		assertThat(service.operation(first.operation().operationId()).outcome().code()).isEqualTo("ACCEPTED");
 		assertThat(service.operation(first.operation().operationId()).outcome().ingestionCode()).isEqualTo("ACCEPTED");
+		verify(headAnnouncementService).requestAnnouncement();
 		when(miningService.mineExactlyOne(any())).thenReturn(new CompletableFuture<>());
 		assertThat(service.submitExactOne("second-key", body).operation().operationId())
 				.isNotEqualTo(first.operation().operationId());
+	}
+
+	@Test
+	void exactBatchUsesOneRegisteredOperationForTheWholeMiningRange() {
+		CompletableFuture<ExactOneMiningOutcome> completed = CompletableFuture.completedFuture(
+				new ExactOneMiningOutcome(
+						ExactOneMiningOutcome.Code.ACCEPTED,
+						null,
+						51L,
+						null,
+						BlockIngestionOutcome.Code.ACCEPTED));
+		when(miningService.mineExactly(any(), eq(40))).thenReturn(completed);
+
+		SandboxControlService.Submission submission = service.submitExactBatch(
+				"batch-key", new ExactBatchRequest(40, 30_000L));
+
+		assertThat(service.operation(submission.operation().operationId()).outcome().blockHeight())
+				.isEqualTo(51L);
+		verify(miningService).mineExactly(any(), eq(40));
+		verify(headAnnouncementService).requestAnnouncement();
 	}
 
 	@Test

@@ -65,15 +65,15 @@ public class RemotePeer {
 	final Channel channel;
 	final AtomicLong requestIdCounter = new AtomicLong(1);
 
-	Address identity;
-	String clientVersion;
+	volatile Address identity;
+	volatile String clientVersion;
 
-	BigInteger totalDifficulty;
-	Hash headHash;
-	long headHeight;
+	volatile BigInteger totalDifficulty;
+	volatile Hash headHash;
+	volatile long headHeight;
 
-	Instant lastPongReceived = Instant.now();
-	Instant connectedAt;
+	volatile Instant lastPongReceived = Instant.now();
+	volatile Instant connectedAt;
 
 	public RemotePeer(Channel channel, MeterRegistry registry) {
 		this.channel = channel;

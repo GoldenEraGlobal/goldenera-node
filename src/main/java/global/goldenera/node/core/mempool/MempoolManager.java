@@ -51,6 +51,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
@@ -431,11 +432,22 @@ public class MempoolManager {
 				"disconnect", oldBlock, () -> processBlockDisconnected(oldBlock)));
 	}
 
+	/**
+	 * Revalidates the final mempool projection after every disconnected and
+	 * connected block from a reorg has been processed by the ordered executor.
+	 */
+	@EventListener
+	public void onBlockReorg(BlockReorgEvent event) {
+		mempoolEventExecutor.execute(this::revalidateMempool);
+	}
+
 	private synchronized void processBlockDisconnected(Block oldBlock) {
 		List<Tx> txsToReAdd = oldBlock.getTxs();
-		log.debug("Mempool: Processing disconnected block {}. Re-adding {} txs.",
+		log.debug("Mempool: Processing disconnected block {}. Revalidating {} txs for re-admission.",
 				oldBlock.getHeight(), txsToReAdd.size());
-		mempoolStore.addTransactionsBack(txsToReAdd, oldBlock);
+		for (Tx tx : txsToReAdd) {
+			addTx(tx, null, MempoolTxAddEvent.AddReason.REORG, false);
+		}
 	}
 
 	private void processMempoolBlockEvent(String eventType, Block block, Runnable action) {

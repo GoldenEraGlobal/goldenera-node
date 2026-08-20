@@ -34,19 +34,24 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.p2p.events.P2PHandshakeCompletedEvent;
 import global.goldenera.node.core.p2p.netty.client.NettyClientService;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.p2p.services.DirectoryService;
+import io.netty.channel.ChannelFuture;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import lombok.experimental.FieldDefaults;
@@ -61,6 +66,8 @@ public class NodeConnectionManager {
 	private static final int TARGET_PEER_COUNT = 20;
 	private static final int PONG_TIMEOUT_SECONDS = 60;
 	private static final int LOW_REPUTATION_THRESHOLD = 950;
+	private static final List<Duration> CORE_READY_RETRY_DELAYS = List.of(
+			Duration.ofSeconds(1), Duration.ofSeconds(3));
 
 	ThreadPoolTaskScheduler coreScheduler;
 
@@ -72,6 +79,9 @@ public class NodeConnectionManager {
 	AtomicInteger connectedPeersGauge = new AtomicInteger(0);
 	AtomicInteger bannedPeersGauge = new AtomicInteger(0);
 	AtomicBoolean started = new AtomicBoolean();
+	AtomicBoolean maintenanceQueued = new AtomicBoolean();
+	AtomicBoolean maintenanceRequested = new AtomicBoolean();
+	Set<Address> pendingConnectionIdentities = ConcurrentHashMap.newKeySet();
 
 	IdentityService identityService;
 
@@ -106,6 +116,56 @@ public class NodeConnectionManager {
 
 	public boolean isStarted() {
 		return started.get();
+	}
+
+	/**
+	 * Queues an immediate maintenance pass without waiting for the periodic timer.
+	 * Duplicate requests collapse while a queued pass is pending.
+	 */
+	public boolean requestMaintenance() {
+		if (!started.get()) {
+			return false;
+		}
+		maintenanceRequested.set(true);
+		if (!maintenanceQueued.compareAndSet(false, true)) {
+			return false;
+		}
+		coreScheduler.execute(this::drainRequestedMaintenance);
+		return true;
+	}
+
+	private void drainRequestedMaintenance() {
+		try {
+			do {
+				maintenanceRequested.set(false);
+				maintenanceLoop();
+				heartbeatLoop();
+			} while (maintenanceRequested.get());
+		} finally {
+			maintenanceQueued.set(false);
+			// Close the race where a request arrives after the loop condition but
+			// before the worker flag is cleared.
+			if (maintenanceRequested.get()) {
+				requestMaintenance();
+			}
+		}
+	}
+
+	@EventListener(CoreReadyEvent.class)
+	public void connectConfiguredPeersWhenCoreIsReady() {
+		requestMaintenance();
+		Instant now = Instant.now();
+		CORE_READY_RETRY_DELAYS.forEach(delay ->
+				coreScheduler.schedule(this::requestMaintenance, now.plus(delay)));
+	}
+
+	public int connectedPeerCount() {
+		return peerRegistry.handshakenCount();
+	}
+
+	@EventListener
+	public void onPeerHandshakeCompleted(P2PHandshakeCompletedEvent event) {
+		pendingConnectionIdentities.remove(event.getStatusDto().getNodeIdentity());
 	}
 
 	/**
@@ -217,6 +277,7 @@ public class NodeConnectionManager {
 		List<DirectoryService.P2PClient> allKnown = directoryService.getP2PClientList();
 		List<DirectoryService.P2PClient> candidates = allKnown.stream()
 				.filter(c -> !connectedIdentities.contains(c.getIdentity()))
+				.filter(c -> !pendingConnectionIdentities.contains(c.getIdentity()))
 				.filter(c -> !c.getIdentity().equals(myIdentity)) // Filter out self
 				.filter(c -> !reputationService.isBanned(c.getIdentity()))
 				.sorted(Comparator
@@ -250,9 +311,22 @@ public class NodeConnectionManager {
 				if (isAlreadyConnected(candidate, connectedIps, ipsWithPendingHandshake)) {
 					continue;
 				}
+				Address identity = candidate.getIdentity();
+				if (!pendingConnectionIdentities.add(identity)) {
+					continue;
+				}
 				try {
-					nettyClient.connect(candidate);
+					ChannelFuture connection = nettyClient.connect(candidate);
+					connection.addListener(ignored -> {
+						if (!connection.isSuccess()) {
+							pendingConnectionIdentities.remove(identity);
+							return;
+						}
+						connection.channel().closeFuture().addListener(
+								closed -> pendingConnectionIdentities.remove(identity));
+					});
 				} catch (Exception e) {
+					pendingConnectionIdentities.remove(identity);
 					log.error("Failed to connect to candidate: {}", candidate.toPrettyString(), e);
 				}
 			}

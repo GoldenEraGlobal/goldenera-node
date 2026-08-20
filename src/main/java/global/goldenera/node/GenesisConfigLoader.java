@@ -99,7 +99,7 @@ public class GenesisConfigLoader {
 		return parseGenesisSettings(root, null);
 	}
 
-	static GenesisSettings parseProductionGenesisSettings(JsonNode root, Network network) {
+	public static GenesisSettings parseProductionGenesisSettings(JsonNode root, Network network) {
 		return parseGenesisSettings(root, legacyMiningWindowDefault(network), legacyMiningRewardVestingDefault(network));
 	}
 

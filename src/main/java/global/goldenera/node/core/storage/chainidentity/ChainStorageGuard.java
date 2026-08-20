@@ -23,6 +23,11 @@
  */
 package global.goldenera.node.core.storage.chainidentity;
 
+import static global.goldenera.node.core.storage.chainidentity.ChainStorageGuardResult.BACKFILLED_VERIFIED_DEVELOPMENT;
+import static global.goldenera.node.core.storage.chainidentity.ChainStorageGuardResult.BACKFILLED_VERIFIED_PRODUCTION;
+import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_DEVELOPMENT;
+import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_PRODUCTION;
+
 import java.util.Optional;
 
 /**
@@ -60,14 +65,23 @@ public class ChainStorageGuard {
 		}
 		assertExpected(persisted.orElseThrow(), expected);
 		return request.rocksHasChainData()
-				? ChainStorageGuardResult.BACKFILLED_VERIFIED_PRODUCTION
+				? backfillResult(request.legacyProductionBackfillPolicy())
 				: ChainStorageGuardResult.INITIALIZED_FRESH;
 	}
 
 	private boolean productionBackfillAllowed(ChainStorageGuardRequest request) {
 		return !request.sandbox()
-				&& request.legacyProductionBackfillPolicy()
-						== LegacyProductionBackfillPolicy.ALLOW_VERIFIED_PRODUCTION;
+				&& request.legacyProductionBackfillPolicy() != LegacyProductionBackfillPolicy.DENY;
+	}
+
+	private ChainStorageGuardResult backfillResult(LegacyProductionBackfillPolicy policy) {
+		if (policy == ALLOW_VERIFIED_PRODUCTION) {
+			return BACKFILLED_VERIFIED_PRODUCTION;
+		}
+		if (policy == ALLOW_VERIFIED_DEVELOPMENT) {
+			return BACKFILLED_VERIFIED_DEVELOPMENT;
+		}
+		throw new IllegalStateException("Unguarded storage cannot be backfilled without a verified policy");
 	}
 
 	private void assertExpected(StoredChainIdentity actual, StoredChainIdentity expected) {

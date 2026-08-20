@@ -25,9 +25,15 @@ package global.goldenera.node.core.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 
+import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.datatypes.Hash;
+
 class BlockSyncManagerServiceTelemetryTest {
+	private static final Address PEER =
+			Address.fromHexString("0x1111111111111111111111111111111111111111");
 
 	@Test
 	void retainsCumulativeHeadersFirstEvidenceAfterRequestsComplete() {
@@ -60,5 +66,29 @@ class BlockSyncManagerServiceTelemetryTest {
 		assertThat(afterHeader.firstBodyRequestSequence()).isZero();
 		assertThat(afterBody.bodyRequestsIssued()).isOne();
 		assertThat(afterBody.firstBodyRequestSequence()).isEqualTo(2);
+	}
+
+	@Test
+	void transientEmptyHeaderResponsesRequireRepeatedConfirmationBeforeBan() {
+		var tracker = new BlockSyncManagerService.EmptyHeaderClaimTracker();
+		Hash localHead = Hash.hash(Bytes.of(1));
+
+		assertThat(tracker.record(PEER, localHead)).isFalse();
+		assertThat(tracker.record(PEER, localHead)).isFalse();
+		assertThat(tracker.record(PEER, localHead)).isTrue();
+	}
+
+	@Test
+	void localProgressOrSuccessfulResponseResetsEmptyHeaderConfirmation() {
+		var tracker = new BlockSyncManagerService.EmptyHeaderClaimTracker();
+		Hash firstLocalHead = Hash.hash(Bytes.of(1));
+		Hash advancedLocalHead = Hash.hash(Bytes.of(2));
+
+		assertThat(tracker.record(PEER, firstLocalHead)).isFalse();
+		assertThat(tracker.record(PEER, firstLocalHead)).isFalse();
+		assertThat(tracker.record(PEER, advancedLocalHead)).isFalse();
+
+		tracker.clear(PEER);
+		assertThat(tracker.record(PEER, advancedLocalHead)).isFalse();
 	}
 }

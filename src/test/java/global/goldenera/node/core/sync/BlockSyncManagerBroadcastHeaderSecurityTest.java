@@ -55,6 +55,7 @@ import global.goldenera.node.core.p2p.events.P2PHeadersReceivedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
+import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -174,6 +175,7 @@ class BlockSyncManagerBroadcastHeaderSecurityTest {
 				chainQuery,
 				mock(BlockReorgs.class),
 				peerRegistry,
+				mock(P2PHeadAnnouncementService.class),
 				mock(PeerReputationService.class),
 				ingestion);
 		return new Fixture(service, validator, ingestion, peerRegistry, peer, header, parentBlock, localBest);

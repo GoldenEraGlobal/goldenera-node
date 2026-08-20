@@ -24,6 +24,7 @@
 package global.goldenera.node.core.storage.chainidentity;
 
 import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_PRODUCTION;
+import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_DEVELOPMENT;
 import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.DENY;
 import static global.goldenera.node.core.storage.chainidentity.ChainIdentityExecutionScope.DEVELOPMENT;
 import static global.goldenera.node.core.storage.chainidentity.ChainIdentityExecutionScope.KNOWN_PRODUCTION;
@@ -117,7 +118,7 @@ class ChainIdentityPreflightTest {
 	}
 
 	@Test
-	void developmentCanBindFreshButCanNeverAuthorizeLegacyBackfill() {
+	void developmentBackfillRequiresTheExactLocallyReconstructedGenesis() {
 		StoredChainIdentity development = new StoredChainIdentity(
 				1, 1, "local-dev", "0x" + "e".repeat(64), null);
 		ChainIdentityPreflight fresh = preflight(
@@ -129,8 +130,20 @@ class ChainIdentityPreflightTest {
 		ChainIdentityPreflight occupied = preflight(
 				observation("RocksDB", true, Optional.empty(), true, Optional.of(development.genesisHash())),
 				observation("PostgreSQL", false, Optional.empty(), false, Optional.empty()));
-		assertThatThrownBy(() -> occupied.inspect(new ChainIdentityExpectation(development, DEVELOPMENT)))
-				.hasMessageContaining("DEVELOPMENT storage");
+		assertThat(occupied.inspect(new ChainIdentityExpectation(development, DEVELOPMENT))
+				.legacyProductionBackfillPolicy()).isEqualTo(ALLOW_VERIFIED_DEVELOPMENT);
+
+		ChainIdentityPreflight missingProof = preflight(
+				observation("RocksDB", true, Optional.empty(), true, Optional.empty()),
+				observation("PostgreSQL", false, Optional.empty(), false, Optional.empty()));
+		assertThatThrownBy(() -> missingProof.inspect(new ChainIdentityExpectation(development, DEVELOPMENT)))
+				.hasMessageContaining("does not prove");
+
+		ChainIdentityPreflight wrongGenesis = preflight(
+				observation("RocksDB", true, Optional.empty(), true, Optional.of("0x" + "f".repeat(64))),
+				observation("PostgreSQL", false, Optional.empty(), false, Optional.empty()));
+		assertThatThrownBy(() -> wrongGenesis.inspect(new ChainIdentityExpectation(development, DEVELOPMENT)))
+				.hasMessageContaining("stored genesis mismatch");
 	}
 
 	private ChainIdentityPreflight preflight(

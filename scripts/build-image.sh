@@ -51,6 +51,7 @@ if [ "$RANDOMX_SOURCE_COMMIT" != "$PINNED_RANDOMX_SOURCE_COMMIT" ]; then
 fi
 
 docker build \
+  --target release-runtime \
   --build-arg GITHUB_ACTOR="$GITHUB_USER" \
   --build-arg BUILD_GIT_COMMIT="$BUILD_GIT_COMMIT" \
   --build-arg CRYPTOJ_SHA256="$CRYPTOJ_SHA256" \

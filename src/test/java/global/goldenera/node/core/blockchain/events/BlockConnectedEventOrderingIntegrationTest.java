@@ -26,6 +26,7 @@ package global.goldenera.node.core.blockchain.events;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -45,6 +46,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
+import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
@@ -53,6 +55,7 @@ import global.goldenera.node.core.config.CoreAsyncConfig;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.mempool.MempoolValidator;
+import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
@@ -64,9 +67,13 @@ class BlockConnectedEventOrderingIntegrationTest {
 	@Test
 	@Timeout(5)
 	void dedicatedExecutorPreservesDisconnectThenConnectOrder() throws Exception {
+		Tx disconnectedTx = mock(Tx.class);
+		when(disconnectedTx.getHash()).thenReturn(Hash.fromHexString(
+				"0x0000000000000000000000000000000000000000000000000000000000000041"));
+		when(disconnectedTx.getFee()).thenReturn(Wei.ZERO);
 		Block disconnected = mock(Block.class);
 		when(disconnected.getHeight()).thenReturn(41L);
-		when(disconnected.getTxs()).thenReturn(List.of());
+		when(disconnected.getTxs()).thenReturn(List.of(disconnectedTx));
 		Block connected = mock(Block.class);
 		when(connected.getHeight()).thenReturn(42L);
 		when(connected.getTxs()).thenReturn(List.of());
@@ -74,11 +81,12 @@ class BlockConnectedEventOrderingIntegrationTest {
 		List<String> order = Collections.synchronizedList(new ArrayList<>());
 		CountDownLatch processed = new CountDownLatch(2);
 		MempoolStore store = mock(MempoolStore.class);
+		MempoolValidator validator = mock(MempoolValidator.class);
 		doAnswer(invocation -> {
 			order.add("disconnect");
 			processed.countDown();
-			return null;
-		}).when(store).addTransactionsBack(anyList(), any(Block.class));
+			return MempoolValidationResult.stateInvalid("disconnected tx not valid on the new head");
+		}).when(validator).validateAgainstChainAndMempool(any(), any(), anyBoolean());
 		doAnswer(invocation -> {
 			order.add("connect");
 			processed.countDown();
@@ -88,7 +96,7 @@ class BlockConnectedEventOrderingIntegrationTest {
 		SimpleMeterRegistry queueRegistry = new SimpleMeterRegistry();
 		ThreadPoolTaskExecutor eventExecutor = new CoreAsyncConfig().mempoolEventExecutor(queueRegistry);
 		MempoolManager manager = new MempoolManager(
-				new SimpleMeterRegistry(), store, mock(MempoolValidator.class),
+				new SimpleMeterRegistry(), store, validator,
 				new MempoolProperties(), mock(ChainHeadStateCache.class), eventExecutor,
 				mock(ThreadPoolTaskScheduler.class));
 		try {

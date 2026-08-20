@@ -507,6 +507,9 @@
                                 <include>src/test/**/*.java</include>
                                 <include>src/jmh/**/*.java</include>
                             </includes>
+                            <excludes>
+                                <exclude>**/._*</exclude>
+                            </excludes>
                             <useDefaultExcludes>false</useDefaultExcludes>
                         </licenseSet>
                     </licenseSets>

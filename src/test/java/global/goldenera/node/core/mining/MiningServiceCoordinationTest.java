@@ -31,6 +31,7 @@ import static org.mockito.Mockito.atMostOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -97,6 +98,19 @@ class MiningServiceCoordinationTest {
 			ArgumentCaptor<Instant> receivedAt = ArgumentCaptor.forClass(Instant.class);
 			verify(fixture.ingestion).processBlock(any(), any(), any(), receivedAt.capture());
 			assertThat(receivedAt.getValue()).isEqualTo(BLOCK_TIME);
+		}
+	}
+
+	@Test
+	void exactBatchRunsEveryBlockInsideOneCoordinatedMiningOperation() throws Exception {
+		try (Fixture fixture = fixture(false)) {
+			ExactOneMiningOutcome outcome = fixture.service.mineExactly(
+					new ExactOneMiningRequest(Optional.empty(), Duration.ofSeconds(2)), 3)
+					.get(2, TimeUnit.SECONDS);
+
+			assertThat(outcome.code()).isEqualTo(ExactOneMiningOutcome.Code.ACCEPTED);
+			verify(fixture.assembler, times(3)).createBlockTemplate(fixture.parentBlock, fixture.reservation);
+			verify(fixture.ingestion, times(3)).processBlock(any(), any(), any(), any());
 		}
 	}
 

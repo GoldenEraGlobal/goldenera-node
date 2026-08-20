@@ -24,6 +24,7 @@
 package global.goldenera.node.core.storage.chainidentity;
 
 import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_PRODUCTION;
+import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.ALLOW_VERIFIED_DEVELOPMENT;
 import static global.goldenera.node.core.storage.chainidentity.LegacyProductionBackfillPolicy.DENY;
 
 import java.util.List;
@@ -51,14 +52,20 @@ public final class ChainIdentityPreflight {
 
 		LegacyProductionBackfillPolicy policy = DENY;
 		if (!unguardedOccupied.isEmpty()) {
-			if (!expectation.knownProduction()) {
+			if (expectation.scope() == ChainIdentityExecutionScope.DEVELOPMENT) {
+				if (rocks.observedGenesisHash().isEmpty()) {
+					throw rejected("Development storage does not prove the configured genesis");
+				}
+				policy = ALLOW_VERIFIED_DEVELOPMENT;
+			} else if (!expectation.knownProduction()) {
 				throw rejected(expectation.scope()
 						+ " storage contains chain data without an identity guard");
+			} else {
+				if (!productionVerifier.verifies(expectation.identity(), unguardedOccupied)) {
+					throw rejected("Legacy production storage does not prove the compile-time-known genesis");
+				}
+				policy = ALLOW_VERIFIED_PRODUCTION;
 			}
-			if (!productionVerifier.verifies(expectation.identity(), unguardedOccupied)) {
-				throw rejected("Legacy production storage does not prove the compile-time-known genesis");
-			}
-			policy = ALLOW_VERIFIED_PRODUCTION;
 		}
 		return new ChainIdentityPreflightDecision(expectation, rocks, policy);
 	}

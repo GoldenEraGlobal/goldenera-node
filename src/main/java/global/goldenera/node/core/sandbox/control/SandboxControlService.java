@@ -24,6 +24,7 @@
 package global.goldenera.node.core.sandbox.control;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -60,14 +61,21 @@ import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBa
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatchRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactOneRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactBatchRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.MempoolClear;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Operation;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.P2pMaintenance;
 import global.goldenera.node.core.sandbox.control.SandboxControlOperationRegistry.Admission;
 import global.goldenera.node.core.sandbox.control.SandboxControlOperationRegistry.AdmissionKind;
 import global.goldenera.node.core.sandbox.control.SandboxControlOperationRegistry.MutationLease;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest;
 import global.goldenera.node.core.properties.MiningProperties;
+import global.goldenera.node.core.mempool.MempoolManager;
+import global.goldenera.node.core.p2p.manager.NodeConnectionManager;
+import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.node.core.sync.BlockSyncManagerService;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.serialization.block.BlockEncoder;
 import global.goldenera.cryptoj.serialization.tx.TxDecoder;
@@ -92,6 +100,10 @@ final class SandboxControlService {
 	private final MiningProperties miningProperties;
 	private final AuthoritativeChainIdentityProvider identityProvider;
 	private final CoreRuntimeReadiness coreReadiness;
+	private final NodeConnectionManager connectionManager;
+	private final P2PHeadAnnouncementService headAnnouncementService;
+	private final BlockSyncManagerService syncManager;
+	private final MempoolManager mempoolManager;
 
 	SandboxControlService(
 			MiningService miningService,
@@ -102,7 +114,11 @@ final class SandboxControlService {
 			ChainClock chainClock,
 			MiningProperties miningProperties,
 			AuthoritativeChainIdentityProvider identityProvider,
-			CoreRuntimeReadiness coreReadiness) {
+			CoreRuntimeReadiness coreReadiness,
+			NodeConnectionManager connectionManager,
+			P2PHeadAnnouncementService headAnnouncementService,
+			BlockSyncManagerService syncManager,
+			MempoolManager mempoolManager) {
 		this.miningService = miningService;
 		this.activation = activation;
 		this.operations = operations;
@@ -112,6 +128,10 @@ final class SandboxControlService {
 		this.miningProperties = miningProperties;
 		this.identityProvider = identityProvider;
 		this.coreReadiness = coreReadiness;
+		this.connectionManager = connectionManager;
+		this.headAnnouncementService = headAnnouncementService;
+		this.syncManager = syncManager;
+		this.mempoolManager = mempoolManager;
 	}
 
 	Capabilities capabilities() {
@@ -136,6 +156,7 @@ final class SandboxControlService {
 						"READ_AUTONOMOUS_STATE",
 						"SET_AUTONOMOUS_STATE",
 						"MINE_EXACTLY_ONE",
+						"MINE_EXACT_BATCH",
 						"AUTHOR_CANDIDATE_WITHOUT_INGESTION",
 						"AUTHOR_CANDIDATES_WITHOUT_INGESTION",
 						"READ_REQUEST_RESULT",
@@ -143,6 +164,8 @@ final class SandboxControlService {
 						"READ_SYNC_RUNTIME",
 						"READ_POW_RUNTIME",
 						"READ_EQUIVOCATION_RUNTIME",
+						"REQUEST_P2P_MAINTENANCE",
+						"CLEAR_MEMPOOL",
 						"READ_AUDIT"),
 				SandboxControlSecurityFilter.MAX_REQUEST_BODY_BYTES,
 				SandboxControlSecurityFilter.MAX_CONCURRENT_REQUESTS,
@@ -152,6 +175,24 @@ final class SandboxControlService {
 				SandboxControlOperationRegistry.ENTRY_TTL.toSeconds(),
 				ExactOneMiningRequest.MAX_DEADLINE.toMillis(),
 				SandboxControlAuditLog.MAX_PAGE_SIZE);
+	}
+
+	P2pMaintenance requestP2pMaintenance() {
+		requireCoreReady();
+		boolean queued = connectionManager.requestMaintenance();
+		queued |= headAnnouncementService.requestAnnouncement();
+		queued |= syncManager.requestSync();
+		int connectedPeers = connectionManager.connectedPeerCount();
+		auditLog.record(Action.REQUEST_P2P_MAINTENANCE, queued ? "QUEUED" : "COALESCED", null);
+		return new P2pMaintenance(queued, connectedPeers);
+	}
+
+	MempoolClear clearMempool() {
+		requireCoreReady();
+		long clearedTransactions = mempoolManager.getTransactionCount();
+		mempoolManager.clear();
+		auditLog.record(Action.CLEAR_MEMPOOL, "CLEARED", null);
+		return new MempoolClear(clearedTransactions);
 	}
 
 	AutonomousState state() {
@@ -194,10 +235,40 @@ final class SandboxControlService {
 
 	Submission submitExactOne(String idempotencyKey, ExactOneRequest request) {
 		validateExactOneRequest(request);
+		return submitExact(
+				idempotencyKey,
+				request.scheduledTimestamp(),
+				request.deadlineMs(),
+				1,
+				Action.MINE_EXACTLY_ONE);
+	}
+
+	Submission submitExactBatch(String idempotencyKey, ExactBatchRequest request) {
+		if (request == null || request.count() == null || request.deadlineMs() == null) {
+			throw badRequest("INVALID_EXACT_BATCH_REQUEST", "count and deadlineMs are required");
+		}
+		if (request.count() < 1 || request.count() > 1_000) {
+			throw badRequest("INVALID_EXACT_BATCH_COUNT", "count must be between 1 and 1000");
+		}
+		validateDeadline(request.deadlineMs(), "INVALID_EXACT_BATCH_DEADLINE");
+		return submitExact(
+				idempotencyKey,
+				null,
+				request.deadlineMs(),
+				request.count(),
+				Action.MINE_EXACT_BATCH);
+	}
+
+	private Submission submitExact(
+			String idempotencyKey,
+			Instant scheduledTimestamp,
+			long deadlineMs,
+			int blockCount,
+			Action auditAction) {
 		requireCoreReady();
-		String canonicalBody = (request.scheduledTimestamp() == null ? "-" : request.scheduledTimestamp().toString())
-				+ "/" + request.deadlineMs();
-		Duration deadline = Duration.ofMillis(request.deadlineMs());
+		String canonicalBody = (scheduledTimestamp == null ? "-" : scheduledTimestamp.toString())
+				+ "/" + deadlineMs + "/" + blockCount;
+		Duration deadline = Duration.ofMillis(deadlineMs);
 		Admission admission = operations.admit(idempotencyKey, canonicalBody, deadline);
 		if (admission.kind() == AdmissionKind.CONFLICT) {
 			throw new SandboxControlException(
@@ -216,22 +287,24 @@ final class SandboxControlService {
 					"The bounded request registry has no available capacity");
 		}
 		if (admission.kind() == AdmissionKind.REPLAY) {
-			auditLog.record(Action.MINE_EXACTLY_ONE, "IDEMPOTENT_REPLAY",
+			auditLog.record(auditAction, "IDEMPOTENT_REPLAY",
 					admission.requestCorrelationId(), admission.operationId());
 			return new Submission(admission.operation(), true);
 		}
-		auditLog.record(Action.MINE_EXACTLY_ONE, "ADMITTED",
+		auditLog.record(auditAction, "ADMITTED",
 				admission.requestCorrelationId(), admission.operationId());
 
 		CompletableFuture<ExactOneMiningOutcome> result;
 		try {
-			result = miningService.mineExactlyOne(new ExactOneMiningRequest(
-					Optional.ofNullable(request.scheduledTimestamp()),
-					deadline));
+			ExactOneMiningRequest miningRequest = new ExactOneMiningRequest(
+					Optional.ofNullable(scheduledTimestamp), deadline);
+			result = blockCount == 1
+					? miningService.mineExactlyOne(miningRequest)
+					: miningService.mineExactly(miningRequest, blockCount);
 		} catch (RuntimeException e) {
 			ExactOneMiningOutcome failure = ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.FAILED);
 			if (operations.complete(admission.operationId(), failure)) {
-				auditLog.record(Action.MINE_EXACTLY_ONE, failure.code().name(),
+				auditLog.record(auditAction, failure.code().name(),
 						admission.requestCorrelationId(), admission.operationId());
 			}
 			throw new SandboxControlException(
@@ -244,8 +317,13 @@ final class SandboxControlService {
 			ExactOneMiningOutcome terminal = failure == null && outcome != null
 					? outcome
 					: ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.FAILED);
+			if (terminal.accepted()) {
+				// Exact batches can outrun header/body propagation. Coalescing a current-head
+				// status announcement lets peers start sync without waiting for heartbeats.
+				headAnnouncementService.requestAnnouncement();
+			}
 			if (operations.complete(admission.operationId(), terminal)) {
-				auditLog.record(Action.MINE_EXACTLY_ONE, terminal.code().name(),
+				auditLog.record(auditAction, terminal.code().name(),
 						admission.requestCorrelationId(), admission.operationId());
 			}
 		});
@@ -452,17 +530,19 @@ final class SandboxControlService {
 		if (request == null || request.deadlineMs() == null) {
 			throw badRequest("INVALID_EXACT_ONE_REQUEST", "deadlineMs is required");
 		}
-		long maxDeadlineMs = ExactOneMiningRequest.MAX_DEADLINE.toMillis();
-		if (request.deadlineMs() <= 0 || request.deadlineMs() > maxDeadlineMs) {
-			throw badRequest(
-					"INVALID_EXACT_ONE_DEADLINE",
-					"deadlineMs must be between 1 and " + maxDeadlineMs);
-		}
+		validateDeadline(request.deadlineMs(), "INVALID_EXACT_ONE_DEADLINE");
 		if (request.scheduledTimestamp() != null
 				&& !activation.manifestContext().manifest().features().deterministicClock()) {
 			throw badRequest(
 					"SCHEDULED_TIMESTAMP_UNSUPPORTED",
 					"scheduledTimestamp requires the deterministic sandbox clock");
+		}
+	}
+
+	private void validateDeadline(long deadlineMs, String code) {
+		long maxDeadlineMs = ExactOneMiningRequest.MAX_DEADLINE.toMillis();
+		if (deadlineMs <= 0 || deadlineMs > maxDeadlineMs) {
+			throw badRequest(code, "deadlineMs must be between 1 and " + maxDeadlineMs);
 		}
 	}
 

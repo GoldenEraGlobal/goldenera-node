@@ -21,14 +21,17 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.chainidentity;
+package global.goldenera.node.core.p2p.netty;
 
-/**
- * An ALLOW decision must come from a preflight component that independently
- * verified the legacy database genesis for the selected execution scope.
- */
-public enum LegacyProductionBackfillPolicy {
-	DENY,
-	ALLOW_VERIFIED_PRODUCTION,
-	ALLOW_VERIFIED_DEVELOPMENT
+import global.goldenera.cryptoj.datatypes.Address;
+import io.netty.util.AttributeKey;
+
+/** Channel-local expectations that are not part of the wire protocol. */
+public final class P2PChannelAttributes {
+
+	public static final AttributeKey<Address> EXPECTED_REMOTE_IDENTITY =
+			AttributeKey.valueOf("goldenera.expectedRemoteIdentity");
+
+	private P2PChannelAttributes() {
+	}
 }

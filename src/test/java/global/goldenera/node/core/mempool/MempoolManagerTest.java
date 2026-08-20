@@ -30,6 +30,7 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -50,6 +51,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
@@ -153,7 +155,7 @@ class MempoolManagerTest {
 	}
 
 	@Test
-	void disconnectedBlockHandlerDelegatesThroughConfiguredExecutor() {
+	void disconnectedBlockHandlerRevalidatesTransactionsBeforeReAdmission() {
 		MempoolStore mockedStore = mock(MempoolStore.class);
 		MempoolManager eventManager = new MempoolManager(new SimpleMeterRegistry(), mockedStore, validator,
 				MempoolTestFixtures.properties(100), mock(ChainHeadStateCache.class),
@@ -163,10 +165,28 @@ class MempoolManagerTest {
 		when(block.getHeight()).thenReturn(12L);
 		List<Tx> disconnectedTxs = List.of(transfer(9, ALICE, 1, 10).getTx());
 		when(block.getTxs()).thenReturn(disconnectedTxs);
+		when(validator.validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.REORG), eq(false)))
+				.thenReturn(MempoolValidationResult.stateInvalid("losing branch state"));
 
 		eventManager.onBlockDisconnected(new BlockDisconnectedEvent(this, block));
 
-		verify(mockedStore).addTransactionsBack(block.getTxs(), block);
+		verify(validator).validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.REORG), eq(false));
+		verifyNoInteractions(mockedStore);
+	}
+
+	@Test
+	void reorgCompletionImmediatelyRevalidatesTheFinalMempoolProjection() {
+		MempoolEntry invalidated = transfer(9, ALICE, 1, 10);
+		store.addTransaction(invalidated, 0, MempoolTxAddEvent.AddReason.NEW);
+		when(validator.revalidateAgainstChain(invalidated))
+				.thenReturn(MempoolValidationResult.stateInvalid("losing branch balance rolled back"));
+
+		manager.onBlockReorg(mock(BlockReorgEvent.class));
+
+		assertThat(store.getCount()).isZero();
+		verify(validator).revalidateAgainstChain(invalidated);
 	}
 
 	@Test

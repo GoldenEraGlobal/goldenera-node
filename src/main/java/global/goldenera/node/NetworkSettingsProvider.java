@@ -64,12 +64,16 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NetworkSettingsProvider {
 
+    static final String DEVELOPMENT_NETWORK_FORK_SCHEDULE =
+            "ge.development.use-network-fork-schedule";
+
     private final GeneralProperties generalProperties;
     private final Environment environment;
     private final SandboxRuntimeContext sandboxRuntimeContext;
 
     private static Network activeNetwork;
     private static String activeProfile;
+    private static String activeConsensusProfile;
     private static NetworkSettings activeSettings;
     private static final Map<String, NetworkSettings> settingsCache = new ConcurrentHashMap<>();
     private static boolean initialized = false;
@@ -78,12 +82,14 @@ public class NetworkSettingsProvider {
     public void init() {
         activeNetwork = generalProperties.getNetwork();
         activeProfile = determineActiveProfile();
+        activeConsensusProfile = determineConsensusProfile(activeProfile);
 
-        log.info("Initializing NetworkSettingsProvider for network: {}, profile: {}", activeNetwork, activeProfile);
+        log.info("Initializing NetworkSettingsProvider for network: {}, profile: {}, consensus profile: {}",
+                activeNetwork, activeProfile, activeConsensusProfile);
 
         activeSettings = sandboxRuntimeContext.isSandbox()
                 ? loadSandboxSettings()
-                : loadAndCacheSettings(activeNetwork, activeProfile);
+                : loadAndCacheSettings(activeNetwork, activeProfile, activeConsensusProfile);
 
         initialized = true;
         log.info("NetworkSettingsProvider initialized successfully");
@@ -112,15 +118,29 @@ public class NetworkSettingsProvider {
         return "prod";
     }
 
+    private String determineConsensusProfile(String profile) {
+        boolean networkSchedule = environment.getProperty(
+                DEVELOPMENT_NETWORK_FORK_SCHEDULE, Boolean.class, false);
+        if (!networkSchedule) {
+            return profile;
+        }
+        if (!"dev".equals(profile)) {
+            throw new IllegalStateException(
+                    DEVELOPMENT_NETWORK_FORK_SCHEDULE + " is valid only with the dev profile");
+        }
+        return "prod";
+    }
+
     /**
      * Load genesis settings from JSON and combine with consensus settings from
      * Constants.
      */
-    private NetworkSettings loadAndCacheSettings(Network network, String profile) {
-        String cacheKey = network.name() + "-" + profile;
+    private NetworkSettings loadAndCacheSettings(
+            Network network, String genesisProfile, String consensusProfile) {
+        String cacheKey = network.name() + "-" + genesisProfile + "-" + consensusProfile;
         return settingsCache.computeIfAbsent(cacheKey, key -> {
-            GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
-            return NetworkSettings.fromGenesisSettings(genesis, network, profile);
+            GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, genesisProfile);
+            return NetworkSettings.fromGenesisSettings(genesis, network, consensusProfile);
         });
     }
 
@@ -187,7 +207,8 @@ public class NetworkSettingsProvider {
 			return activeSettings;
 		}
         String profile = getActiveProfile();
-        String cacheKey = network.name() + "-" + profile;
+        String consensusProfile = activeConsensusProfile;
+        String cacheKey = network.name() + "-" + profile + "-" + consensusProfile;
 
         NetworkSettings cached = settingsCache.get(cacheKey);
         if (cached != null) {
@@ -196,7 +217,7 @@ public class NetworkSettingsProvider {
 
         // Load if not cached (shouldn't happen often after init)
         GenesisSettings genesis = GenesisConfigLoader.loadGenesisSettings(network, profile);
-        NetworkSettings settings = NetworkSettings.fromGenesisSettings(genesis, network, profile);
+        NetworkSettings settings = NetworkSettings.fromGenesisSettings(genesis, network, consensusProfile);
         settingsCache.put(cacheKey, settings);
         return settings;
     }
@@ -229,6 +250,7 @@ public class NetworkSettingsProvider {
 		settingsCache.clear();
 		activeNetwork = null;
 		activeProfile = null;
+		activeConsensusProfile = null;
 		activeSettings = null;
 		initialized = false;
 	}

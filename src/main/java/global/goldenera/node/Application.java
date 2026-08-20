@@ -33,6 +33,7 @@ import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.FilterType;
 
 import global.goldenera.node.core.sandbox.authoring.SandboxManifestAuthoringCli;
+import global.goldenera.node.core.storage.chainidentity.DevelopmentGenesisAuthoringCli;
 
 @SpringBootApplication
 @ComponentScan(excludeFilters = @ComponentScan.Filter(
@@ -54,6 +55,14 @@ public class Application {
     }
 
     public static void main(String[] args) {
+        if (args.length > 0 && DevelopmentGenesisAuthoringCli.COMMAND.equals(args[0])) {
+            String[] authoringArguments = Arrays.copyOfRange(args, 1, args.length);
+            int exitCode = DevelopmentGenesisAuthoringCli.execute(authoringArguments, System.out, System.err);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
         if (args.length > 0 && SandboxManifestAuthoringCli.COMMAND.equals(args[0])) {
             String[] authoringArguments = Arrays.copyOfRange(args, 1, args.length);
             int exitCode = SandboxManifestAuthoringCli.execute(authoringArguments, System.out, System.err);

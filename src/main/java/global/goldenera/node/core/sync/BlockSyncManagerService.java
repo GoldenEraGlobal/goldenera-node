@@ -69,10 +69,13 @@ import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PBlockReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PHeadersReceivedEvent;
+import global.goldenera.node.core.p2p.events.P2PPeerHeadAdvancedEvent;
+import global.goldenera.node.core.p2p.events.P2PHandshakeCompletedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
+import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.exceptions.IncompatibleChainException;
@@ -92,6 +95,7 @@ public class BlockSyncManagerService {
 	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch
 	static final long TIMEOUT_SECONDS = 20; // Timeout per request (reduced for faster failover)
 	static final long SYNC_POLL_DELAY_MS = 100;
+	static final int EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD = 3;
 	static final int MAX_PENDING_BROADCAST_DOWNLOADS = 128;
 	static final long MAX_BROADCAST_REORG_DEPTH = 10;
 
@@ -140,6 +144,7 @@ public class BlockSyncManagerService {
 	final ChainQuery chainQueryService;
 	final BlockReorgs blockReorgService;
 	final PeerRegistry peerRegistry;
+	final P2PHeadAnnouncementService headAnnouncementService;
 	final PeerReputationService peerReputationService;
 	final BlockIngestionService blockIngestionService;
 
@@ -153,6 +158,7 @@ public class BlockSyncManagerService {
 			ChainQuery chainQueryService,
 			BlockReorgs blockReorgService,
 			PeerRegistry peerRegistry,
+			P2PHeadAnnouncementService headAnnouncementService,
 			PeerReputationService peerReputationService,
 			BlockIngestionService blockIngestionService) {
 		this.registry = registry;
@@ -164,6 +170,7 @@ public class BlockSyncManagerService {
 		this.chainQueryService = chainQueryService;
 		this.blockReorgService = blockReorgService;
 		this.peerRegistry = peerRegistry;
+		this.headAnnouncementService = headAnnouncementService;
 		this.peerReputationService = peerReputationService;
 		this.blockIngestionService = blockIngestionService;
 	}
@@ -184,6 +191,7 @@ public class BlockSyncManagerService {
 
 	final Set<Hash> pendingBroadcastDownloads = ConcurrentHashMap.newKeySet();
 	private final SyncRequestTelemetry syncRequestTelemetry = new SyncRequestTelemetry();
+	private final EmptyHeaderClaimTracker emptyHeaderClaimTracker = new EmptyHeaderClaimTracker();
 
 	public SyncRuntimeSnapshot runtimeSnapshot() {
 		SyncRequestTelemetry.Snapshot requestTelemetry = syncRequestTelemetry.snapshot();
@@ -228,6 +236,11 @@ public class BlockSyncManagerService {
 		syncExecutor.submit(this::syncLoop);
 		signalQueue.offer(new Object());
 		registry.gauge("blockchain.sync.status", this, svc -> svc.isSynced() ? 1 : 0);
+	}
+
+	/** Wakes the sync loop immediately instead of waiting for its periodic poll. */
+	public boolean requestSync() {
+		return isRunning.get() && signalQueue.offer(new Object());
 	}
 
 	@PreDestroy
@@ -300,18 +313,22 @@ public class BlockSyncManagerService {
 			long headerTime = System.currentTimeMillis() - headerStart;
 
 			if (headersToSync.isEmpty()) {
-				// If peer has much higher height but sends nothing, they found no common
-				// ancestor
-				// This implies an incompatible chain (different genesis or hard fork)
 				if (peer.getHeadHeight() > localBest.getHeight()) {
+					if (!emptyHeaderClaimTracker.record(peer.getIdentity(), localBest.getHash())) {
+						log.debug("Peer {} returned no headers for advertised height {}; retrying before "
+								+ "classifying the chain as incompatible", peer.getIdentity(), peer.getHeadHeight());
+						return false;
+					}
 					throw new IncompatibleChainException("Peer claimed height " + peer.getHeadHeight()
 							+ " (local: " + localBest.getHeight()
-							+ ") but sent no headers. Likely no common ancestor found.");
+							+ ") but repeatedly sent no headers for the same local head.");
 				}
 
+				emptyHeaderClaimTracker.clear(peer.getIdentity());
 				log.debug("No new headers found from peer");
 				return true;
 			}
+			emptyHeaderClaimTracker.clear(peer.getIdentity());
 
 			log.info("Downloaded {} headers in {}ms", headersToSync.size(), headerTime);
 
@@ -334,6 +351,11 @@ public class BlockSyncManagerService {
 
 			peerReputationService.recordSuccess(peer.getIdentity());
 			registry.counter("blockchain.sync.blocks_downloaded").increment(totalBlocksProcessed);
+			if (totalBlocksProcessed > 0) {
+				// SYNC-connected blocks are intentionally not rebroadcast one by one. Announce
+				// the final head once so sparse/multi-hop peers can continue immediately.
+				headAnnouncementService.requestAnnouncement();
+			}
 			return true;
 		} catch (IncompatibleChainException e) {
 			// Peer is on a fundamentally different chain (different genesis or hard fork)
@@ -638,6 +660,34 @@ public class BlockSyncManagerService {
 		}
 	}
 
+	static final class EmptyHeaderClaimTracker {
+		private final Map<Address, EmptyHeaderObservation> observations = new ConcurrentHashMap<>();
+
+		boolean record(Address identity, Hash localHeadHash) {
+			if (identity == null) {
+				return false;
+			}
+			AtomicBoolean thresholdReached = new AtomicBoolean();
+			observations.compute(identity, (ignored, previous) -> {
+				int count = previous != null && previous.localHeadHash().equals(localHeadHash)
+						? previous.count() + 1
+						: 1;
+				thresholdReached.set(count >= EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD);
+				return new EmptyHeaderObservation(localHeadHash, count);
+			});
+			return thresholdReached.get();
+		}
+
+		void clear(Address identity) {
+			if (identity != null) {
+				observations.remove(identity);
+			}
+		}
+	}
+
+	private record EmptyHeaderObservation(Hash localHeadHash, int count) {
+	}
+
 	/**
 	 * Validates headers in parallel AND warms up lazy getters (hash, size).
 	 * BlockHeaderImpl caches these values internally after first call,
@@ -814,6 +864,16 @@ public class BlockSyncManagerService {
 		} else if (isPeerFaultRejection(outcome)) {
 			peerReputationService.recordFailure(event.getPeer().getIdentity());
 		}
+	}
+
+	@EventListener
+	public void onPeerHeadAdvanced(P2PPeerHeadAdvancedEvent event) {
+		requestSync();
+	}
+
+	@EventListener
+	public void onPeerHandshakeCompleted(P2PHandshakeCompletedEvent event) {
+		requestSync();
 	}
 
 	private boolean isPeerFaultRejection(BlockIngestionOutcome outcome) {

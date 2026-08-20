@@ -83,7 +83,7 @@ public class NodeInfoApiV1 {
 		long localHeight = blockHeader != null ? blockHeader.getHeight() : 0L;
 
 		// Sync status
-		int connectedPeers = peerRegistry.count();
+		int connectedPeers = peerRegistry.handshakenCount();
 		OptionalLong networkHeightOpt = peerRegistry.getAll().stream()
 				.filter(p -> p.getIdentity() != null)
 				.mapToLong(RemotePeer::getHeadHeight)

@@ -1,0 +1,12 @@
+*
+!Dockerfile
+!.mvn/
+!.mvn/**
+!mvnw
+!pom.xml
+!src/
+!src/**
+!scripts/
+!scripts/entrypoint.sh
+!target/
+!target/goldenera-node-*.jar

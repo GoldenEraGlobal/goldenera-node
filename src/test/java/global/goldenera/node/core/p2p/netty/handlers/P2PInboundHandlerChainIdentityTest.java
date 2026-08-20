@@ -60,6 +60,7 @@ import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Mode;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Validation;
 import global.goldenera.node.core.p2p.events.P2PHandshakeCompletedEvent;
 import global.goldenera.node.core.p2p.events.P2PMempoolHashesRequestedEvent;
+import global.goldenera.node.core.p2p.events.P2PPeerHeadAdvancedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.messages.NetworkMessage;
@@ -67,7 +68,9 @@ import global.goldenera.node.core.p2p.messages.P2PEnvelope;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
 import global.goldenera.node.core.p2p.messages.validation.P2PValidation;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
+import global.goldenera.node.core.p2p.netty.P2PChannelAttributes;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
+import global.goldenera.node.core.p2p.services.P2PStatusProvider;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -118,6 +121,21 @@ class P2PInboundHandlerChainIdentityTest {
 				status(REMOTE_IDENTITY, BigInteger.ONE)));
 
 		assertThat(fixture.channel.isActive()).isFalse();
+		verify(fixture.publisher, never()).publishEvent(any(P2PHandshakeCompletedEvent.class));
+	}
+
+	@Test
+	void configuredOutboundPeerRejectsAValidStatusFromAnotherIdentity() {
+		Fixture fixture = fixture(Runnable::run);
+		fixture.channel.attr(P2PChannelAttributes.EXPECTED_REMOTE_IDENTITY).set(REMOTE_IDENTITY);
+
+		fixture.channel.writeInbound(new P2PEnvelope(
+				7,
+				P2PMessageType.STATUS,
+				status(DRIFTED_IDENTITY, BigInteger.ONE)));
+
+		assertThat(fixture.channel.isActive()).isFalse();
+		verify(fixture.reputation, never()).recordSuccess(any());
 		verify(fixture.publisher, never()).publishEvent(any(P2PHandshakeCompletedEvent.class));
 	}
 
@@ -215,6 +233,25 @@ class P2PInboundHandlerChainIdentityTest {
 		assertThat(fixture.peer.getIdentity()).isEqualTo(REMOTE_IDENTITY);
 		assertThat(fixture.peer.getTotalDifficulty()).isEqualTo(BigInteger.ONE);
 		assertThat(fixture.peer.getLastPongReceived()).isEqualTo(latencyBefore);
+		verify(fixture.publisher, never()).publishEvent(any(P2PPeerHeadAdvancedEvent.class));
+	}
+
+	@Test
+	void higherDifficultyPongPublishesOneHeadAdvanceAndStalePongsPublishNone() {
+		Fixture fixture = fixture(Runnable::run);
+		fixture.channel.writeInbound(new P2PEnvelope(
+				1, P2PMessageType.STATUS, status(REMOTE_IDENTITY, BigInteger.ONE)));
+		clearInvocations(fixture.publisher);
+
+		fixture.channel.writeInbound(new P2PEnvelope(
+				2, P2PMessageType.PONG, status(REMOTE_IDENTITY, BigInteger.TEN)));
+		fixture.channel.writeInbound(new P2PEnvelope(
+				3, P2PMessageType.PONG, status(REMOTE_IDENTITY, BigInteger.TEN)));
+		fixture.channel.writeInbound(new P2PEnvelope(
+				4, P2PMessageType.PONG, status(REMOTE_IDENTITY, BigInteger.ONE)));
+
+		assertThat(fixture.peer.getTotalDifficulty()).isEqualTo(BigInteger.TEN);
+		verify(fixture.publisher, times(1)).publishEvent(any(P2PPeerHeadAdvancedEvent.class));
 	}
 
 	private Fixture fixture(Executor executor) {
@@ -243,8 +280,7 @@ class P2PInboundHandlerChainIdentityTest {
 				peerRegistry,
 				reputation,
 				generalProperties,
-				identityService,
-				chainQuery,
+				new P2PStatusProvider(chainQuery, generalProperties, identityService, policy),
 				executor,
 				mock(P2PValidation.class),
 				policy,

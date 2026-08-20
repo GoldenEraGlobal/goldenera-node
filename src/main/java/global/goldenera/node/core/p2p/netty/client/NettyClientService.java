@@ -29,6 +29,7 @@ import org.springframework.beans.factory.DisposableBean;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
+import global.goldenera.node.core.p2p.netty.P2PChannelAttributes;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.p2p.services.DirectoryService;
 import io.netty.bootstrap.Bootstrap;
@@ -58,7 +59,7 @@ public class NettyClientService implements DisposableBean {
 	 * @param p2pDirClient
 	 *            Directory Service P2P Client
 	 */
-	public void connect(DirectoryService.P2PClient p2pDirClient) {
+	public ChannelFuture connect(DirectoryService.P2PClient p2pDirClient) {
 		String host = p2pDirClient.getP2pListenHost().trim();
 		int port = p2pDirClient.getP2pListenPort().intValue();
 		log.debug("Initiating connection to {}:{}", host, port);
@@ -67,6 +68,7 @@ public class NettyClientService implements DisposableBean {
 		b.group(workerGroup)
 				.channel(NioSocketChannel.class)
 				.handler(p2pChannelInitializer)
+				.attr(P2PChannelAttributes.EXPECTED_REMOTE_IDENTITY, p2pDirClient.getIdentity())
 				.option(ChannelOption.SO_KEEPALIVE, true)
 				.option(ChannelOption.TCP_NODELAY, true)
 				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
@@ -84,6 +86,7 @@ public class NettyClientService implements DisposableBean {
 				}
 			}
 		});
+		return f;
 	}
 
 	@Override

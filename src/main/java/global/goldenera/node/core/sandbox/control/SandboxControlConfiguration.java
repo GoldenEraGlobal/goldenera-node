@@ -43,11 +43,15 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.time.ChainClock;
+import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadiness;
+import global.goldenera.node.core.p2p.manager.NodeConnectionManager;
+import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
+import global.goldenera.node.core.sync.BlockSyncManagerService;
 import io.github.bucket4j.Bucket;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
@@ -105,7 +109,11 @@ public class SandboxControlConfiguration {
 			ChainClock chainClock,
 			MiningProperties miningProperties,
 			AuthoritativeChainIdentityProvider identityProvider,
-			CoreRuntimeReadiness coreReadiness) {
+			CoreRuntimeReadiness coreReadiness,
+			NodeConnectionManager connectionManager,
+			P2PHeadAnnouncementService headAnnouncementService,
+			BlockSyncManagerService syncManager,
+			MempoolManager mempoolManager) {
 		return new SandboxControlService(
 				miningService,
 				activation,
@@ -115,7 +123,11 @@ public class SandboxControlConfiguration {
 				chainClock,
 				miningProperties,
 				identityProvider,
-				coreReadiness);
+				coreReadiness,
+				connectionManager,
+				headAnnouncementService,
+				syncManager,
+				mempoolManager);
 	}
 
 	@Bean

@@ -36,9 +36,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
-import global.goldenera.node.Constants;
-import global.goldenera.node.core.blockchain.storage.ChainQuery;
-import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Validation;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
@@ -52,6 +49,7 @@ import global.goldenera.node.core.p2p.events.P2PMempoolHashesRequestedEvent;
 import global.goldenera.node.core.p2p.events.P2PMempoolTxReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PMempoolTxsReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PMempoolTxsRequestedEvent;
+import global.goldenera.node.core.p2p.events.P2PPeerHeadAdvancedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.messages.P2PEnvelope;
@@ -68,8 +66,9 @@ import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsDto;
 import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsReqDto;
 import global.goldenera.node.core.p2p.messages.validation.P2PValidation;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
+import global.goldenera.node.core.p2p.netty.P2PChannelAttributes;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
-import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.p2p.services.P2PStatusProvider;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -97,14 +96,13 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	final MeterRegistry registry;
 	final Executor p2pReceiveExecutor;
 
-	final ChainQuery chainQueryService;
 	final GeneralProperties generalProperties;
-	final IdentityService identityService;
 	final ApplicationEventPublisher applicationEventPublisher;
 	final PeerRegistry peerRegistry;
 	final PeerReputationService reputationService;
 	final P2PValidation p2pValidation;
 	final P2PChainIdentityPolicy chainIdentityPolicy;
+	final P2PStatusProvider statusProvider;
 	final Bucket rateLimitBucket;
 	RemotePeer peer;
 	volatile HandshakeState handshakeState = HandshakeState.AWAITING_STATUS;
@@ -113,16 +111,15 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 
 	public P2PInboundHandler(ApplicationEventPublisher applicationEventPublisher, PeerRegistry peerRegistry,
 			PeerReputationService reputationService,
-			GeneralProperties generalProperties, IdentityService identityService,
-			ChainQuery chainQueryService, @Qualifier(P2P_RECEIVE_EXECUTOR) Executor p2pReceiveExecutor,
+			GeneralProperties generalProperties, P2PStatusProvider statusProvider,
+			@Qualifier(P2P_RECEIVE_EXECUTOR) Executor p2pReceiveExecutor,
 			P2PValidation p2pValidation, P2PChainIdentityPolicy chainIdentityPolicy,
 			MeterRegistry registry, ThrottlingProperties throttlingProperties) {
 		this.applicationEventPublisher = applicationEventPublisher;
 		this.peerRegistry = peerRegistry;
 		this.reputationService = reputationService;
 		this.generalProperties = generalProperties;
-		this.identityService = identityService;
-		this.chainQueryService = chainQueryService;
+		this.statusProvider = statusProvider;
 		this.p2pReceiveExecutor = p2pReceiveExecutor;
 		this.registry = registry;
 		this.p2pValidation = p2pValidation;
@@ -140,7 +137,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		peer = new RemotePeer(ctx.channel(), registry);
 		peerRegistry.register(peer);
 		// Send Handshake immediately on connect
-		peer.sendStatus(createCurrentStatus());
+		peer.sendStatus(statusProvider.currentStatus());
 	}
 
 	@Override
@@ -207,7 +204,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 			P2PMessageType messageType = envelope.getMessageType();
 			switch (messageType) {
 				case PING:
-					peer.sendPong(createCurrentStatus());
+					peer.sendPong(statusProvider.currentStatus());
 					break;
 				case PONG:
 					if (!(envelope.getPayload() instanceof P2PStatusDto status)) {
@@ -316,19 +313,6 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		}
 	}
 
-	private P2PStatusDto createCurrentStatus() {
-		StoredBlock latestBlock = chainQueryService.getLatestStoredBlockOrThrow();
-		return P2PStatusDto.builder()
-				.protocolVersion(Constants.P2P_PROTOCOL_VERSION)
-				.nodeVersion(Constants.NODE_VERSION)
-				.network(generalProperties.getNetwork())
-				.cumulativeDifficulty(latestBlock.getCumulativeDifficulty())
-				.bestBlockHeader(latestBlock.getBlock().getHeader())
-				.nodeIdentity(identityService.getNodeIdentityAddress())
-				.capabilities(chainIdentityPolicy.localCapabilities())
-				.build();
-	}
-
 	private void handleStatusSerially(ChannelHandlerContext ctx, P2PEnvelope envelope) {
 		if (handshakeState != HandshakeState.AWAITING_STATUS) {
 			rejectProtocol(ctx, "Repeated STATUS handshake");
@@ -348,6 +332,11 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	}
 
 	private void handleStatus(P2PStatusDto status, long requestId) {
+		var expectedIdentity = peer.getChannel().attr(P2PChannelAttributes.EXPECTED_REMOTE_IDENTITY).get();
+		if (expectedIdentity != null && !expectedIdentity.equals(status.getNodeIdentity())) {
+			throw new GEFailedException("Configured peer identity mismatch: expected "
+					+ expectedIdentity + " but received " + status.getNodeIdentity());
+		}
 		if (status.getNetwork() != generalProperties.getNetwork()) {
 			throw new GEFailedException("Wrong Network: " + status.getNetwork());
 		}
@@ -379,8 +368,15 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 			throw new GEFailedException("PONG status identity drift");
 		}
 		peer.updateLatency();
-		if (status.getCumulativeDifficulty().compareTo(peer.getTotalDifficulty()) > 0) {
-			updatePeerHeadState(status);
+		boolean advanced;
+		synchronized (peer) {
+			advanced = status.getCumulativeDifficulty().compareTo(peer.getTotalDifficulty()) > 0;
+			if (advanced) {
+				updatePeerHeadState(status);
+			}
+		}
+		if (advanced) {
+			applicationEventPublisher.publishEvent(new P2PPeerHeadAdvancedEvent(this, peer, status));
 		}
 	}
 

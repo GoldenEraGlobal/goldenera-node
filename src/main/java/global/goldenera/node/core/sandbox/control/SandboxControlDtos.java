@@ -70,6 +70,12 @@ final class SandboxControlDtos {
 			Set<String> suspensions) {
 	}
 
+	record P2pMaintenance(boolean queued, int connectedPeers) {
+	}
+
+	record MempoolClear(long clearedTransactions) {
+	}
+
 	@JsonIgnoreProperties(ignoreUnknown = false)
 	record AutonomousRequest(Boolean enabled) {
 	}
@@ -88,6 +94,10 @@ final class SandboxControlDtos {
 
 	@JsonIgnoreProperties(ignoreUnknown = false)
 	record ExactOneRequest(Instant scheduledTimestamp, Long deadlineMs) {
+	}
+
+	@JsonIgnoreProperties(ignoreUnknown = false)
+	record ExactBatchRequest(Integer count, Long deadlineMs) {
 	}
 
 	@JsonIgnoreProperties(ignoreUnknown = false)

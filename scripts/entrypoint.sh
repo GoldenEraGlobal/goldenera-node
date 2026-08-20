@@ -34,7 +34,7 @@ mkdir -p "$DATA_DIR" "$LOG_DIR" "$OVERRIDES_DIR" "$NATIVE_TMP_DIR"
 
 chown -R blockchain:blockchain "$DATA_DIR"
 chown -R blockchain:blockchain "$LOG_DIR"
-chown -R blockchain:blockchain "$OVERRIDES_DIR"
+chown blockchain:blockchain "$OVERRIDES_DIR" "$NATIVE_PKG_DIR"
 chown blockchain:blockchain "$NATIVE_TMP_DIR"
 chmod 700 "$DATA_DIR" "$NATIVE_TMP_DIR"
 
@@ -145,7 +145,7 @@ echo ">>> [BOOT] Launching Spring Boot..."
 # MaxDirectMemorySize only limits Java DirectByteBuffer (Netty, NIO buffers).
 # 512MB is sufficient for Netty P2P + HTTP server buffers.
 
-exec su -s /bin/bash blockchain -c "$JAVA_BIN \
+exec setpriv --reuid=blockchain --regid=blockchain --init-groups "$JAVA_BIN" \
   -server \
   -XX:+UseZGC \
   -XX:+ZGenerational \
@@ -157,4 +157,4 @@ exec su -s /bin/bash blockchain -c "$JAVA_BIN \
   -DAPP_DATA_DIR=$DATA_DIR \
   -Djava.security.egd=file:/dev/./urandom \
   -cp ${OVERRIDES_DIR}:${APP_JAR} \
-  org.springframework.boot.loader.launch.JarLauncher"
+  org.springframework.boot.loader.launch.JarLauncher

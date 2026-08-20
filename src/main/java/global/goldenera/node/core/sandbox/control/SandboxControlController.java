@@ -47,7 +47,10 @@ import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBa
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateBatchRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.CandidateRequest;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactOneRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.ExactBatchRequest;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.MempoolClear;
 import global.goldenera.node.core.sandbox.control.SandboxControlDtos.Operation;
+import global.goldenera.node.core.sandbox.control.SandboxControlDtos.P2pMaintenance;
 import global.goldenera.node.core.sandbox.control.SandboxControlService.Submission;
 
 @RestController
@@ -89,6 +92,15 @@ public class SandboxControlController {
 		return ResponseEntity.accepted().location(location).body(submission.operation());
 	}
 
+	@PostMapping(path = "/exact-batch", consumes = "application/json")
+	ResponseEntity<Operation> exactBatch(
+			@RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey,
+			@RequestBody ExactBatchRequest request) {
+		Submission submission = service.submitExactBatch(idempotencyKey, request);
+		URI location = URI.create("/api/sandbox/v1/control/requests/" + submission.operation().operationId());
+		return ResponseEntity.accepted().location(location).body(submission.operation());
+	}
+
 	@PostMapping(path = "/author-candidate", consumes = "application/json")
 	Candidate authorCandidate(@RequestBody CandidateRequest request) {
 		return service.authorCandidate(request);
@@ -97,6 +109,16 @@ public class SandboxControlController {
 	@PostMapping(path = "/author-candidates", consumes = "application/json")
 	CandidateBatch authorCandidates(@RequestBody CandidateBatchRequest request) {
 		return service.authorCandidates(request);
+	}
+
+	@PostMapping("/p2p/maintenance")
+	P2pMaintenance requestP2pMaintenance() {
+		return service.requestP2pMaintenance();
+	}
+
+	@PostMapping("/mempool/clear")
+	MempoolClear clearMempool() {
+		return service.clearMempool();
 	}
 
 	@GetMapping("/requests/{operationId}")

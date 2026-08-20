@@ -457,10 +457,18 @@ public class MiningService {
 	}
 
 	public CompletableFuture<ExactOneMiningOutcome> mineExactlyOne(ExactOneMiningRequest request) {
+		return mineExactly(request, 1);
+	}
+
+	public CompletableFuture<ExactOneMiningOutcome> mineExactly(
+			ExactOneMiningRequest request, int blockCount) {
 		Objects.requireNonNull(request, "request");
+		if (blockCount < 1 || blockCount > 1_000) {
+			throw new IllegalArgumentException("blockCount must be in range 1..1000");
+		}
 		MiningAttemptContext context = MiningAttemptContext.exactOne(request.deadline());
 		CompletableFuture<ExactOneMiningOutcome> result = new CompletableFuture<>();
-		ExactOneOperation operation = new ExactOneOperation(request, context, result);
+		ExactOneOperation operation = new ExactOneOperation(request, blockCount, context, result);
 		coordinationLock.lock();
 		try {
 			if (shutdown.get()) {
@@ -508,8 +516,20 @@ public class MiningService {
 			return;
 		}
 		try {
-			completeExactOneOperation(operation, runMiningAttempt(
-					operation.request.scheduledTimestamp(), operation.context));
+			ExactOneMiningOutcome outcome = null;
+			for (int index = 0; index < operation.blockCount; index++) {
+				Optional<Instant> timestamp = index == 0
+						? operation.request.scheduledTimestamp()
+						: Optional.empty();
+				outcome = runMiningAttempt(timestamp, operation.context);
+				if (!outcome.accepted()) {
+					break;
+				}
+				if (index + 1 < operation.blockCount && !resumeExactBatch(operation)) {
+					break;
+				}
+			}
+			completeExactOneOperation(operation, Objects.requireNonNull(outcome, "mining outcome"));
 		} catch (RuntimeException | LinkageError failure) {
 			log.error("Exact-one mining attempt failed", failure);
 			completeExactOneOperation(operation,
@@ -519,6 +539,35 @@ public class MiningService {
 					ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.FAILED));
 			finishExactOne(operation);
 			scheduleAutonomousMiningIfAllowed();
+		}
+	}
+
+	private boolean resumeExactBatch(ExactOneOperation operation) {
+		coordinationLock.lock();
+		try {
+			if (exactOneOperation != operation
+					|| operation.state != OperationState.SUBMITTING
+					|| shutdown.get()) {
+				return false;
+			}
+			long remainingNanos = operation.context.remainingNanos();
+			if (remainingNanos <= 0) {
+				operation.context.cancelled.set(true);
+				terminalizeOperationLocked(operation,
+						ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.TIMED_OUT));
+				return false;
+			}
+			operation.state = OperationState.RUNNING;
+			operation.deadlineTask = exactOneDeadlineExecutor.schedule(
+					() -> expireExactOneOperation(operation), remainingNanos, TimeUnit.NANOSECONDS);
+			coordinationChanged.signalAll();
+			return true;
+		} catch (RejectedExecutionException failure) {
+			terminalizeOperationLocked(operation,
+					ExactOneMiningOutcome.of(ExactOneMiningOutcome.Code.REJECTED_SHUTDOWN));
+			return false;
+		} finally {
+			coordinationLock.unlock();
 		}
 	}
 
@@ -1232,6 +1281,7 @@ public class MiningService {
 
 	private static final class ExactOneOperation {
 		private final ExactOneMiningRequest request;
+		private final int blockCount;
 		private final MiningAttemptContext context;
 		private final CompletableFuture<ExactOneMiningOutcome> result;
 		private OperationState state = OperationState.QUEUED;
@@ -1239,9 +1289,11 @@ public class MiningService {
 
 		private ExactOneOperation(
 				ExactOneMiningRequest request,
+				int blockCount,
 				MiningAttemptContext context,
 				CompletableFuture<ExactOneMiningOutcome> result) {
 			this.request = request;
+			this.blockCount = blockCount;
 			this.context = context;
 			this.result = result;
 		}

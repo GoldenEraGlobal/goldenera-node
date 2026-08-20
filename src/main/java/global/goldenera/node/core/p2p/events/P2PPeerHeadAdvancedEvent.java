@@ -21,14 +21,21 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.chainidentity;
+package global.goldenera.node.core.p2p.events;
 
-/**
- * An ALLOW decision must come from a preflight component that independently
- * verified the legacy database genesis for the selected execution scope.
- */
-public enum LegacyProductionBackfillPolicy {
-	DENY,
-	ALLOW_VERIFIED_PRODUCTION,
-	ALLOW_VERIFIED_DEVELOPMENT
+import global.goldenera.node.core.p2p.manager.RemotePeer;
+import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
+import lombok.Getter;
+import lombok.NonNull;
+
+@Getter
+public class P2PPeerHeadAdvancedEvent extends P2PEvent {
+
+	private final P2PStatusDto status;
+
+	public P2PPeerHeadAdvancedEvent(
+			Object source, @NonNull RemotePeer peer, @NonNull P2PStatusDto status) {
+		super(source, 0, peer);
+		this.status = status;
+	}
 }

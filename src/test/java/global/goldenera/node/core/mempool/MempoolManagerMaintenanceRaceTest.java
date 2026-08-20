@@ -28,6 +28,7 @@ import static global.goldenera.node.core.mempool.MempoolTestFixtures.properties;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.transfer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -130,6 +131,9 @@ class MempoolManagerMaintenanceRaceTest {
 			releaseValidation.await();
 			return MempoolValidationResult.valid(headNonce);
 		});
+		when(validator.validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.REORG), eq(false)))
+				.thenReturn(MempoolValidationResult.valid(headNonce));
 		MempoolManager manager = new MempoolManager(registry, store, validator, properties(100), cache,
 				Runnable::run, mock(ThreadPoolTaskScheduler.class));
 		return new RaceFixture(store, manager, validationStarted, releaseValidation);

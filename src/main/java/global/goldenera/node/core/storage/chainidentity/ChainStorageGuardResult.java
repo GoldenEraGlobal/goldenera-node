@@ -26,5 +26,6 @@ package global.goldenera.node.core.storage.chainidentity;
 public enum ChainStorageGuardResult {
 	VERIFIED_EXISTING,
 	INITIALIZED_FRESH,
-	BACKFILLED_VERIFIED_PRODUCTION
+	BACKFILLED_VERIFIED_PRODUCTION,
+	BACKFILLED_VERIFIED_DEVELOPMENT
 }

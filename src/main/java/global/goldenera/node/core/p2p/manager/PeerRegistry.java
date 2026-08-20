@@ -59,7 +59,13 @@ public class PeerRegistry {
 	public void unregister(Channel channel) {
 		RemotePeer peer = activeConnections.remove(channel.id());
 		if (peer != null && peer.getIdentity() != null) {
-			identityIndex.remove(peer.getIdentity());
+			Address identity = peer.getIdentity();
+			if (identityIndex.remove(identity, peer)) {
+				activeConnections.values().stream()
+						.filter(candidate -> identity.equals(candidate.getIdentity()))
+						.findFirst()
+						.ifPresent(candidate -> identityIndex.putIfAbsent(identity, candidate));
+			}
 		}
 	}
 
@@ -67,7 +73,7 @@ public class PeerRegistry {
 		RemotePeer peer = activeConnections.get(channel.id());
 		if (peer != null) {
 			peer.setIdentity(identity);
-			identityIndex.put(identity, peer);
+			identityIndex.putIfAbsent(identity, peer);
 		}
 	}
 
@@ -85,6 +91,10 @@ public class PeerRegistry {
 
 	public int count() {
 		return activeConnections.size();
+	}
+
+	public int handshakenCount() {
+		return identityIndex.size();
 	}
 
 	/**

@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -80,12 +81,16 @@ import global.goldenera.node.core.mining.AutonomousMiningState;
 import global.goldenera.node.core.mining.ExactOneMiningOutcome;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.mining.MiningSuspensionReason;
+import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadiness;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadinessTracker;
+import global.goldenera.node.core.p2p.manager.NodeConnectionManager;
+import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestLoader;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
+import global.goldenera.node.core.sync.BlockSyncManagerService;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.sync.BlockIngestionOutcome;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
@@ -208,6 +213,32 @@ class SandboxControlWebTest {
 					.contentType(MediaType.APPLICATION_JSON)
 					.content("{\"enabled\":false}"))
 					.andExpect(status().isOk());
+		}
+	}
+
+	@Test
+	void authenticatedSandboxCanRequestImmediateP2pMaintenance() throws Exception {
+		try (Fixture fixture = fixture(true, false, true)) {
+			fixture.mockMvc.perform(post("/api/sandbox/v1/control/p2p/maintenance")
+					.header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("{}"))
+					.andExpect(status().isOk())
+					.andExpect(jsonPath("$.queued").value(false))
+					.andExpect(jsonPath("$.connectedPeers").value(0));
+			verify(fixture.context.getBean(P2PHeadAnnouncementService.class)).requestAnnouncement();
+		}
+	}
+
+	@Test
+	void authenticatedSandboxCanExplicitlyClearTheMempool() throws Exception {
+		try (Fixture fixture = fixture(true, false, true)) {
+			fixture.mockMvc.perform(post("/api/sandbox/v1/control/mempool/clear")
+					.header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+					.contentType(MediaType.APPLICATION_JSON)
+					.content("{}"))
+					.andExpect(status().isOk())
+					.andExpect(jsonPath("$.clearedTransactions").value(0));
 		}
 	}
 
@@ -501,6 +532,26 @@ class SandboxControlWebTest {
 		@Bean
 		MiningService miningService() {
 			return mock(MiningService.class);
+		}
+
+		@Bean
+		NodeConnectionManager nodeConnectionManager() {
+			return mock(NodeConnectionManager.class);
+		}
+
+		@Bean
+		P2PHeadAnnouncementService p2pHeadAnnouncementService() {
+			return mock(P2PHeadAnnouncementService.class);
+		}
+
+		@Bean
+		BlockSyncManagerService blockSyncManagerService() {
+			return mock(BlockSyncManagerService.class);
+		}
+
+		@Bean
+		MempoolManager mempoolManager() {
+			return mock(MempoolManager.class);
 		}
 
 		@Bean
