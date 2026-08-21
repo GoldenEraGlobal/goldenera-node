@@ -253,10 +253,10 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.isEqualTo(Wei.valueOf(100));
 			assertThat(losingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getLockedMiningReward())
 					.isEqualTo(Wei.valueOf(200));
-			assertThat(losingState.getMiningRewardMaturity(13).getRewards()).isEmpty();
-			assertThat(losingState.getMiningRewardMaturity(14).getRewards())
+			assertThat(losingState.getMiningRewardMaturity(731_506).getRewards()).isEmpty();
+			assertThat(losingState.getMiningRewardMaturity(731_507).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
-			assertThat(losingState.getMiningRewardMaturity(15).getRewards())
+			assertThat(losingState.getMiningRewardMaturity(731_508).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 
 			Block forkEleven = fixture.buildValidChild(base.getBlock(), MINER_B_KEY);
@@ -278,17 +278,17 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.isEqualTo(Wei.valueOf(200));
 			assertThat(winningState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getLockedMiningReward())
 					.isEqualTo(Wei.valueOf(200));
-			assertThat(winningState.getMiningRewardMaturity(14).getRewards()).isEmpty();
-			assertThat(winningState.getMiningRewardMaturity(15).getRewards())
+			assertThat(winningState.getMiningRewardMaturity(731_507).getRewards()).isEmpty();
+			assertThat(winningState.getMiningRewardMaturity(731_508).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
-			assertThat(winningState.getMiningRewardMaturity(16).getRewards())
+			assertThat(winningState.getMiningRewardMaturity(731_509).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 
 			WorldState persistedLosingState = fixture.worldStateFactory.createForValidation(losingRoot);
 			assertThat(persistedLosingState.calculateRootHash()).isEqualTo(losingRoot);
 			assertThat(persistedLosingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN)
 					.getLockedMiningReward()).isEqualTo(Wei.valueOf(200));
-			assertThat(persistedLosingState.getMiningRewardMaturity(14).getRewards())
+			assertThat(persistedLosingState.getMiningRewardMaturity(731_507).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 		}
 	}
@@ -310,7 +310,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.hasMessageContaining("candidate count 41 exceeds maximum 40");
 
 			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(base.getHash());
-			assertThat(fixture.chainQuery.getStoredBlockByHeight(11)).isEmpty();
+			assertThat(fixture.chainQuery.getStoredBlockByHeight(731_504)).isEmpty();
 		}
 	}
 
@@ -670,7 +670,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to seed expected legacy state", exception);
 			}
-			Block block = signedBlock(9, Hash.ZERO, root, MINER_A_KEY);
+			Block block = signedBlock(731_502, Hash.ZERO, root, MINER_A_KEY);
 			StoredBlock stored = stored(block, BigInteger.TEN);
 			rocksRepository.executeAtomicBatch(batch -> {
 				state.persistToBatch(batch);
@@ -690,7 +690,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to seed expected active state", exception);
 			}
-			Block block = signedBlock(10, Hash.ZERO, root, MINER_B_KEY);
+			Block block = signedBlock(731_503, Hash.ZERO, root, MINER_B_KEY);
 			StoredBlock stored = stored(block, BigInteger.valueOf(11));
 			rocksRepository.executeAtomicBatch(batch -> {
 				state.persistToBatch(batch);
@@ -710,7 +710,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to seed expected reward vesting state", exception);
 			}
-			Block block = signedBlock(10, Hash.ZERO, root, MINER_B_KEY);
+			Block block = signedBlock(731_503, Hash.ZERO, root, MINER_B_KEY);
 			StoredBlock stored = stored(block, BigInteger.valueOf(11));
 			rocksRepository.executeAtomicBatch(batch -> {
 				state.persistToBatch(batch);

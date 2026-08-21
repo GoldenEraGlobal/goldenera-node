@@ -158,13 +158,13 @@ class P2PChainIdentityPolicyTest {
 				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty()),
 				identity);
 
-		assertThat(policy.validate(status(NOT_ALLOWLISTED, List.of(), 9)).mode())
+		assertThat(policy.validate(status(NOT_ALLOWLISTED, List.of(), 731_502)).mode())
 				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
-		assertThatThrownBy(() -> policy.validate(status(NOT_ALLOWLISTED, List.of(), 10)))
+		assertThatThrownBy(() -> policy.validate(status(NOT_ALLOWLISTED, List.of(), 731_503)))
 				.isInstanceOf(RuntimeException.class)
 				.hasMessageContaining("mining-economics-v1");
 		assertThat(policy.validate(status(
-				NOT_ALLOWLISTED, List.of("mining-economics-v1"), 10)).mode())
+				NOT_ALLOWLISTED, List.of("mining-economics-v1"), 731_503)).mode())
 				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
 	}
 
@@ -180,11 +180,11 @@ class P2PChainIdentityPolicyTest {
 				ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty());
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		StoredBlock localHead = mock(StoredBlock.class);
-		when(localHead.getHeight()).thenReturn(10L);
+		when(localHead.getHeight()).thenReturn(731_503L);
 		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(localHead);
 
 		assertThatThrownBy(() -> policy(runtime, identity, chainQuery)
-				.validate(status(NOT_ALLOWLISTED, List.of(), 9)))
+				.validate(status(NOT_ALLOWLISTED, List.of(), 731_502)))
 				.hasMessageContaining("mining-economics-v1");
 	}
 

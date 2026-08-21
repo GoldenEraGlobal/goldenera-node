@@ -96,11 +96,11 @@ class MiningEconomicsConsensusIntegrationTest {
 
 			StateProcessor processor = processorWithActivation();
 			WorldState activationA = storage.reload(legacyRoot, false);
-			processor.executeTransactions(activationA, block(10, LIMITED), List.of(), activationA.getParams());
+			processor.executeTransactions(activationA, block(731_503, LIMITED), List.of(), activationA.getParams());
 			Hash activationRootA = storage.persist(activationA);
 
 			WorldState activationB = storage.reload(legacyRoot, false);
-			processor.executeTransactions(activationB, block(10, UNLIMITED), List.of(), activationB.getParams());
+			processor.executeTransactions(activationB, block(731_503, UNLIMITED), List.of(), activationB.getParams());
 			Hash activationRootB = storage.persist(activationB);
 
 			assertThat(activationRootB).isEqualTo(activationRootA);
@@ -109,13 +109,13 @@ class MiningEconomicsConsensusIntegrationTest {
 					.isEqualTo(legacyValidatorBytes);
 
 			WorldState branchA = storage.reload(activationRootA, false);
-			policyService.validateCandidate(branchA, 11, LIMITED);
-			processor.executeTransactions(branchA, block(11, LIMITED), List.of(), branchA.getParams());
+			policyService.validateCandidate(branchA, 731_504, LIMITED);
+			processor.executeTransactions(branchA, block(731_504, LIMITED), List.of(), branchA.getParams());
 			Hash branchARoot = storage.persist(branchA);
 
 			WorldState branchB = storage.reload(activationRootB, false);
-			policyService.validateCandidate(branchB, 11, UNLIMITED);
-			processor.executeTransactions(branchB, block(11, UNLIMITED), List.of(), branchB.getParams());
+			policyService.validateCandidate(branchB, 731_504, UNLIMITED);
+			processor.executeTransactions(branchB, block(731_504, UNLIMITED), List.of(), branchB.getParams());
 			Hash branchBRoot = storage.persist(branchB);
 
 			assertThat(branchARoot).isNotEqualTo(branchBRoot);
@@ -125,8 +125,8 @@ class MiningEconomicsConsensusIntegrationTest {
 					.containsExactly(UNLIMITED);
 
 			WorldState switchedToB = storage.reload(branchBRoot, false);
-			policyService.validateCandidate(switchedToB, 12, THIRD);
-			processor.executeTransactions(switchedToB, block(12, THIRD), List.of(), switchedToB.getParams());
+			policyService.validateCandidate(switchedToB, 731_505, THIRD);
+			processor.executeTransactions(switchedToB, block(731_505, THIRD), List.of(), switchedToB.getParams());
 			assertThat(switchedToB.getMiningWindow().getOrderedValidatorIdentities())
 					.containsExactly(UNLIMITED, THIRD);
 			assertThat(switchedToB.getMiningWindow().getOrderedValidatorIdentities()).doesNotContain(LIMITED);
@@ -143,10 +143,10 @@ class MiningEconomicsConsensusIntegrationTest {
 			StateProcessor processor = processorWithoutActivation();
 
 			WorldState state = storage.reload(root, false);
-			for (long height = 11; height <= 50; height++) {
+			for (long height = 731_504; height <= 731_543; height++) {
 				policyService.validateCandidate(state, height, LIMITED);
 				processor.executeTransactions(state, block(height, LIMITED), List.of(), state.getParams());
-				if (height == 30) {
+				if (height == 731_523) {
 					root = storage.persist(state);
 					state = storage.reload(root, false);
 				}
@@ -155,11 +155,11 @@ class MiningEconomicsConsensusIntegrationTest {
 			Hash capRoot = storage.persist(state);
 			WorldState restartedAtCap = storage.reload(capRoot, false);
 			assertThat(restartedAtCap.getMiningWindow().getValidatorBlockCounts().get(LIMITED)).isEqualTo(40);
-			assertThat(policyService.isCandidateEligible(restartedAtCap, 51, LIMITED)).isFalse();
-			assertThatThrownBy(() -> policyService.validateCandidate(restartedAtCap, 51, LIMITED))
+			assertThat(policyService.isCandidateEligible(restartedAtCap, 731_544, LIMITED)).isFalse();
+			assertThatThrownBy(() -> policyService.validateCandidate(restartedAtCap, 731_544, LIMITED))
 					.hasMessageContaining("candidate count 41 exceeds maximum 40");
 
-			for (long height = 51; height <= 170; height++) {
+			for (long height = 731_544; height <= 731_663; height++) {
 				long candidateHeight = height;
 				assertThatCode(() -> policyService.validateCandidate(
 						restartedAtCap, candidateHeight, UNLIMITED))
@@ -181,31 +181,31 @@ class MiningEconomicsConsensusIntegrationTest {
 			WorldState state = activeState(storage, 2, 2, 100);
 			state.addValidator(LIMITED, legacyValidator());
 			state.addValidator(UNLIMITED, explicitValidator(MiningLimitMode.UNLIMITED, 0));
-			MiningWindowState window = MiningWindowStateImpl.empty(100, 10);
-			for (long height = 11; height <= 50; height++) {
+			MiningWindowState window = MiningWindowStateImpl.empty(100, 731_503);
+			for (long height = 731_504; height <= 731_543; height++) {
 				window = ((MiningWindowStateImpl) window).append(LIMITED, height);
 			}
 			state.setMiningWindow(window);
 
-			assertThatCode(() -> policyService.validateCandidate(state, 51, LIMITED)).doesNotThrowAnyException();
+			assertThatCode(() -> policyService.validateCandidate(state, 731_544, LIMITED)).doesNotThrowAnyException();
 			governanceService.setMiningPolicy(
-					state, policy(LIMITED, MiningLimitMode.LIMITED, 4_000), block(51, LIMITED), ACTION);
-			policyService.appendAcceptedBlock(state, block(51, LIMITED));
-			assertThatThrownBy(() -> policyService.validateCandidate(state, 52, LIMITED))
+					state, policy(LIMITED, MiningLimitMode.LIMITED, 4_000), block(731_544, LIMITED), ACTION);
+			policyService.appendAcceptedBlock(state, block(731_544, LIMITED));
+			assertThatThrownBy(() -> policyService.validateCandidate(state, 731_545, LIMITED))
 					.hasMessageContaining("candidate count 42 exceeds maximum 40");
 
-			policyService.validateCandidate(state, 52, UNLIMITED);
+			policyService.validateCandidate(state, 731_545, UNLIMITED);
 			governanceService.setNetworkParams(
-					state, resize(250), block(52, UNLIMITED), ACTION, true);
-			policyService.appendAcceptedBlock(state, block(52, UNLIMITED));
+					state, resize(250), block(731_545, UNLIMITED), ACTION, true);
+			policyService.appendAcceptedBlock(state, block(731_545, UNLIMITED));
 			assertThat(state.getMiningWindow().getWindowSize()).isEqualTo(250);
 			assertThat(state.getMiningWindow().getOrderedValidatorIdentities()).isEmpty();
-			assertThat(state.getMiningWindow().getLastUpdatedBlockHeight()).isEqualTo(52);
+			assertThat(state.getMiningWindow().getLastUpdatedBlockHeight()).isEqualTo(731_545);
 
 			Hash resizedRoot = storage.persist(state);
 			WorldState resizedState = storage.reload(resizedRoot, false);
-			policyService.validateCandidate(resizedState, 53, UNLIMITED);
-			policyService.appendAcceptedBlock(resizedState, block(53, UNLIMITED));
+			policyService.validateCandidate(resizedState, 731_546, UNLIMITED);
+			policyService.appendAcceptedBlock(resizedState, block(731_546, UNLIMITED));
 			assertThat(resizedState.getMiningWindow().getOrderedValidatorIdentities())
 					.containsExactly(UNLIMITED);
 		}
@@ -248,13 +248,13 @@ class MiningEconomicsConsensusIntegrationTest {
 				if (limitedMode) {
 					state.addValidator(UNLIMITED, explicitValidator(MiningLimitMode.UNLIMITED, 0));
 				}
-				MiningWindowState window = MiningWindowStateImpl.empty(100, 10);
+				MiningWindowState window = MiningWindowStateImpl.empty(100, 731_503);
 				for (int index = 0; index < vector.parentCount(); index++) {
-					window = ((MiningWindowStateImpl) window).append(LIMITED, 11L + index);
+					window = ((MiningWindowStateImpl) window).append(LIMITED, 731_504L + index);
 				}
 				state.setMiningWindow(window);
 
-				assertThat(policyService.isCandidateEligible(state, 111, LIMITED))
+				assertThat(policyService.isCandidateEligible(state, 731_604, LIMITED))
 						.as("%s expected %s", vector.name(), vector.expectedValid() ? "VALID" : "INVALID")
 						.isEqualTo(vector.expectedValid());
 			}
@@ -273,7 +273,7 @@ class MiningEconomicsConsensusIntegrationTest {
 			long unlimitedCount, long window) {
 		WorldState state = storage.createEmpty(false);
 		state.setParams(params(NetworkParamsStateVersion.V2, validatorCount, unlimitedCount, window));
-		state.setMiningWindow(MiningWindowStateImpl.empty(window, 10));
+		state.setMiningWindow(MiningWindowStateImpl.empty(window, 731_503));
 		return state;
 	}
 

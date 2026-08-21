@@ -113,7 +113,7 @@ class BipVoteMiningEconomicsTest {
 			StateProcessor processor = new StateProcessor(List.of(voteHandler), activationService,
 					mock(ValidatorMiningPolicyService.class));
 			SimpleBlock block = SimpleBlock.builder()
-					.height(20)
+					.height(731_510)
 					.timestamp(TIME.plusSeconds(5))
 					.coinbase(PROPOSED_VALIDATOR)
 					.build();
@@ -150,23 +150,23 @@ class BipVoteMiningEconomicsTest {
 					mock(MiningEconomicsActivationService.class), mock(ValidatorMiningPolicyService.class));
 
 			ExecutionResult changedAtH = processor.executeTransactions(
-					state, block(20), List.of(vote()), state.getParams());
+					state, block(731_510), List.of(vote()), state.getParams());
 
-			assertThat(changedAtH.getMinerRewardUnlockBlockHeight()).isEqualTo(22);
+			assertThat(changedAtH.getMinerRewardUnlockBlockHeight()).isEqualTo(731_512);
 			assertThat(state.getParams().getMiningRewardVestingBlocks()).isEqualTo(1);
-			assertThat(state.getMiningRewardMaturity(22).getRewards())
+			assertThat(state.getMiningRewardMaturity(731_512).getRewards())
 					.containsEntry(PROPOSED_VALIDATOR, Wei.valueOf(100));
 
 			state = storage.reload(storage.persist(state), false);
 			ExecutionResult firstNewRuleReward = processor.executeTransactions(
-					state, block(21), List.of(), state.getParams());
+					state, block(731_511), List.of(), state.getParams());
 
-			assertThat(firstNewRuleReward.getMinerRewardUnlockBlockHeight()).isEqualTo(22);
-			assertThat(state.getMiningRewardMaturity(22).getRewards())
+			assertThat(firstNewRuleReward.getMinerRewardUnlockBlockHeight()).isEqualTo(731_512);
+			assertThat(state.getMiningRewardMaturity(731_512).getRewards())
 					.containsEntry(PROPOSED_VALIDATOR, Wei.valueOf(200));
 
 			state = storage.reload(storage.persist(state), false);
-			processor.executeTransactions(state, block(22), List.of(), state.getParams());
+			processor.executeTransactions(state, block(731_512), List.of(), state.getParams());
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN).getSpendableBalance())
 					.isEqualTo(Wei.valueOf(200));
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN).getLockedMiningReward())
@@ -189,7 +189,7 @@ class BipVoteMiningEconomicsTest {
 			state.setBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN,
 					((AccountBalanceStateImpl) AccountBalanceStateImpl.ZERO)
 							.creditLockedMiningReward(Wei.valueOf(100), 10, TIME));
-			state.setMiningRewardMaturity(22,
+			state.setMiningRewardMaturity(731_512,
 					MiningRewardMaturityStateImpl.empty().addReward(PROPOSED_VALIDATOR, Wei.valueOf(100)));
 			state.setBip(BIP_HASH, nativeBurnBip(Wei.valueOf(100)));
 			StateProcessor processor = new StateProcessor(
@@ -197,7 +197,7 @@ class BipVoteMiningEconomicsTest {
 					mock(MiningEconomicsActivationService.class), mock(ValidatorMiningPolicyService.class));
 
 			ExecutionResult burnResult = processor.executeTransactions(
-					state, block(20), List.of(vote()), state.getParams());
+					state, block(731_510), List.of(vote()), state.getParams());
 
 			assertThat(burnResult.getActualBurnAmounts()).containsEntry(BIP_HASH, Wei.valueOf(100));
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.ZERO);
@@ -205,18 +205,18 @@ class BipVoteMiningEconomicsTest {
 					.isEqualTo(Wei.ZERO);
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN)
 					.getPendingMiningRewardCancellation()).isEqualTo(Wei.valueOf(100));
-			assertThat(state.getMiningRewardMaturity(22).getRewards())
+			assertThat(state.getMiningRewardMaturity(731_512).getRewards())
 					.containsEntry(PROPOSED_VALIDATOR, Wei.valueOf(100));
 
 			state = storage.reload(storage.persist(state), false);
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN)
 					.getPendingMiningRewardCancellation()).isEqualTo(Wei.valueOf(100));
-			processor.executeTransactions(state, block(22), List.of(), state.getParams());
+			processor.executeTransactions(state, block(731_512), List.of(), state.getParams());
 
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.ZERO);
 			assertThat(state.getBalance(PROPOSED_VALIDATOR, Address.NATIVE_TOKEN)
 					.getPendingMiningRewardCancellation()).isEqualTo(Wei.ZERO);
-			assertThat(state.getMiningRewardMaturity(22).getRewards()).isEmpty();
+			assertThat(state.getMiningRewardMaturity(731_512).getRewards()).isEmpty();
 		}
 	}
 
@@ -344,7 +344,7 @@ class BipVoteMiningEconomicsTest {
 	private SimpleBlock block(long height) {
 		return SimpleBlock.builder()
 				.height(height)
-				.timestamp(TIME.plusSeconds(height))
+				.timestamp(TIME.plusSeconds(height - 731_490))
 				.coinbase(PROPOSED_VALIDATOR)
 				.build();
 	}

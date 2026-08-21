@@ -93,9 +93,9 @@ class ValidatorMiningViewServiceTest {
 	}
 
 	private MiningWindowState window(int count) {
-		MiningWindowStateImpl window = MiningWindowStateImpl.empty(100, 10);
+		MiningWindowStateImpl window = MiningWindowStateImpl.empty(100, 731_503);
 		for (int i = 0; i < count; i++) {
-			window = window.append(VALIDATOR, 11 + i);
+			window = window.append(VALIDATOR, 731_504 + i);
 		}
 		return window;
 	}

@@ -128,7 +128,7 @@ class MiningEconomicsFailClosedStateTest {
 		WorldState state = state(params(2, 1, 100), corrupt);
 		when(state.getValidator(VALIDATOR)).thenReturn(validator());
 
-		assertThatThrownBy(() -> new ValidatorMiningPolicyService().isCandidateEligible(state, 13, VALIDATOR))
+		assertThatThrownBy(() -> new ValidatorMiningPolicyService().isCandidateEligible(state, 731_504, VALIDATOR))
 				.isInstanceOf(CryptoJFailedException.class)
 				.hasMessageContaining("count map does not match");
 	}

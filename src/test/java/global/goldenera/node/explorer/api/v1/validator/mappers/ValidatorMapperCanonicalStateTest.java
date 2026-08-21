@@ -102,9 +102,9 @@ class ValidatorMapperCanonicalStateTest {
 				.currentValidatorCount(1)
 				.currentUnlimitedValidatorCount(0)
 				.build());
-		MiningWindowStateImpl window = MiningWindowStateImpl.empty(100, 10);
+		MiningWindowStateImpl window = MiningWindowStateImpl.empty(100, 731_503);
 		for (int index = 0; index < minedBlocks; index++) {
-			window = window.append(VALIDATOR, 11 + index);
+			window = window.append(VALIDATOR, 731_504 + index);
 		}
 		when(state.getMiningWindow()).thenReturn(window);
 		return state;
