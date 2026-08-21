@@ -3,11 +3,6 @@
 # ==============================================================================
 FROM eclipse-temurin:21-jdk-jammy AS app-builder
 
-ARG GITHUB_ACTOR
-ARG BUILD_GIT_COMMIT
-ARG CRYPTOJ_SHA256
-ARG RANDOMX_SOURCE_COMMIT
-
 WORKDIR /app
 
 # Copy Maven wrapper first
@@ -16,6 +11,7 @@ COPY mvnw pom.xml ./
 RUN chmod +x mvnw
 
 # Settings XML generation
+ARG GITHUB_ACTOR
 RUN echo "<settings><servers>" > settings.xml && \
     echo "  <server><id>github-merkletrie</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
     echo "  <server><id>github-rlp</id><username>${GITHUB_ACTOR}</username><password>\${env.GITHUB_TOKEN}</password></server>" >> settings.xml && \
@@ -24,15 +20,21 @@ RUN echo "<settings><servers>" > settings.xml && \
     echo "</servers></settings>" >> settings.xml
 
 # Download Dependencies (Permanent Layer)
-RUN --mount=type=secret,id=github_token \
-    export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    ./mvnw dependency:resolve dependency:resolve-plugins -s settings.xml || true
+RUN --mount=type=secret,id=github_token,required=true \
+    export GITHUB_TOKEN="$(cat /run/secrets/github_token)" && \
+    ./mvnw -B -ntp -Prelease-artifact \
+      dependency:resolve dependency:resolve-plugins \
+      -s settings.xml
 
 # Build Application
 COPY src ./src
 
-RUN --mount=type=secret,id=github_token \
-    export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
+ARG BUILD_GIT_COMMIT
+ARG CRYPTOJ_SHA256
+ARG RANDOMX_SOURCE_COMMIT
+
+RUN --mount=type=secret,id=github_token,required=true \
+    export GITHUB_TOKEN="$(cat /run/secrets/github_token)" && \
     printf '%s' "${BUILD_GIT_COMMIT}" | grep -Eq '^[0-9a-f]{40,64}$' && \
     printf '%s' "${CRYPTOJ_SHA256}" | grep -Eq '^[0-9a-f]{64}$' && \
     CRYPTOJ_VERSION=$(./mvnw help:evaluate -Dexpression=goldenera-cryptoj.version -q -DforceStdout -s settings.xml) && \
