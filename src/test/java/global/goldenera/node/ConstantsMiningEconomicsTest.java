@@ -41,7 +41,7 @@ class ConstantsMiningEconomicsTest {
 	@Test
 	void testnetActivatesOneHourAfterReferenceBlock() {
 		assertThat(Constants.getConsensusSettings(Network.TESTNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 715_670L);
+				.containsEntry(ForkName.MINING_ECONOMICS, 716_181L);
 	}
 
 	@Test
