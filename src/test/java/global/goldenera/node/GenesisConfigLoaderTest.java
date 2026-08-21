@@ -52,9 +52,9 @@ class GenesisConfigLoaderTest {
 		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(testnet, Network.TESTNET)
 				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(100);
 		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(mainnet, Network.MAINNET)
-				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(518_400);
 		assertThat(GenesisConfigLoader.parseProductionGenesisSettings(testnet, Network.TESTNET)
-				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(518_400);
 	}
 
 	private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -66,9 +66,9 @@ class GenesisConfigLoaderTest {
 		assertThat(GenesisConfigLoader.loadGenesisSettings(Network.TESTNET, "prod")
 				.genesisNetworkValidatorMiningWindowBlocks()).isEqualTo(100);
 		assertThat(GenesisConfigLoader.loadGenesisSettings(Network.MAINNET, "prod")
-				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(518_400);
 		assertThat(GenesisConfigLoader.loadGenesisSettings(Network.TESTNET, "prod")
-				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(86_400);
+				.genesisNetworkMiningRewardVestingBlocks()).isEqualTo(518_400);
 	}
 
 	@Test

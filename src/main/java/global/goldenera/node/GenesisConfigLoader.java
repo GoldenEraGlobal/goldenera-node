@@ -237,7 +237,7 @@ public class GenesisConfigLoader {
 
 	private static long legacyMiningRewardVestingDefault(Network network) {
 		return switch (network) {
-			case MAINNET, TESTNET -> 86_400L;
+			case MAINNET, TESTNET -> 518_400L;
 		};
 	}
 
