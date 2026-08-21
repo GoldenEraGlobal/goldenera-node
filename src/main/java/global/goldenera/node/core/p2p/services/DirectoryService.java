@@ -50,9 +50,11 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.node.NodeTerminationService;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadiness;
 import global.goldenera.node.core.p2p.directory.DirectoryApiV1Client;
 import global.goldenera.node.core.p2p.directory.DirectoryApiV1Serializer;
+import global.goldenera.node.core.p2p.directory.DirectoryNodeUpgradeRequiredException;
 import global.goldenera.node.core.p2p.directory.v1.NodeInfoResponse;
 import global.goldenera.node.core.p2p.directory.v1.NodePingRequest;
 import global.goldenera.node.core.p2p.directory.v1.NodePongResponse;
@@ -92,6 +94,7 @@ public class DirectoryService {
 	GeneralProperties generalProperties;
 	DirectoryProperties directoryProperties;
 	CoreRuntimeReadiness coreReadiness;
+	NodeTerminationService nodeTerminationService;
 
 	public DirectoryService(
 			DirectoryApiV1Client directoryApiV1Client,
@@ -101,6 +104,7 @@ public class DirectoryService {
 			ChainQuery chainQuery,
 			DirectoryProperties directoryProperties,
 			CoreRuntimeReadiness coreReadiness,
+			NodeTerminationService nodeTerminationService,
 			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
 		this.selfAddress = identityService.getNodeIdentityAddress();
 		this.directoryApiV1Client = directoryApiV1Client;
@@ -111,6 +115,7 @@ public class DirectoryService {
 		this.p2pProperties = p2pProperties;
 		this.directoryProperties = directoryProperties;
 		this.coreReadiness = coreReadiness;
+		this.nodeTerminationService = nodeTerminationService;
 		this.coreScheduler = coreScheduler;
 	}
 
@@ -226,9 +231,8 @@ public class DirectoryService {
 		NodePongResponse response;
 		try {
 			response = directoryApiV1Client.ping(request);
-		} catch (Exception e) {
-			log.warn("Directory: Failed to ping directory: {}", e.getMessage());
-			checkNodeVersion(e.getMessage());
+		} catch (RuntimeException e) {
+			handlePingFailure(e);
 			return;
 		}
 
@@ -305,12 +309,12 @@ public class DirectoryService {
 		return clients.size();
 	}
 
-	private void checkNodeVersion(String errorMsg) {
-		if (errorMsg.trim().toLowerCase()
-				.contains("Node tried to ping with software version code below minimum.".trim().toLowerCase())) {
-			log.error("! UPDATE NODE TO THE LATEST VERSION ! EXITING...");
-			System.exit(0);
+	void handlePingFailure(RuntimeException failure) {
+		if (failure instanceof DirectoryNodeUpgradeRequiredException upgradeRequired) {
+			nodeTerminationService.terminateForRequiredUpgrade(upgradeRequired.getMinimumVersion());
+			return;
 		}
+		log.warn("Directory: Failed to ping directory: {}", failure.getMessage());
 	}
 
 	@AllArgsConstructor

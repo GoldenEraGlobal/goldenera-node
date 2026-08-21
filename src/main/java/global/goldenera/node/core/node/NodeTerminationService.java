@@ -21,33 +21,36 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node;
+package global.goldenera.node.core.node;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.junit.jupiter.api.Test;
+import org.springframework.boot.SpringApplication;
+import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.enums.Network;
-import global.goldenera.node.Constants.ForkName;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
-class ConstantsMiningEconomicsTest {
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class NodeTerminationService {
 
-	@Test
-	void mainnetActivatesFiveDaysAfterReferenceBlock() {
-		assertThat(Constants.getConsensusSettings(Network.MAINNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 731_503L);
-	}
+	private static final int REQUIRED_UPGRADE_EXIT_CODE = 78;
 
-	@Test
-	void testnetActivatesOneHourAndFifteenMinutesAfterReferenceBlock() {
-		assertThat(Constants.getConsensusSettings(Network.TESTNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 716_824L);
-	}
+	private final ConfigurableApplicationContext applicationContext;
+	private final AtomicBoolean terminationStarted = new AtomicBoolean();
 
-	@Test
-	void devActivatesEveryForkAtGenesis() {
-		assertThat(Constants.getConsensusSettings(Network.MAINNET, "dev").forkActivationBlocks())
-				.containsOnlyKeys(ForkName.values())
-				.allSatisfy((fork, height) -> assertThat(height).isZero());
+	public void terminateForRequiredUpgrade(String minimumVersion) {
+		if (!terminationStarted.compareAndSet(false, true)) {
+			return;
+		}
+		log.error("Node version is no longer supported. Upgrade to version {} or newer. Shutting down.",
+				minimumVersion);
+		Thread.ofPlatform().name("required-upgrade-shutdown").start(() -> {
+			int exitCode = SpringApplication.exit(applicationContext, () -> REQUIRED_UPGRADE_EXIT_CODE);
+			System.exit(exitCode);
+		});
 	}
 }

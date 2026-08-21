@@ -40,9 +40,11 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.node.IdentityService;
+import global.goldenera.node.core.node.NodeTerminationService;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadiness;
 import global.goldenera.node.core.p2p.directory.DirectoryApiV1Client;
 import global.goldenera.node.core.p2p.directory.DirectoryApiV1Serializer;
+import global.goldenera.node.core.p2p.directory.DirectoryNodeUpgradeRequiredException;
 import global.goldenera.node.core.properties.DirectoryProperties;
 import global.goldenera.node.core.properties.P2PProperties;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -75,11 +77,22 @@ class DirectoryServiceLifecycleTest {
 		assertThat(fixture.service.isStarted()).isFalse();
 	}
 
+	@Test
+	void typedUpgradeResponseRequestsControlledNodeTermination() {
+		Fixture fixture = new Fixture();
+
+		fixture.service.handlePingFailure(
+				new DirectoryNodeUpgradeRequiredException("upgrade", "0.1.0", "0.1.1"));
+
+		verify(fixture.termination).terminateForRequiredUpgrade("0.1.1");
+	}
+
 	private static final class Fixture {
 
 		private final ChainQuery chain = mock(ChainQuery.class);
 		private final ThreadPoolTaskScheduler scheduler = mock(ThreadPoolTaskScheduler.class);
 		private final CoreRuntimeReadiness readiness = mock(CoreRuntimeReadiness.class);
+		private final NodeTerminationService termination = mock(NodeTerminationService.class);
 		private final DirectoryService service;
 
 		private Fixture() {
@@ -101,6 +114,7 @@ class DirectoryServiceLifecycleTest {
 					chain,
 					directory,
 					readiness,
+					termination,
 					scheduler);
 		}
 	}

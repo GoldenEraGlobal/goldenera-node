@@ -82,6 +82,7 @@ public class RandomXManager {
 	final RandomXResourceFactory resourceFactory;
 	final LongFunction<byte[]> testSeedResolver;
 	final Supplier<NetworkSettings> networkSettingsSupplier;
+	final Supplier<RandomXLargePageSupport.Availability> largePageAvailabilitySupplier;
 	final Set<RandomXFlag> recommendedFlags;
 	final Map<Bytes, EpochResources> epochResources = new LinkedHashMap<>(4, 0.75f, true);
 
@@ -95,33 +96,46 @@ public class RandomXManager {
 	public RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
 			SandboxRuntimeContext runtimeContext) {
 		this(miningProperties, chainQuery, runtimeContext, new NativeRandomXResourceFactory(), null, null,
-				Constants::getSettings);
+				Constants::getSettings, new RandomXLargePageSupport()::currentAvailability);
 	}
 
 	RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
 			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
 			LongFunction<byte[]> testSeedResolver) {
 		this(miningProperties, chainQuery, runtimeContext, resourceFactory, testSeedResolver,
-				Set.of(RandomXFlag.DEFAULT), Constants::getSettings);
+				Set.of(RandomXFlag.DEFAULT), Constants::getSettings,
+				new RandomXLargePageSupport()::currentAvailability);
+	}
+
+	RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
+			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
+			LongFunction<byte[]> testSeedResolver,
+			Supplier<RandomXLargePageSupport.Availability> largePageAvailabilitySupplier) {
+		this(miningProperties, chainQuery, runtimeContext, resourceFactory, testSeedResolver,
+				Set.of(RandomXFlag.DEFAULT), Constants::getSettings, largePageAvailabilitySupplier);
 	}
 
 	RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
 			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
 			Supplier<NetworkSettings> networkSettingsSupplier) {
 		this(miningProperties, chainQuery, runtimeContext, resourceFactory, null,
-				Set.of(RandomXFlag.DEFAULT), networkSettingsSupplier);
+				Set.of(RandomXFlag.DEFAULT), networkSettingsSupplier,
+				new RandomXLargePageSupport()::currentAvailability);
 	}
 
 	private RandomXManager(MiningProperties miningProperties, ChainQuery chainQuery,
 			SandboxRuntimeContext runtimeContext, RandomXResourceFactory resourceFactory,
 			LongFunction<byte[]> testSeedResolver, Set<RandomXFlag> recommendedFlags,
-			Supplier<NetworkSettings> networkSettingsSupplier) {
+			Supplier<NetworkSettings> networkSettingsSupplier,
+			Supplier<RandomXLargePageSupport.Availability> largePageAvailabilitySupplier) {
 		this.miningProperties = Objects.requireNonNull(miningProperties, "miningProperties");
 		this.chainQuery = Objects.requireNonNull(chainQuery, "chainQuery");
 		this.runtimeContext = Objects.requireNonNull(runtimeContext, "runtimeContext");
 		this.resourceFactory = Objects.requireNonNull(resourceFactory, "resourceFactory");
 		this.testSeedResolver = testSeedResolver;
 		this.networkSettingsSupplier = Objects.requireNonNull(networkSettingsSupplier, "networkSettingsSupplier");
+		this.largePageAvailabilitySupplier = Objects.requireNonNull(largePageAvailabilitySupplier,
+				"largePageAvailabilitySupplier");
 		validateActivation();
 		this.recommendedFlags = immutableFlags(recommendedFlags == null ? loadRecommendedFlags() : recommendedFlags);
 		log.info("RandomX configured for {} mining memory", miningProperties.getMemoryMode());
@@ -292,7 +306,9 @@ public class RandomXManager {
 			return allocateCacheOnly(seed);
 		}
 
-		if (supportsHugePagesAttempt()) {
+		RandomXLargePageSupport.Availability largePages = Objects.requireNonNull(
+				largePageAvailabilitySupplier.get(), "RandomX large-page availability");
+		if (largePages.available()) {
 			Set<RandomXFlag> hugeFlags = miningFlags(true);
 			try {
 				log.debug("Attempting to initialize FULL RandomX resources with large pages");
@@ -301,6 +317,8 @@ public class RandomXManager {
 				log.warn("RandomX large-page initialization failed; retrying with standard memory: {}",
 						e.getMessage());
 			}
+		} else {
+			log.info("Skipping RandomX large-page allocation: {}", largePages.reason());
 		}
 		return allocate(seed, miningFlags(false), true);
 	}
@@ -387,11 +405,6 @@ public class RandomXManager {
 		} catch (RuntimeException | LinkageError failure) {
 			throw new RandomXInitializationException("Failed to load native RandomX capabilities", failure);
 		}
-	}
-
-	private boolean supportsHugePagesAttempt() {
-		String osName = System.getProperty("os.name", "").toLowerCase();
-		return !osName.contains("mac") && !osName.contains("darwin");
 	}
 
 	private EpochResources requireCurrentResources() {

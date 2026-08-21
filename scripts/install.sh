@@ -513,8 +513,15 @@ calculate_randomx_hugepages() {
   printf '%s' "$pages"
 }
 
+read_linux_hugepage_count() {
+  local key="$1" meminfo_path="${2:-/proc/meminfo}" value
+  value="$(awk -v key="${key}:" '$1 == key { print $2; exit }' "$meminfo_path" 2>/dev/null || true)"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$value"
+}
+
 tune_linux_hugepages() {
-  local processors workers hugepages
+  local processors workers hugepages actual_total actual_free
   is_true "$MINING_ENABLE" || return 0
   [ "$(uname -s)" = Linux ] || return 0
   if "$SKIP_DOCKER_CHECK"; then return 0; fi
@@ -525,6 +532,14 @@ tune_linux_hugepages() {
   info "Configuring ${hugepages} huge pages for RandomX mining (${workers} workers)..."
   printf 'vm.nr_hugepages=%s\n' "$hugepages" | sudo_run tee /etc/sysctl.d/99-goldenera-node.conf >/dev/null
   sudo_run sysctl --system >/dev/null
+  actual_total="$(read_linux_hugepage_count HugePages_Total || printf '0')"
+  actual_free="$(read_linux_hugepage_count HugePages_Free || printf '0')"
+  if [ "$actual_total" -lt "$hugepages" ] || [ "$actual_free" -lt "$RANDOMX_MIN_HUGEPAGES" ]; then
+    warn "The kernel reserved ${actual_total}/${hugepages} requested huge pages (${actual_free} free)."
+    warn "RandomX will safely use standard memory until at least ${RANDOMX_MIN_HUGEPAGES} huge pages are free."
+  else
+    info "Huge-page reservation ready: ${actual_total} total, ${actual_free} free."
+  fi
 }
 
 install_node() {

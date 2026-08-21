@@ -82,6 +82,10 @@ assert_eq "$GE_EFFECTIVE_MEMORY_MB" 4096 "effective cgroup v1 memory limit"
   assert_eq "$(resolve_mining_workers 8 16)" 8 "explicit mining worker count"
   assert_eq "$(calculate_randomx_hugepages 14)" 1280 "typical RandomX huge-page target"
   assert_eq "$(calculate_randomx_hugepages 64)" 1344 "large-worker RandomX huge-page target"
+  assert_eq "$(read_linux_hugepage_count HugePages_Total "$fixture_dir/meminfo")" 1280 \
+    "installer huge-page total verification"
+  assert_eq "$(read_linux_hugepage_count HugePages_Free "$fixture_dir/meminfo")" 1200 \
+    "installer huge-page free verification"
 )
 
 printf 'GoldenEra memory sizing tests passed.\n'

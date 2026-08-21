@@ -23,10 +23,9 @@
  */
 package global.goldenera.node.core.p2p.directory;
 
-import static lombok.AccessLevel.PRIVATE;
-
 import java.io.IOException;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -36,10 +35,7 @@ import global.goldenera.node.Constants;
 import global.goldenera.node.core.p2p.directory.v1.NodePingRequest;
 import global.goldenera.node.core.p2p.directory.v1.NodePongResponse;
 import global.goldenera.node.shared.exceptions.GEFailedException;
-import lombok.AllArgsConstructor;
 import lombok.NonNull;
-import lombok.experimental.FieldDefaults;
-import lombok.extern.slf4j.Slf4j;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -47,55 +43,70 @@ import okhttp3.RequestBody;
 import okhttp3.Response;
 
 @Component
-@AllArgsConstructor
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-@Slf4j
 public class DirectoryApiV1Client {
 
 	private static final String DIRECTORY_PING_PATH = "/api/v1/node/ping";
 	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
-	ObjectMapper objectMapper;
-	OkHttpClient directoryOkHttpClient;
+	private final ObjectMapper objectMapper;
+	private final OkHttpClient directoryOkHttpClient;
+	private final String directoryHost;
+
+	@Autowired
+	public DirectoryApiV1Client(ObjectMapper objectMapper, OkHttpClient directoryOkHttpClient) {
+		this(objectMapper, directoryOkHttpClient, Constants.getDirectoryConfig().host());
+	}
+
+	DirectoryApiV1Client(ObjectMapper objectMapper, OkHttpClient directoryOkHttpClient, String directoryHost) {
+		this.objectMapper = objectMapper;
+		this.directoryOkHttpClient = directoryOkHttpClient;
+		this.directoryHost = directoryHost;
+	}
 
 	public NodePongResponse ping(@NonNull NodePingRequest ping) {
+		String jsonBody;
 		try {
-			String jsonBody = objectMapper.writeValueAsString(ping);
-			RequestBody body = RequestBody.create(jsonBody, JSON);
-			Request request = new Request.Builder()
-					.url(Constants.getDirectoryConfig().host() + DIRECTORY_PING_PATH)
-					.post(body)
-					.build();
-			try (Response response = directoryOkHttpClient.newCall(request).execute()) {
-				if (!response.isSuccessful()) {
-					log.warn("Directory PING request unsuccessful: {} (Code: {})",
-							response.message(), response.code());
-					throw new GEFailedException("Directory PONG response unsuccessful: " + response.message()
-							+ " (Code: " + response.code() + ", Response: "
-							+ (response.body() != null ? response.body().string() : "null") + ")");
-				}
-				if (response.body() != null) {
-					String responseBody = response.body().string();
-					log.debug("Directory PONG response successful");
-					return objectMapper.readValue(responseBody, NodePongResponse.class);
-				} else {
-					log.warn("Directory PONG response body is empty.");
-					throw new GEFailedException("Directory PONG response body is empty.");
-				}
-			}
+			jsonBody = objectMapper.writeValueAsString(ping);
 		} catch (JsonProcessingException e) {
-			log.error("Failed to serialize or deserialize Directory PONG response: {}", e.getMessage());
-			throw new GEFailedException(
-					"Failed to serialize or deserialize Directory PONG response: " + e.getMessage());
+			throw new GEFailedException("Failed to serialize Directory PING request", e);
+		}
+
+		Request request = new Request.Builder()
+				.url(directoryHost + DIRECTORY_PING_PATH)
+				.post(RequestBody.create(jsonBody, JSON))
+				.build();
+		try (Response response = directoryOkHttpClient.newCall(request).execute()) {
+			String responseBody = response.body() == null ? "" : response.body().string();
+			if (response.code() == 426) {
+				throw parseUpgradeRequired(responseBody);
+			}
+			if (!response.isSuccessful()) {
+				throw new GEFailedException("Directory PONG response unsuccessful: " + response.message()
+						+ " (code: " + response.code() + ", response: " + responseBody + ")");
+			}
+			if (responseBody.isBlank()) {
+				throw new GEFailedException("Directory PONG response body is empty");
+			}
+			try {
+				return objectMapper.readValue(responseBody, NodePongResponse.class);
+			} catch (JsonProcessingException e) {
+				throw new GEFailedException("Failed to deserialize Directory PONG response", e);
+			}
 		} catch (IOException e) {
-			log.error("Directory PONG request failed for {}: {}", Constants.getDirectoryConfig().host(),
-					e.getMessage());
-			throw new GEFailedException(
-					"Directory PONG request failed for " + Constants.getDirectoryConfig().host() + ": "
-							+ e.getMessage());
-		} catch (Exception e) {
-			log.error("An unexpected error occurred: {}", e.getMessage());
-			throw new GEFailedException("An unexpected error occurred: " + e.getMessage(), e);
+			throw new DirectoryUnavailableException(directoryHost, e);
+		}
+	}
+
+	private DirectoryNodeUpgradeRequiredException parseUpgradeRequired(String responseBody) {
+		try {
+			DirectoryErrorResponse error = objectMapper.readValue(responseBody, DirectoryErrorResponse.class);
+			if (!"NODE_VERSION_UNSUPPORTED".equals(error.code())) {
+				throw new GEFailedException("Directory requested an upgrade with unknown error code: " + error.code());
+			}
+			return new DirectoryNodeUpgradeRequiredException(error.message(), error.currentVersion(),
+					error.minimumVersion());
+		} catch (JsonProcessingException e) {
+			throw new GEFailedException("Directory returned an invalid upgrade-required response", e);
 		}
 	}
 }

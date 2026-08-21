@@ -13,6 +13,7 @@ NATIVE_PKG_DIR="${OVERRIDES_DIR}/native"
 APP_JAR="${APP_HOME}/app.jar"
 MEMORY_SIZING_LIB="${GOLDENERA_MEMORY_SIZING_LIB:-/usr/local/lib/goldenera/memory-sizing.sh}"
 MAX_DIRECT_MEMORY_MB=512
+RANDOMX_LARGE_PAGE_WORKING_SET_MB=2560
 
 DATA_DIR="${APP_HOME}/node_data"
 LOG_DIR="${APP_HOME}/node_logs"
@@ -61,6 +62,11 @@ if ge_memory_is_true "${MINING_ENABLE:-false}"; then
     esac
 fi
 
+MEMORY_ENV_DETECTED=false
+if ge_detect_memory_environment; then
+    MEMORY_ENV_DETECTED=true
+fi
+
 LARGE_PAGES_USABLE=false
 SETPRIV_CAPABILITY_ARGS=(
     --inh-caps=-all
@@ -68,17 +74,21 @@ SETPRIV_CAPABILITY_ARGS=(
     --bounding-set=-all
 )
 if "$FULL_MEMORY_MINING"; then
-    if ge_process_has_capability_bit 14; then
+    if ! ge_process_has_capability_bit 14; then
+        echo ">>> [WARN] IPC_LOCK is unavailable; RandomX will use standard memory."
+    elif ! "$MEMORY_ENV_DETECTED"; then
+        echo ">>> [WARN] Unable to inspect huge pages; RandomX will use standard memory."
+    elif [ "$GE_HUGEPAGES_FREE_MB" -lt "$RANDOMX_LARGE_PAGE_WORKING_SET_MB" ]; then
+        echo ">>> [WARN] RandomX large pages require at least ${RANDOMX_LARGE_PAGE_WORKING_SET_MB} MB free; found ${GE_HUGEPAGES_FREE_MB} MB."
+        echo ">>> [WARN] RandomX will use standard memory without a failed large-page allocation attempt."
+    else
         LARGE_PAGES_USABLE=true
         SETPRIV_CAPABILITY_ARGS=(
             --inh-caps=-all,+ipc_lock
             --ambient-caps=-all,+ipc_lock
             --bounding-set=-all,+ipc_lock
         )
-        echo ">>> [INFO] RandomX large-page access enabled with IPC_LOCK."
-    else
-        echo ">>> [WARN] IPC_LOCK is unavailable; RandomX may use standard memory."
-        echo ">>> [WARN] Automatic heap sizing will keep reserved huge pages and fallback memory in its budget."
+        echo ">>> [INFO] RandomX large-page access enabled with IPC_LOCK and ${GE_HUGEPAGES_FREE_MB} MB free."
     fi
 fi
 
@@ -96,7 +106,7 @@ if [ -n "${JAVA_HEAP_MB:-}" ]; then
     echo ">>> [INFO] Using explicit JAVA_HEAP_MB: ${JAVA_HEAP_MB} MB"
     JAVA_MEM_OPTS="-Xms${JAVA_HEAP_MB}m -Xmx${JAVA_HEAP_MB}m"
 else
-    if ! ge_detect_memory_environment; then
+    if ! "$MEMORY_ENV_DETECTED"; then
         echo ">>> [FATAL] Unable to detect host or container memory limits. Set JAVA_HEAP_MB explicitly."
         exit 1
     fi
@@ -207,6 +217,7 @@ exec setpriv --reuid=blockchain --regid=blockchain --init-groups \
   -XX:+ExitOnOutOfMemoryError \
   -XX:+UseStringDeduplication \
   -DAPP_DATA_DIR=$DATA_DIR \
+  -Dgoldenera.randomx.large-pages-enabled=$LARGE_PAGES_USABLE \
   -Djava.security.egd=file:/dev/./urandom \
   -cp ${OVERRIDES_DIR}:${APP_JAR} \
   org.springframework.boot.loader.launch.JarLauncher

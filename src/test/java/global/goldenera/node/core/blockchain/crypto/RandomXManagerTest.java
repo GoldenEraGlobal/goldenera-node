@@ -216,6 +216,25 @@ class RandomXManagerTest {
 	}
 
 	@Test
+	void insufficientHugePagesSkipTheNativeLargePageAttempt() {
+		RecordingFactory factory = new RecordingFactory();
+		ChainQuery chainQuery = mock(ChainQuery.class);
+		RandomXManager manager = new RandomXManager(
+				properties(true, RandomXMiningMemoryMode.FULL), chainQuery, productionContext(), factory,
+				height -> new byte[] { (byte) height, 42 },
+				() -> new RandomXLargePageSupport.Availability(false, "test pool is too small"));
+
+		manager.ensureInitializedForHeight(1L);
+
+		assertThat(factory.cacheFlags).singleElement().satisfies(flags -> {
+			assertThat(flags).contains(RandomXFlag.FULL_MEM);
+			assertThat(flags).doesNotContain(RandomXFlag.LARGE_PAGES);
+		});
+		assertThat(factory.datasets).hasSize(1);
+		manager.close();
+	}
+
+	@Test
 	void explicitFullMiningUpgradesDisabledAutonomousCacheAtTheSameEpoch() {
 		RecordingFactory factory = new RecordingFactory();
 		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);

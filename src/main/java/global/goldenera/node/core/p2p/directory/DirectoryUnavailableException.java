@@ -21,33 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node;
+package global.goldenera.node.core.p2p.directory;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import global.goldenera.node.shared.exceptions.GEFailedException;
 
-import org.junit.jupiter.api.Test;
+public class DirectoryUnavailableException extends GEFailedException {
 
-import global.goldenera.cryptoj.enums.Network;
-import global.goldenera.node.Constants.ForkName;
-
-class ConstantsMiningEconomicsTest {
-
-	@Test
-	void mainnetActivatesFiveDaysAfterReferenceBlock() {
-		assertThat(Constants.getConsensusSettings(Network.MAINNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 731_503L);
-	}
-
-	@Test
-	void testnetActivatesOneHourAndFifteenMinutesAfterReferenceBlock() {
-		assertThat(Constants.getConsensusSettings(Network.TESTNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 716_824L);
-	}
-
-	@Test
-	void devActivatesEveryForkAtGenesis() {
-		assertThat(Constants.getConsensusSettings(Network.MAINNET, "dev").forkActivationBlocks())
-				.containsOnlyKeys(ForkName.values())
-				.allSatisfy((fork, height) -> assertThat(height).isZero());
+	public DirectoryUnavailableException(String directoryHost, Throwable cause) {
+		super("Directory PONG request failed for " + directoryHost + ": " + cause.getMessage(), cause);
 	}
 }
