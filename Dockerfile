@@ -87,7 +87,9 @@ WORKDIR ${APP_HOME}
 
 # 5. Copy Runtime Entrypoint
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+COPY scripts/memory-sizing.sh /usr/local/lib/goldenera/memory-sizing.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+    && chmod 0444 /usr/local/lib/goldenera/memory-sizing.sh
 
 # 6. Structure & Permissions
 RUN mkdir -p ${APP_HOME}/overrides/native \

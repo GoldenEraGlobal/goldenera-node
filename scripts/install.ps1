@@ -191,6 +191,8 @@ services:
     volumes:
       - ./node_data:/app/node_data
       - ./node_logs:/app/node_logs
+    cap_add:
+      - IPC_LOCK
     ulimits:
       memlock:
         soft: -1

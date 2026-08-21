@@ -4,6 +4,12 @@ set -Eeuo pipefail
 readonly DEFAULT_IMAGE="ghcr.io/goldeneraglobal/goldenera-node:latest"
 readonly LOCAL_IMAGE="goldenera-node:sandbox-local"
 readonly ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
+# Persistent pages cover one active FULL dataset/cache plus mining VM
+# scratchpads. The entrypoint separately budgets standard-memory rollover.
+readonly RANDOMX_DATASET_CACHE_HUGEPAGES=1168
+readonly RANDOMX_HUGEPAGE_MARGIN=64
+readonly RANDOMX_MIN_HUGEPAGES=1280
+readonly RANDOMX_HUGEPAGE_GRANULARITY=64
 
 INSTALL_DIR=""
 NON_INTERACTIVE=false
@@ -338,6 +344,8 @@ services:
     volumes:
       - ./node_data:/app/node_data
       - ./node_logs:/app/node_logs
+    cap_add:
+      - IPC_LOCK
     ulimits:
       memlock:
         soft: -1
@@ -485,12 +493,37 @@ write_identity() {
   chmod 600 "$INSTALL_DIR/node_data/.node_identity"
 }
 
+resolve_mining_workers() {
+  local configured_threads="$1" processors="$2"
+  if [[ "$configured_threads" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$configured_threads"
+  elif [ "$processors" -gt 2 ]; then
+    printf '%s' "$((processors - 2))"
+  else
+    printf '1'
+  fi
+}
+
+calculate_randomx_hugepages() {
+  local workers="$1" pages
+  pages=$((RANDOMX_DATASET_CACHE_HUGEPAGES + workers + RANDOMX_HUGEPAGE_MARGIN))
+  [ "$pages" -ge "$RANDOMX_MIN_HUGEPAGES" ] || pages="$RANDOMX_MIN_HUGEPAGES"
+  pages=$((((pages + RANDOMX_HUGEPAGE_GRANULARITY - 1) / RANDOMX_HUGEPAGE_GRANULARITY)
+    * RANDOMX_HUGEPAGE_GRANULARITY))
+  printf '%s' "$pages"
+}
+
 tune_linux_hugepages() {
+  local processors workers hugepages
   is_true "$MINING_ENABLE" || return 0
   [ "$(uname -s)" = Linux ] || return 0
   if "$SKIP_DOCKER_CHECK"; then return 0; fi
-  info "Configuring 2000 huge pages for RandomX mining..."
-  printf '%s\n' 'vm.nr_hugepages=2000' | sudo_run tee /etc/sysctl.d/99-goldenera-node.conf >/dev/null
+  processors="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
+  [[ "$processors" =~ ^[1-9][0-9]*$ ]] || processors=1
+  workers="$(resolve_mining_workers "$MINING_THREADS" "$processors")"
+  hugepages="$(calculate_randomx_hugepages "$workers")"
+  info "Configuring ${hugepages} huge pages for RandomX mining (${workers} workers)..."
+  printf 'vm.nr_hugepages=%s\n' "$hugepages" | sudo_run tee /etc/sysctl.d/99-goldenera-node.conf >/dev/null
   sudo_run sysctl --system >/dev/null
 }
 
@@ -541,4 +574,6 @@ main() {
   install_node
 }
 
-main "$@"
+if [ "${GOLDENERA_INSTALLER_LIBRARY_ONLY:-false}" != true ]; then
+  main "$@"
+fi

@@ -6,7 +6,8 @@ This directory contains build and deployment scripts for the GoldenEra Node.
 
 - **`entrypoint.sh`** - Docker container entrypoint script
   - Handles permissions setup
-  - Calculates optimal Java heap size
+  - Calculates a cgroup-, huge-page-, and service-aware Java heap size
+  - Preserves only `IPC_LOCK` for RandomX huge pages and budgets for fallback memory
   - Compiles RandomX library optimized for CPU architecture
   - Launches Spring Boot application with ZGC garbage collector
 
@@ -27,6 +28,9 @@ This directory contains build and deployment scripts for the GoldenEra Node.
 
 - **`tests/install-e2e.sh`**
   - Starts and probes the real local sandbox image
+
+- **`tests/memory-sizing-test.sh`**
+  - Validates automatic heap sizing and RandomX huge-page targets
 
 ## Usage
 
@@ -53,6 +57,7 @@ docker compose -f docker-compose.local.yml up -d
 
 ```bash
 ./scripts/build-sandbox-image.sh
+./scripts/tests/memory-sizing-test.sh
 ./scripts/tests/install-smoke.sh
 ./scripts/tests/install-e2e.sh
 ```

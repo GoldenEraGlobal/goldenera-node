@@ -9,16 +9,18 @@
 To run a node successfully, your system **must** meet the following minimum requirements. Failing to meet these may result in node instability, syncing issues, or mining failures.
 
 * **CPU:** Minimum **4 vCPUs** (High single-core performance is recommended for mining).
-* **RAM:** Minimum **8 GB**, recommended **16 GB** for optimal performance.
+* **RAM:** Minimum **8 GB** without mining; minimum **16 GB** for production `FULL` mining.
 * **Storage:** Fast SSD/NVMe (HDD is strictly not recommended for blockchain databases).
 
 > **Note on Memory:** The node uses multiple memory pools:
-> - **RandomX Dataset:** ~2.5 GB (fixed, required for mining)
+> - **RandomX steady state:** ~2.5 GB (required for `FULL` mining)
+> - **RandomX epoch rollover peak:** ~6 GB while old/new resources overlap
 > - **Java Heap:** Configurable via `JAVA_HEAP_MB`
 > - **RocksDB Cache:** Configurable via `ROCKSDB_BLOCK_CACHE_MB` (off-heap)
-> - **PostgreSQL + OS:** ~1.5 GB
+> - **RocksDB writes, direct buffers, PostgreSQL, JVM native memory, and OS:** additional native memory
 >
-> See `.env.example` for sizing recommendations by VPS size.
+> When `JAVA_HEAP_MB` is empty, the container derives a safe heap from the
+> cgroup limit, currently available memory, huge pages, and enabled services.
 
 ---
 
@@ -116,6 +118,12 @@ match; the published release-image path remains the default Docker target.
 ### 1. Optimize Linux Kernel (Recommended)
 
 For optimal mining performance (RandomX), huge pages must be enabled on the host machine.
+The automated installer calculates the required count from the number of mining
+workers. For a typical manual deployment, 1280 two-megabyte pages provide a
+2.5GB RandomX allocation including working margin. The generated Compose file
+grants only `IPC_LOCK`, which lets the unprivileged node process use those pages.
+If that capability is unavailable, automatic heap sizing reserves enough normal
+memory for RandomX's fallback instead.
 
 1.  Open the sysctl configuration file:
     ```bash
@@ -123,11 +131,11 @@ For optimal mining performance (RandomX), huge pages must be enabled on the host
     ```
 2.  Add the following line to the end of the file:
     ```properties
-    vm.nr_hugepages=2000
+    vm.nr_hugepages=1280
     ```
 3.  Apply the changes immediately:
     ```bash
-    sudo sysctl -w vm.nr_hugepages=2000
+    sudo sysctl -w vm.nr_hugepages=1280
     ```
 
 ### 2. Project Setup
@@ -145,7 +153,6 @@ services:
   # ==============================================================================
   node:
     image: ghcr.io/goldeneraglobal/goldenera-node:latest
-    container_name: goldenera_node
     restart: unless-stopped
     pull_policy: always
 
@@ -167,19 +174,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    cap_add:
+      - IPC_LOCK
     ulimits:
       memlock:
         soft: -1
         hard: -1
     # Memory is managed via .env: JAVA_HEAP_MB + ROCKSDB_BLOCK_CACHE_MB
-    # Minimum recommended: 8GB RAM (see .env.example for sizing guide)
+    # Minimum: 8GB non-mining or 16GB for FULL mining (see .env.example)
 
   # ==============================================================================
   # DATABASE
   # ==============================================================================
   db:
     image: postgres:18.1-alpine
-    container_name: goldenera_db
     restart: unless-stopped
 
     env_file:
@@ -234,15 +242,16 @@ PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
 # Memory layout for GoldenEra Node:
 #   - Java Heap (JAVA_HEAP_MB):     JVM memory for application (configurable)
 #   - RocksDB Block Cache:          Native memory for disk cache (configurable)
-#   - RandomX Dataset:              ~2.5 GB (FIXED, required for mining)
-#   - OS + postgre buffers:                 ~1.5 GB
+#   - RandomX steady state:         ~2.5 GB (required for FULL mining)
+#   - RandomX epoch rollover peak:  ~6 GB (auto-sizing accounts for overlap)
+#   - RocksDB writes, direct buffers, PostgreSQL, JVM native memory, and OS
 #
-# EXAMPLES by VPS size:
-#   8GB VPS:  JAVA_HEAP_MB=2048,  ROCKSDB_BLOCK_CACHE_MB=1024
-#   16GB VPS: JAVA_HEAP_MB=8192,  ROCKSDB_BLOCK_CACHE_MB=2048
-#   32GB VPS: JAVA_HEAP_MB=16384, ROCKSDB_BLOCK_CACHE_MB=8192
+# Conservative manual examples by VPS size:
+#   8GB VPS, non-mining: JAVA_HEAP_MB=3072, ROCKSDB_BLOCK_CACHE_MB=512
+#   16GB VPS, FULL mining: JAVA_HEAP_MB=5120, ROCKSDB_BLOCK_CACHE_MB=512
+#   32GB VPS: JAVA_HEAP_MB=15360, ROCKSDB_BLOCK_CACHE_MB=4096
 #
-# Leave empty for auto-calculation (recommended for beginners)
+# Leave empty for cgroup- and huge-page-aware auto-calculation (recommended)
 # =============================================================================
 JAVA_HEAP_MB=
 
@@ -400,7 +409,7 @@ Before running the node, you must adjust specific `.env` variables to match your
 
 | Variable | Description & Requirement |
 | :--- | :--- |
-| **`JAVA_HEAP_MB`** | Java heap size in MB. Leave empty for auto-calculation. See memory examples in `.env`. |
+| **`JAVA_HEAP_MB`** | Java heap size in MB. Leave empty for cgroup-, huge-page-, and service-aware auto-calculation. |
 | **`ROCKSDB_BLOCK_CACHE_MB`** | RocksDB read cache (off-heap). Default `512`. See memory examples above. |
 | **`LISTEN_PORT`** | The port for the Explorer/Admin API (exposed via Docker). Default is `8080`. |
 | **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |

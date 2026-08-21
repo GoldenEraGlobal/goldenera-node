@@ -3,15 +3,23 @@ name: Installer smoke tests
 on:
   pull_request:
     paths:
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - "scripts/entrypoint.sh"
       - "scripts/install.sh"
       - "scripts/install.ps1"
+      - "scripts/memory-sizing.sh"
       - "scripts/tests/**"
       - ".github/workflows/installer-smoke.yml"
   push:
     branches: [main, master]
     paths:
+      - "Dockerfile"
+      - "docker-compose*.yml"
+      - "scripts/entrypoint.sh"
       - "scripts/install.sh"
       - "scripts/install.ps1"
+      - "scripts/memory-sizing.sh"
       - "scripts/tests/**"
       - ".github/workflows/installer-smoke.yml"
 
@@ -26,6 +34,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Run memory sizing tests
+        run: ./scripts/tests/memory-sizing-test.sh
       - name: Run Bash installer smoke tests
         run: ./scripts/tests/install-smoke.sh
 
