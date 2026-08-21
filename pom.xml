@@ -45,7 +45,7 @@
         <goldenera-randomx.version>0.0.1</goldenera-randomx.version>
         <goldenera-randomx.source.commit>1ab5cbfd9081802729dc888c80e88777c709893b</goldenera-randomx.source.commit>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
-        <goldenera-merkletrie.version>0.0.1</goldenera-merkletrie.version>
+        <goldenera-merkletrie.version>0.0.2</goldenera-merkletrie.version>
         <goldenera-cryptoj.version>0.0.5</goldenera-cryptoj.version>
         <goldenera.git.commit>UNKNOWN</goldenera.git.commit>
         <goldenera.cryptoj.sha256>UNKNOWN</goldenera.cryptoj.sha256>
