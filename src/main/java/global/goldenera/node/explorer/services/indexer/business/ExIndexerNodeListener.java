@@ -29,6 +29,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -51,7 +53,20 @@ public class ExIndexerNodeListener {
 		if (!generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
 			return;
 		}
+		if (event.isBatchMember()) {
+			return;
+		}
 		queueService.pushConnect(event);
+	}
+
+	@EventListener
+	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
+		if (!generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
+			return;
+		}
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			queueService.pushConnectBatch(event.getBlockEvents());
+		}
 	}
 
 	@EventListener

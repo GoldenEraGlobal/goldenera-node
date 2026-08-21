@@ -25,6 +25,7 @@ package global.goldenera.node.core.p2p.manager;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.math.BigInteger;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -117,19 +118,44 @@ public class PeerRegistry {
 	/**
 	 * Finds the best candidate for synchronization:
 	 * - Must be not banned
-	 * - Must be ahead of local chain
-	 * - Prefer higher reputation, then total difficulty
+	 * - Must advertise strictly more cumulative work than the local chain
+	 * - Prefer greater total difficulty, then higher reputation and height
+	 *
+	 * Height is deliberately not an eligibility requirement: a shorter fork can
+	 * have more cumulative work and must remain eligible for synchronization.
 	 */
-	public Optional<RemotePeer> getSyncCandidate(long localHeight) {
+	public Optional<RemotePeer> getSyncCandidate(BigInteger localTotalDifficulty) {
 		Comparator<RemotePeer> peerComparator = Comparator
-				.comparingInt((RemotePeer peer) -> reputationService.score(peer.getIdentity()))
-				.thenComparing(RemotePeer::getTotalDifficulty, Comparator.nullsLast(Comparator.naturalOrder()));
+				.comparing(RemotePeer::getTotalDifficulty)
+				.thenComparingInt(peer -> reputationService.score(peer.getIdentity()))
+				.thenComparingLong(RemotePeer::getHeadHeight);
 
 		return activeConnections.values().stream()
 				.filter(p -> p.getIdentity() != null)
 				.filter(p -> !reputationService.isBanned(p.getIdentity()))
-				.filter(p -> p.getHeadHeight() > localHeight)
+				.filter(p -> p.getTotalDifficulty() != null)
+				.filter(p -> p.getTotalDifficulty().compareTo(localTotalDifficulty) > 0)
 				.max(peerComparator);
+	}
+
+	/**
+	 * Returns handshaken, non-banned peers that claim to have every block through
+	 * {@code requiredHeight}. Body requests use hashes, so peers on another fork are
+	 * harmless: a missing or mismatched positional body response is rejected by the
+	 * sync manager and retried elsewhere.
+	 */
+	public List<RemotePeer> getBodySyncPeers(long requiredHeight) {
+		return activeConnections.values().stream()
+				.filter(p -> p.getIdentity() != null)
+				.filter(p -> !reputationService.isBanned(p.getIdentity()))
+				.filter(p -> p.getHeadHeight() >= requiredHeight)
+				.sorted(Comparator
+						.comparingInt((RemotePeer peer) -> reputationService.score(peer.getIdentity()))
+						.thenComparing(RemotePeer::getTotalDifficulty,
+								Comparator.nullsFirst(Comparator.naturalOrder()))
+						.thenComparingLong(RemotePeer::getHeadHeight)
+						.reversed())
+				.collect(Collectors.toList());
 	}
 
 	/**

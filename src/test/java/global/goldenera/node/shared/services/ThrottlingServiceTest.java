@@ -35,6 +35,24 @@ class ThrottlingServiceTest {
 
 	@ParameterizedTest
 	@CsvSource({
+			"/api/core/v1/sync/snapshots/checkpoint/manifest, 1",
+			"/api/core/v1/sync/snapshots/checkpoint/chunks/0, 1",
+			"/api/core/v1/sync/snapshots/checkpoint/archive/manifest, 1",
+			"/api/core/v1/sync/snapshots/checkpoint/archive/chunks/0, 1"
+	})
+	void snapshotEndpointsConsumeBalancedCost(String uri, long cost) {
+		ThrottlingProperties properties = new ThrottlingProperties();
+		properties.setPublicCoreCapacity(cost);
+		properties.setPublicCoreRefillTokens(1);
+		ThrottlingService service = new ThrottlingService(properties);
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", uri);
+
+		assertThat(service.checkSpecificLimit(request, "snapshot-client", false)).isTrue();
+		assertThat(service.checkSpecificLimit(request, "snapshot-client", false)).isFalse();
+	}
+
+	@ParameterizedTest
+	@CsvSource({
 			"/api/bridge/v1/block/last?network=MAINNET, 3",
 			"/api/bridge/v1/tx/by-hash/0x123?network=MAINNET, 5",
 			"/api/bridge/v1/tx/broadcast, 10",

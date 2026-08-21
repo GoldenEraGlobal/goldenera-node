@@ -29,6 +29,8 @@ import static lombok.AccessLevel.PRIVATE;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -75,8 +77,8 @@ import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
-import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.exceptions.IncompatibleChainException;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -95,6 +97,8 @@ public class BlockSyncManagerService {
 	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch
 	static final long TIMEOUT_SECONDS = 20; // Timeout per request (reduced for faster failover)
 	static final long SYNC_POLL_DELAY_MS = 100;
+	static final long MAX_IN_FLIGHT_BODY_BYTES = 2L * P2PChannelInitializer.MAX_FRAME_SIZE;
+	static final long MAX_PERSIST_BATCH_BYTES = 128L * 1024 * 1024;
 	static final int EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD = 3;
 	static final int MAX_PENDING_BROADCAST_DOWNLOADS = 128;
 	static final long MAX_BROADCAST_REORG_DEPTH = 10;
@@ -126,9 +130,9 @@ public class BlockSyncManagerService {
 	}
 
 	/**
-	 * Number of StoredBlocks to accumulate before persisting to disk.
-	 * This limits RAM usage while allowing efficient batch writes.
-	 * At 5MB per block max, 250 blocks = ~1.25GB RAM worst case.
+	 * Persistence batches are bounded by both this count and
+	 * MAX_PERSIST_BATCH_BYTES. A single valid block larger than the byte target is
+	 * still persisted alone so synchronization always makes progress.
 	 */
 	static final int PERSIST_BATCH_SIZE = 250;
 
@@ -144,7 +148,6 @@ public class BlockSyncManagerService {
 	final ChainQuery chainQueryService;
 	final BlockReorgs blockReorgService;
 	final PeerRegistry peerRegistry;
-	final P2PHeadAnnouncementService headAnnouncementService;
 	final PeerReputationService peerReputationService;
 	final BlockIngestionService blockIngestionService;
 
@@ -158,7 +161,6 @@ public class BlockSyncManagerService {
 			ChainQuery chainQueryService,
 			BlockReorgs blockReorgService,
 			PeerRegistry peerRegistry,
-			P2PHeadAnnouncementService headAnnouncementService,
 			PeerReputationService peerReputationService,
 			BlockIngestionService blockIngestionService) {
 		this.registry = registry;
@@ -170,7 +172,6 @@ public class BlockSyncManagerService {
 		this.chainQueryService = chainQueryService;
 		this.blockReorgService = blockReorgService;
 		this.peerRegistry = peerRegistry;
-		this.headAnnouncementService = headAnnouncementService;
 		this.peerReputationService = peerReputationService;
 		this.blockIngestionService = blockIngestionService;
 	}
@@ -186,15 +187,19 @@ public class BlockSyncManagerService {
 	// to grow an unbounded queue.
 	final BlockingQueue<Object> signalQueue = new ArrayBlockingQueue<>(1);
 
-	final Map<Long, CompletableFuture<List<BlockHeader>>> pendingHeaderRequests = new ConcurrentHashMap<>();
-	final Map<Long, CompletableFuture<List<List<Tx>>>> pendingBodyRequests = new ConcurrentHashMap<>();
+	final Map<PeerRequestKey, CompletableFuture<List<BlockHeader>>> pendingHeaderRequests = new ConcurrentHashMap<>();
+	final Map<PeerRequestKey, CompletableFuture<List<List<Tx>>>> pendingBodyRequests = new ConcurrentHashMap<>();
 
 	final Set<Hash> pendingBroadcastDownloads = ConcurrentHashMap.newKeySet();
 	private final SyncRequestTelemetry syncRequestTelemetry = new SyncRequestTelemetry();
 	private final EmptyHeaderClaimTracker emptyHeaderClaimTracker = new EmptyHeaderClaimTracker();
+	private final BodyPipelineTelemetry bodyPipelineTelemetry = new BodyPipelineTelemetry();
+	private volatile long currentPersistBatchBytes;
+	private volatile long peakPersistBatchBytes;
 
 	public SyncRuntimeSnapshot runtimeSnapshot() {
 		SyncRequestTelemetry.Snapshot requestTelemetry = syncRequestTelemetry.snapshot();
+		BodyPipelineTelemetry.Snapshot bodyTelemetry = bodyPipelineTelemetry.snapshot();
 		return new SyncRuntimeSnapshot(
 				synced,
 				activeSyncCycle.get(),
@@ -209,7 +214,16 @@ public class BlockSyncManagerService {
 				SYNC_CHUNK_SIZE_HEADERS,
 				calculateBodyBatchSize(),
 				calculatePipelineDepth(calculateBodyBatchSize()),
-				PERSIST_BATCH_SIZE);
+				PERSIST_BATCH_SIZE,
+				MAX_IN_FLIGHT_BODY_BYTES,
+				bodyTelemetry.reservedBytes(),
+				bodyTelemetry.peakReservedBytes(),
+				bodyTelemetry.activeRequests(),
+				bodyTelemetry.peakActiveRequests(),
+				bodyTelemetry.activePeers(),
+				MAX_PERSIST_BATCH_BYTES,
+				currentPersistBatchBytes,
+				peakPersistBatchBytes);
 	}
 
 	public record SyncRuntimeSnapshot(
@@ -226,7 +240,16 @@ public class BlockSyncManagerService {
 			int headerBatchLimit,
 			int bodyBatchLimit,
 			int pipelineDepthLimit,
-			int persistenceBatchLimit) {
+			int persistenceBatchLimit,
+			long bodyInflightByteLimit,
+			long bodyInflightReservedBytes,
+			long bodyInflightPeakReservedBytes,
+			int activeBodyRequests,
+			int peakActiveBodyRequests,
+			int activeBodyPeers,
+			long persistenceBatchByteLimit,
+			long persistenceBatchCurrentBytes,
+			long persistenceBatchPeakBytes) {
 	}
 
 	public void start() {
@@ -236,6 +259,18 @@ public class BlockSyncManagerService {
 		syncExecutor.submit(this::syncLoop);
 		signalQueue.offer(new Object());
 		registry.gauge("blockchain.sync.status", this, svc -> svc.isSynced() ? 1 : 0);
+		registry.gauge("blockchain.sync.body_inflight.bytes", this,
+				svc -> svc.bodyPipelineTelemetry.snapshot().reservedBytes());
+		registry.gauge("blockchain.sync.body_inflight.peak_bytes", this,
+				svc -> svc.bodyPipelineTelemetry.snapshot().peakReservedBytes());
+		registry.gauge("blockchain.sync.body_inflight.active_requests", this,
+				svc -> svc.bodyPipelineTelemetry.snapshot().activeRequests());
+		registry.gauge("blockchain.sync.body_inflight.active_peers", this,
+				svc -> svc.bodyPipelineTelemetry.snapshot().activePeers());
+		registry.gauge("blockchain.sync.persistence_batch.bytes", this,
+				svc -> svc.currentPersistBatchBytes);
+		registry.gauge("blockchain.sync.persistence_batch.peak_bytes", this,
+				svc -> svc.peakPersistBatchBytes);
 	}
 
 	/** Wakes the sync loop immediately instead of waiting for its periodic poll. */
@@ -270,7 +305,8 @@ public class BlockSyncManagerService {
 	private void checkAndSync() {
 		try {
 			StoredBlock localBestStored = chainQueryService.getLatestStoredBlockOrThrow();
-			Optional<RemotePeer> bestPeerOpt = peerRegistry.getSyncCandidate(localBestStored.getHeight());
+			BigInteger localTotalDifficulty = localBestStored.getCumulativeDifficulty();
+			Optional<RemotePeer> bestPeerOpt = peerRegistry.getSyncCandidate(localTotalDifficulty);
 			if (bestPeerOpt.isEmpty()) {
 				if (!synced) {
 					log.info("Node synced at height {}", localBestStored.getHeight());
@@ -280,12 +316,18 @@ public class BlockSyncManagerService {
 				return;
 			}
 			RemotePeer bestPeer = bestPeerOpt.get();
-			if (bestPeer.getHeadHeight() > localBestStored.getHeight()) {
-				log.info("Sync needed: local height {} vs peer height {} ({})", localBestStored.getHeight(),
-						bestPeer.getHeadHeight(), bestPeer.getIdentity());
+			BigInteger advertisedTotalDifficulty = bestPeer.getTotalDifficulty();
+			// Peer status is mutable. Re-check the advertised work after selection; the
+			// authoritative check is repeated against actual downloaded headers under the
+			// master-chain lock by ChainSwitchService.
+			if (advertisedTotalDifficulty != null
+					&& advertisedTotalDifficulty.compareTo(localTotalDifficulty) > 0) {
+				log.info("Sync needed: local height {} (TD {}) vs peer height {} (TD {}) ({})",
+						localBestStored.getHeight(), localTotalDifficulty,
+						bestPeer.getHeadHeight(), advertisedTotalDifficulty, bestPeer.getIdentity());
 				synced = false;
 
-				boolean success = performSync(bestPeer, localBestStored.getBlock());
+				boolean success = performSync(bestPeer, localBestStored, advertisedTotalDifficulty);
 
 				if (success) {
 					signalQueue.offer(new Object());
@@ -302,18 +344,26 @@ public class BlockSyncManagerService {
 		}
 	}
 
-	private boolean performSync(RemotePeer peer, Block localBest) {
+	private boolean performSync(RemotePeer peer, StoredBlock localBestStored,
+			BigInteger advertisedTotalDifficulty) {
 		Timer.Sample sample = Timer.start(registry);
 		activeSyncCycle.set(true);
+		boolean cycleSucceeded = false;
 		try {
 			log.debug("Starting sync with peer {}", peer.getIdentity());
+			Block localBest = localBestStored.getBlock();
 
 			long headerStart = System.currentTimeMillis();
-			List<BlockHeader> headersToSync = downloadHeaders(peer, localBest);
+			List<BlockHeader> headersToSync;
+			try {
+				headersToSync = downloadHeaders(peer, localBest);
+			} finally {
+				recordStageDuration("header_download", headerStart);
+			}
 			long headerTime = System.currentTimeMillis() - headerStart;
 
 			if (headersToSync.isEmpty()) {
-				if (peer.getHeadHeight() > localBest.getHeight()) {
+				if (advertisedTotalDifficulty.compareTo(localBestStored.getCumulativeDifficulty()) > 0) {
 					if (!emptyHeaderClaimTracker.record(peer.getIdentity(), localBest.getHash())) {
 						log.debug("Peer {} returned no headers for advertised height {}; retrying before "
 								+ "classifying the chain as incompatible", peer.getIdentity(), peer.getHeadHeight());
@@ -326,6 +376,7 @@ public class BlockSyncManagerService {
 
 				emptyHeaderClaimTracker.clear(peer.getIdentity());
 				log.debug("No new headers found from peer");
+				cycleSucceeded = true;
 				return true;
 			}
 			emptyHeaderClaimTracker.clear(peer.getIdentity());
@@ -335,7 +386,12 @@ public class BlockSyncManagerService {
 			// Validate headers in parallel AND warm up lazy getters (hash, size)
 			// BlockHeaderImpl caches these values internally after first call
 			long validateStart = System.currentTimeMillis();
-			Map<Hash, StatelessValidatedHeader> validatedHeaders = validateBatch(headersToSync);
+			Map<Hash, StatelessValidatedHeader> validatedHeaders;
+			try {
+				validatedHeaders = validateBatch(headersToSync);
+			} finally {
+				recordStageDuration("header_validation", validateStart);
+			}
 			long validateTime = System.currentTimeMillis() - validateStart;
 			log.info("Validated {} headers in {}ms", headersToSync.size(), validateTime);
 
@@ -351,11 +407,7 @@ public class BlockSyncManagerService {
 
 			peerReputationService.recordSuccess(peer.getIdentity());
 			registry.counter("blockchain.sync.blocks_downloaded").increment(totalBlocksProcessed);
-			if (totalBlocksProcessed > 0) {
-				// SYNC-connected blocks are intentionally not rebroadcast one by one. Announce
-				// the final head once so sparse/multi-hop peers can continue immediately.
-				headAnnouncementService.requestAnnouncement();
-			}
+			cycleSucceeded = true;
 			return true;
 		} catch (IncompatibleChainException e) {
 			// Peer is on a fundamentally different chain (different genesis or hard fork)
@@ -363,6 +415,12 @@ public class BlockSyncManagerService {
 			log.warn("INCOMPATIBLE CHAIN: Banning peer {} - {}", peer.getIdentity(), e.getMessage());
 			peer.disconnect("Incompatible chain: " + e.getMessage());
 			peerReputationService.ban(peer.getIdentity());
+			return false;
+		} catch (BodyRangeDownloadException e) {
+			// Individual body peers were already attributed and penalized at the point of
+			// failure. Do not blame the peer that supplied the header chain merely because
+			// no remaining peer could serve one range.
+			log.warn("Body sync failed without an eligible failover: {}", e.getMessage());
 			return false;
 		} catch (Exception e) {
 			String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -373,7 +431,14 @@ public class BlockSyncManagerService {
 		} finally {
 			activeSyncCycle.set(false);
 			sample.stop(registry.timer("blockchain.sync.batch_time"));
+			registry.counter("blockchain.sync.cycles", "outcome", cycleSucceeded ? "success" : "failure")
+					.increment();
 		}
+	}
+
+	private void recordStageDuration(String stage, long startMillis) {
+		registry.timer("blockchain.sync.stage", "stage", stage)
+				.record(System.currentTimeMillis() - startMillis, TimeUnit.MILLISECONDS);
 	}
 
 	/**
@@ -382,13 +447,33 @@ public class BlockSyncManagerService {
 	 * 
 	 * @return Total number of blocks processed
 	 */
-	private int downloadAndPersistBodiesInBatches(RemotePeer peer, List<BlockHeader> headers,
+	int downloadAndPersistBodiesInBatches(RemotePeer peer, List<BlockHeader> headers,
+			Map<Hash, StatelessValidatedHeader> validatedHeaders) throws Exception {
+		bodyPipelineTelemetry.begin();
+		currentPersistBatchBytes = 0;
+		peakPersistBatchBytes = 0;
+		try {
+			return doDownloadAndPersistBodiesInBatches(headers, validatedHeaders);
+		} finally {
+			bodyPipelineTelemetry.end();
+			currentPersistBatchBytes = 0;
+		}
+	}
+
+	private int doDownloadAndPersistBodiesInBatches(List<BlockHeader> headers,
 			Map<Hash, StatelessValidatedHeader> validatedHeaders) throws Exception {
 		if (headers.isEmpty())
 			return 0;
+		for (BlockHeader header : headers) {
+			if (!validatedHeaders.containsKey(header.getHash())) {
+				throw new GEFailedException(
+						"Missing stateless header proof at height " + header.getHeight());
+			}
+		}
 
 		int totalProcessed = 0;
 		List<ValidatedSyncBlock> currentBatch = new ArrayList<>(PERSIST_BATCH_SIZE);
+		long currentBatchBytes = 0;
 
 		Hash firstParentHash = headers.get(0).getPreviousHash();
 		StoredBlock commonAncestor = chainQueryService.getStoredBlockByHashOrThrow(firstParentHash);
@@ -397,62 +482,108 @@ public class BlockSyncManagerService {
 		// Pipeline configuration
 		final int bodyBatchSize = calculateBodyBatchSize();
 		final int pipelineDepth = calculatePipelineDepth(bodyBatchSize);
+		final long maxBlockSize = Constants.getSettings().maxBlockSizeInBytes();
+		BodyInflightBudget inflightBudget = new BodyInflightBudget(MAX_IN_FLIGHT_BODY_BYTES);
 		List<PendingBodyRequest> pendingRequests = new ArrayList<>();
+		Set<RemotePeer> failedBodyPeers = new HashSet<>();
+		Set<RemotePeer> successfulBodyPeers = new HashSet<>();
 		int nextBatchIndex = 0;
+		int nextExpectedBodyIndex = 0;
 
 		while (nextBatchIndex < headers.size() || !pendingRequests.isEmpty()) {
-			// Send new requests up to pipeline depth
+			// Keep a rolling pipeline, bounded by both request count and conservatively
+			// reserved response bytes. Header chunks are themselves bounded, so this list
+			// can never grow without limit.
 			while (pendingRequests.size() < pipelineDepth && nextBatchIndex < headers.size()) {
 				int startIdx = nextBatchIndex;
 				int endIdx = Math.min(nextBatchIndex + bodyBatchSize, headers.size());
-				List<BlockHeader> batchHeaders = headers.subList(startIdx, endIdx);
-				List<Hash> hashes = batchHeaders.stream().map(BlockHeader::getHash).collect(Collectors.toList());
+				BodyRange range = BodyRange.create(
+						startIdx / bodyBatchSize, startIdx, headers.subList(startIdx, endIdx), maxBlockSize);
+				if (!inflightBudget.tryReserve(range.reservedBytes())) {
+					break;
+				}
 
-				CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
-				long reqId = peer.reserveRequestId();
-				pendingBodyRequests.put(reqId, future);
-				recordBodyRequest();
-				peer.sendGetBlockBodies(hashes, reqId);
-
-				pendingRequests.add(new PendingBodyRequest(reqId, batchHeaders, future, startIdx));
+				PendingBodyRequest request;
+				try {
+					request = issueBodyRangeRequest(range, failedBodyPeers);
+				} catch (Exception e) {
+					inflightBudget.release(range.reservedBytes());
+					cleanupPendingBodyRequests(pendingRequests);
+					throw e;
+				}
+				pendingRequests.add(request);
+				bodyPipelineTelemetry.requestIssued(request.peer(), range.reservedBytes());
 				nextBatchIndex = endIdx;
 			}
 
-			if (pendingRequests.isEmpty())
-				break;
+			if (pendingRequests.isEmpty()) {
+				throw new BodyRangeDownloadException(
+						"Body range cannot fit the configured in-flight byte budget");
+			}
 
 			// Wait for the oldest request in the pipeline
 			PendingBodyRequest oldest = pendingRequests.remove(0);
 			try {
-				List<List<Tx>> bodies = oldest.future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+				List<List<Tx>> bodies;
+				List<StatelessValidatedBlock> validatedBodies;
+				long bodyAttemptStart = System.currentTimeMillis();
+				try {
+					bodies = oldest.future().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+					validatedBodies = validateBodyResponse(oldest, bodies, validatedHeaders);
+				} catch (LocalSyncInvariantException localInvariant) {
+					pendingBodyRequests.remove(oldest.requestKey());
+					inflightBudget.release(oldest.range().reservedBytes());
+					bodyPipelineTelemetry.requestCompleted(oldest.peer(), oldest.range().reservedBytes());
+					throw localInvariant;
+				} catch (Exception peerFailure) {
+					pendingBodyRequests.remove(oldest.requestKey());
+					failedBodyPeers.add(oldest.peer());
+					penalizeBodyPeer(oldest.peer(), peerFailure);
+					inflightBudget.release(oldest.range().reservedBytes());
+					bodyPipelineTelemetry.requestCompleted(oldest.peer(), oldest.range().reservedBytes());
+					registry.counter("blockchain.sync.body_range.retries").increment();
 
-				if (bodies == null || bodies.isEmpty()) {
-					throw new GEValidationException("Empty body response from peer");
+					if (!inflightBudget.tryReserve(oldest.range().reservedBytes())) {
+						throw new BodyRangeDownloadException("Unable to reserve retry byte budget", peerFailure);
+					}
+					try {
+						PendingBodyRequest retry = issueBodyRangeRequest(oldest.range(), failedBodyPeers);
+						pendingRequests.add(0, retry);
+						bodyPipelineTelemetry.requestIssued(retry.peer(), retry.range().reservedBytes());
+						registry.counter("blockchain.sync.body_range.failovers").increment();
+						continue;
+					} catch (Exception noFailover) {
+						inflightBudget.release(oldest.range().reservedBytes());
+						throw new BodyRangeDownloadException(
+								"No untried peer can serve body range " + oldest.range().rangeIndex(), noFailover);
+					}
+				} finally {
+					recordStageDuration("body_download_validation", bodyAttemptStart);
 				}
 
-				if (bodies.size() != oldest.batchHeaders.size()) {
-					throw new GEValidationException("Mismatch body count from peer: got " + bodies.size()
-							+ ", expected " + oldest.batchHeaders.size());
+				// The response has now been consumed and transformed into validated blocks;
+				// release its conservative network-buffer reservation before rolling onward.
+				inflightBudget.release(oldest.range().reservedBytes());
+				bodyPipelineTelemetry.requestCompleted(oldest.peer(), oldest.range().reservedBytes());
+				if (successfulBodyPeers.add(oldest.peer()) && oldest.peer().getIdentity() != null) {
+					peerReputationService.recordSuccess(oldest.peer().getIdentity());
+					registry.counter("blockchain.sync.body_serving_peers.successful").increment();
 				}
-
+				long acceptedBodyBytes = validatedBodies.stream()
+						.map(StatelessValidatedBlock::block)
+						.mapToLong(Block::getSize)
+						.sum();
+				registry.counter("blockchain.sync.body.blocks").increment(validatedBodies.size());
+				registry.counter("blockchain.sync.body.bytes").increment(acceptedBodyBytes);
+				if (oldest.range().startIndex() != nextExpectedBodyIndex) {
+					throw new GEValidationException("Body ranges completed out of order: expected index "
+							+ nextExpectedBodyIndex + ", got " + oldest.range().startIndex());
+				}
 				for (int j = 0; j < bodies.size(); j++) {
-					BlockHeader header = oldest.batchHeaders.get(j);
+					BlockHeader header = oldest.range().headers().get(j);
 					Long height = header.getHeight();
-					List<Tx> txs = bodies.get(j);
-
-					Block block = BlockImpl.builder()
-							.header(header)
-							.txs(txs)
-							.build();
-					// Header PoW/signature/structure was validated in validateBatch(); the
-					// body must still pass the shared size/count/Merkle/TX gate.
-					StatelessValidatedHeader validatedHeader = Optional
-							.ofNullable(validatedHeaders.get(header.getHash()))
-							.orElseThrow(() -> new GEValidationException(
-									"Missing stateless header proof at height " + height));
-					StatelessValidatedBlock validatedBlock = blockValidationService
-							.validateBlockBody(block, validatedHeader);
-					block = validatedBlock.block();
+					StatelessValidatedBlock validatedBlock = validatedBodies.get(j);
+					Block block = validatedBlock.block();
 
 					currentCumulativeDifficulty = currentCumulativeDifficulty.add(header.getDifficulty());
 
@@ -460,7 +591,7 @@ public class BlockSyncManagerService {
 					if (minerIdentity == null) {
 						throw new GEValidationException("Critical: Header identity is null for block " + height);
 					}
-					Address peerIdentity = peer.getIdentity();
+					Address peerIdentity = oldest.peer().getIdentity();
 					if (peerIdentity == null) {
 						throw new GEValidationException("Critical: Peer identity is null during sync");
 					}
@@ -471,27 +602,46 @@ public class BlockSyncManagerService {
 							.identity(minerIdentity)
 							.receivedAt(block.getHeader().getTimestamp())
 							.receivedFrom(peerIdentity)
-							.connectedSource(ConnectedSource.REORG)
+							.connectedSource(ConnectedSource.SYNC)
 							.computeIndexes()
 							.build();
 
+					long storedBlockBytes = Math.max(1L, storedBlock.getBlockSize());
+					if (!currentBatch.isEmpty()
+							&& storedBlockBytes > MAX_PERSIST_BATCH_BYTES - currentBatchBytes) {
+						persistBatch(commonAncestor, currentBatch);
+						totalProcessed += currentBatch.size();
+						commonAncestor = currentBatch.get(currentBatch.size() - 1).storedBlock();
+						currentBatch.clear();
+						currentBatchBytes = 0;
+						currentPersistBatchBytes = 0;
+					}
 					currentBatch.add(new ValidatedSyncBlock(storedBlock, validatedBlock));
+					try {
+						currentBatchBytes = Math.addExact(currentBatchBytes, storedBlockBytes);
+					} catch (ArithmeticException e) {
+						throw new GEFailedException("Persistence batch byte size overflow", e);
+					}
+					peakPersistBatchBytes = Math.max(peakPersistBatchBytes, currentBatchBytes);
+					currentPersistBatchBytes = currentBatchBytes;
 
-					// Persist batch when full
-					if (currentBatch.size() >= PERSIST_BATCH_SIZE) {
+					// A single valid block may exceed the target and is persisted by itself. The
+					// threshold is checked after insertion so progress is always possible.
+					if (shouldFlushPersistenceBatch(currentBatch.size(), currentBatchBytes)) {
 						persistBatch(commonAncestor, currentBatch);
 						totalProcessed += currentBatch.size();
 						// Update ancestor for next batch
 						commonAncestor = currentBatch.get(currentBatch.size() - 1).storedBlock();
 						currentBatch.clear();
+						currentBatchBytes = 0;
+						currentPersistBatchBytes = 0;
 					}
 				}
+				nextExpectedBodyIndex += bodies.size();
 
 			} catch (Exception e) {
-				pendingBodyRequests.remove(oldest.reqId);
-				for (PendingBodyRequest req : pendingRequests) {
-					pendingBodyRequests.remove(req.reqId);
-				}
+				pendingBodyRequests.remove(oldest.requestKey());
+				cleanupPendingBodyRequests(pendingRequests);
 				throw e;
 			}
 		}
@@ -505,6 +655,94 @@ public class BlockSyncManagerService {
 		return totalProcessed;
 	}
 
+	static boolean shouldFlushPersistenceBatch(int blockCount, long serializedBlockBytes) {
+		return blockCount >= PERSIST_BATCH_SIZE || serializedBlockBytes >= MAX_PERSIST_BATCH_BYTES;
+	}
+
+	private PendingBodyRequest issueBodyRangeRequest(BodyRange range, Set<RemotePeer> failedBodyPeers)
+			throws BodyRangeDownloadException {
+		List<RemotePeer> eligiblePeers = peerRegistry.getBodySyncPeers(range.endHeight());
+		if (eligiblePeers.isEmpty()) {
+			throw new BodyRangeDownloadException(
+					"No handshaken peer advertises height " + range.endHeight());
+		}
+
+		int startOffset = Math.floorMod(range.rangeIndex(), eligiblePeers.size());
+		RemotePeer selected = null;
+		for (int offset = 0; offset < eligiblePeers.size(); offset++) {
+			RemotePeer candidate = eligiblePeers.get((startOffset + offset) % eligiblePeers.size());
+			if (!failedBodyPeers.contains(candidate) && !range.attemptedPeers().contains(candidate)) {
+				selected = candidate;
+				break;
+			}
+		}
+		if (selected == null) {
+			throw new BodyRangeDownloadException(
+					"All eligible peers already failed body range " + range.rangeIndex());
+		}
+
+		range.attemptedPeers().add(selected);
+		CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
+		long requestId = selected.reserveRequestId();
+		PeerRequestKey requestKey = new PeerRequestKey(selected, requestId);
+		registerBodyRequest(requestKey, future);
+		recordBodyRequest();
+		try {
+			selected.sendGetBlockBodies(range.expectedHashes(), requestId);
+		} catch (RuntimeException sendFailure) {
+			pendingBodyRequests.remove(requestKey);
+			throw new BodyRangeDownloadException(
+					"Failed to send body range " + range.rangeIndex(), sendFailure);
+		}
+		return new PendingBodyRequest(requestKey, range, selected, future);
+	}
+
+	private List<StatelessValidatedBlock> validateBodyResponse(PendingBodyRequest request, List<List<Tx>> bodies,
+			Map<Hash, StatelessValidatedHeader> validatedHeaders) {
+		BodyRange range = request.range();
+		if (bodies == null || bodies.isEmpty()) {
+			throw new GEValidationException("Empty body response from peer");
+		}
+		if (bodies.size() != range.headers().size()) {
+			throw new GEValidationException("Mismatch body count from peer: got " + bodies.size()
+					+ ", expected " + range.headers().size());
+		}
+
+		List<StatelessValidatedBlock> validatedBodies = new ArrayList<>(bodies.size());
+		for (int index = 0; index < bodies.size(); index++) {
+			BlockHeader header = range.headers().get(index);
+			Hash expectedHash = range.expectedHashes().get(index);
+			if (!expectedHash.equals(header.getHash())) {
+				throw new LocalSyncInvariantException("Body range header changed at index " + index);
+			}
+			StatelessValidatedHeader validatedHeader = Optional.ofNullable(validatedHeaders.get(expectedHash))
+					.orElseThrow(() -> new LocalSyncInvariantException(
+							"Missing stateless header proof at height " + header.getHeight()));
+			Block candidate = BlockImpl.builder().header(header).txs(bodies.get(index)).build();
+			// v1 body responses are positional and carry no block hash. Binding each body
+			// to the exact requested header and running the shared Merkle/body gate is the
+			// wire-compatible equivalent of validating the response hash.
+			validatedBodies.add(blockValidationService.validateBlockBody(candidate, validatedHeader));
+		}
+		return List.copyOf(validatedBodies);
+	}
+
+	private void penalizeBodyPeer(RemotePeer peer, Exception failure) {
+		Address identity = peer.getIdentity();
+		String message = failure.getMessage() != null ? failure.getMessage() : failure.getClass().getSimpleName();
+		log.warn("Rejecting body range response from {}: {}", identity, message);
+		if (identity != null) {
+			peerReputationService.recordFailure(identity);
+		}
+		peer.disconnect("Invalid sync body range: " + message);
+	}
+
+	private void cleanupPendingBodyRequests(List<PendingBodyRequest> pendingRequests) {
+		for (PendingBodyRequest request : pendingRequests) {
+			pendingBodyRequests.remove(request.requestKey());
+		}
+	}
+
 	/**
 	 * Persists a batch of blocks atomically.
 	 */
@@ -513,6 +751,11 @@ public class BlockSyncManagerService {
 			return;
 
 		masterChainLock.lock();
+		long batchBytes = blocks.stream()
+				.map(ValidatedSyncBlock::storedBlock)
+				.mapToLong(block -> Math.max(1L, block.getBlockSize()))
+				.sum();
+		long stageStart = System.currentTimeMillis();
 		try {
 			long start = System.currentTimeMillis();
 			blockReorgService.executeAtomicReorgSwap(new ValidatedSyncBatch(commonAncestor, blocks));
@@ -522,7 +765,11 @@ public class BlockSyncManagerService {
 					blocks.get(0).storedBlock().getHeight(),
 					blocks.get(blocks.size() - 1).storedBlock().getHeight(),
 					elapsed);
+			registry.counter("blockchain.sync.persistence.batches").increment();
+			registry.counter("blockchain.sync.persistence.blocks").increment(blocks.size());
+			registry.counter("blockchain.sync.persistence.bytes").increment(batchBytes);
 		} finally {
+			recordStageDuration("state_execution_db_commit", stageStart);
 			masterChainLock.unlock();
 		}
 	}
@@ -544,16 +791,18 @@ public class BlockSyncManagerService {
 		while (allHeaders.size() < SYNC_CHUNK_SIZE_HEADERS) {
 			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
 			long reqId = peer.reserveRequestId();
-			pendingHeaderRequests.put(reqId, future);
+			PeerRequestKey requestKey = new PeerRequestKey(peer, reqId);
+			registerHeaderRequest(requestKey, future);
 			recordHeaderRequest();
 			int remaining = SYNC_CHUNK_SIZE_HEADERS - allHeaders.size();
 
 			long sendStart = System.currentTimeMillis();
-			peer.sendGetBlockHeaders(currentLocators, stopHash, remaining, reqId);
-			log.debug("Sent GetHeaders request {} for {} headers from height {}", reqId, remaining,
-					localBest.getHeight());
-
 			try {
+				// Keep registration and send in the same cleanup scope. A synchronous
+				// channel failure must not leave a request that can never complete.
+				peer.sendGetBlockHeaders(currentLocators, stopHash, remaining, reqId);
+				log.debug("Sent GetHeaders request {} for {} headers from height {}", reqId, remaining,
+						localBest.getHeight());
 				List<BlockHeader> batch = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 				long waitTime = System.currentTimeMillis() - sendStart;
 				if (waitTime > 2000) {
@@ -609,7 +858,7 @@ public class BlockSyncManagerService {
 				currentLocators.add(lastCachedHash); // Use cached hash
 
 			} catch (Exception e) {
-				pendingHeaderRequests.remove(reqId);
+				pendingHeaderRequests.remove(requestKey);
 				throw e;
 			}
 		}
@@ -623,6 +872,14 @@ public class BlockSyncManagerService {
 
 	private void recordBodyRequest() {
 		syncRequestTelemetry.recordBodyRequest();
+	}
+
+	void registerHeaderRequest(PeerRequestKey requestKey, CompletableFuture<List<BlockHeader>> future) {
+		pendingHeaderRequests.put(requestKey, future);
+	}
+
+	void registerBodyRequest(PeerRequestKey requestKey, CompletableFuture<List<List<Tx>>> future) {
+		pendingBodyRequests.put(requestKey, future);
 	}
 
 	static final class SyncRequestTelemetry {
@@ -715,8 +972,168 @@ public class BlockSyncManagerService {
 		return Map.copyOf(validatedHeaders);
 	}
 
-	private record PendingBodyRequest(long reqId, List<BlockHeader> batchHeaders,
-			CompletableFuture<List<List<Tx>>> future, int startIndex) {
+	static final class BodyInflightBudget {
+		private final long limitBytes;
+		private long reservedBytes;
+
+		BodyInflightBudget(long limitBytes) {
+			if (limitBytes <= 0) {
+				throw new IllegalArgumentException("Body in-flight byte limit must be positive");
+			}
+			this.limitBytes = limitBytes;
+		}
+
+		synchronized boolean tryReserve(long bytes) {
+			if (bytes <= 0 || bytes > limitBytes - reservedBytes) {
+				return false;
+			}
+			reservedBytes += bytes;
+			return true;
+		}
+
+		synchronized void release(long bytes) {
+			if (bytes <= 0 || bytes > reservedBytes) {
+				throw new IllegalStateException("Invalid body in-flight byte release");
+			}
+			reservedBytes -= bytes;
+		}
+
+		synchronized long reservedBytes() {
+			return reservedBytes;
+		}
+	}
+
+	static final class BodyPipelineTelemetry {
+		private final Map<RemotePeer, Integer> activeRequestsByPeer = new HashMap<>();
+		private long reservedBytes;
+		private long peakReservedBytes;
+		private int activeRequests;
+		private int peakActiveRequests;
+
+		synchronized void begin() {
+			activeRequestsByPeer.clear();
+			reservedBytes = 0;
+			peakReservedBytes = 0;
+			activeRequests = 0;
+			peakActiveRequests = 0;
+		}
+
+		synchronized void requestIssued(RemotePeer peer, long bytes) {
+			reservedBytes = Math.addExact(reservedBytes, bytes);
+			peakReservedBytes = Math.max(peakReservedBytes, reservedBytes);
+			activeRequests++;
+			peakActiveRequests = Math.max(peakActiveRequests, activeRequests);
+			activeRequestsByPeer.merge(peer, 1, Integer::sum);
+		}
+
+		synchronized void requestCompleted(RemotePeer peer, long bytes) {
+			if (bytes <= 0 || bytes > reservedBytes) {
+				throw new IllegalStateException("Invalid body pipeline telemetry release");
+			}
+			reservedBytes -= bytes;
+			activeRequests--;
+			Integer requests = activeRequestsByPeer.get(peer);
+			if (requests == null || requests <= 0) {
+				throw new IllegalStateException("Body pipeline peer was not active");
+			}
+			if (requests == 1) {
+				activeRequestsByPeer.remove(peer);
+			} else {
+				activeRequestsByPeer.put(peer, requests - 1);
+			}
+		}
+
+		synchronized void end() {
+			activeRequestsByPeer.clear();
+			reservedBytes = 0;
+			activeRequests = 0;
+		}
+
+		synchronized Snapshot snapshot() {
+			return new Snapshot(reservedBytes, peakReservedBytes, activeRequests,
+					peakActiveRequests, activeRequestsByPeer.size());
+		}
+
+		record Snapshot(long reservedBytes, long peakReservedBytes, int activeRequests,
+				int peakActiveRequests, int activePeers) {
+		}
+	}
+
+	private static final class BodyRange {
+		private final int rangeIndex;
+		private final int startIndex;
+		private final List<BlockHeader> headers;
+		private final List<Hash> expectedHashes;
+		private final long reservedBytes;
+		private final Set<RemotePeer> attemptedPeers = new HashSet<>();
+
+		private BodyRange(int rangeIndex, int startIndex, List<BlockHeader> headers,
+				List<Hash> expectedHashes, long reservedBytes) {
+			this.rangeIndex = rangeIndex;
+			this.startIndex = startIndex;
+			this.headers = headers;
+			this.expectedHashes = expectedHashes;
+			this.reservedBytes = reservedBytes;
+		}
+
+		static BodyRange create(int rangeIndex, int startIndex, List<BlockHeader> headers, long maxBlockSize) {
+			List<BlockHeader> immutableHeaders = List.copyOf(headers);
+			List<Hash> hashes = immutableHeaders.stream().map(BlockHeader::getHash).toList();
+			long reservation;
+			try {
+				reservation = Math.multiplyExact(maxBlockSize, immutableHeaders.size());
+			} catch (ArithmeticException e) {
+				throw new IllegalArgumentException("Body range reservation overflow", e);
+			}
+			return new BodyRange(rangeIndex, startIndex, immutableHeaders, hashes, reservation);
+		}
+
+		int rangeIndex() { return rangeIndex; }
+		int startIndex() { return startIndex; }
+		List<BlockHeader> headers() { return headers; }
+		List<Hash> expectedHashes() { return expectedHashes; }
+		long reservedBytes() { return reservedBytes; }
+		long endHeight() { return headers.get(headers.size() - 1).getHeight(); }
+		Set<RemotePeer> attemptedPeers() { return attemptedPeers; }
+	}
+
+	private record PendingBodyRequest(PeerRequestKey requestKey, BodyRange range,
+			RemotePeer peer, CompletableFuture<List<List<Tx>>> future) {
+	}
+
+	private static class BodyRangeDownloadException extends Exception {
+		BodyRangeDownloadException(String message) {
+			super(message);
+		}
+
+		BodyRangeDownloadException(String message, Throwable cause) {
+			super(message, cause);
+		}
+	}
+
+	private static class LocalSyncInvariantException extends GEFailedException {
+		LocalSyncInvariantException(String message) {
+			super(message);
+		}
+	}
+
+	record PeerRequestKey(RemotePeer peer, long requestId) {
+		PeerRequestKey {
+			if (peer == null) {
+				throw new IllegalArgumentException("peer is required");
+			}
+		}
+
+		@Override
+		public boolean equals(Object other) {
+			return this == other || other instanceof PeerRequestKey that
+					&& peer == that.peer && requestId == that.requestId;
+		}
+
+		@Override
+		public int hashCode() {
+			return 31 * System.identityHashCode(peer) + Long.hashCode(requestId);
+		}
 	}
 
 	// --- EVENT LISTENERS ---
@@ -724,13 +1141,15 @@ public class BlockSyncManagerService {
 	@EventListener
 	public void onHeadersReceived(P2PHeadersReceivedEvent event) {
 		long reqId = event.getRequestId();
-		CompletableFuture<List<BlockHeader>> future = pendingHeaderRequests.remove(reqId);
+		PeerRequestKey requestKey = new PeerRequestKey(event.getPeer(), reqId);
+		CompletableFuture<List<BlockHeader>> future = pendingHeaderRequests.remove(requestKey);
 
 		if (future != null) {
 			future.complete(event.getHeaders());
 		} else if (reqId == 0 && event.getHeaders().size() == 1) {
 			handleBroadcastHeader(event.getPeer(), event.getHeaders().get(0));
 		} else {
+			recordUnmatchedResponse("headers", reqId, event.getPeer(), pendingHeaderRequests);
 			log.debug("Received headers with ID {} but no pending request found", reqId);
 		}
 	}
@@ -776,15 +1195,21 @@ public class BlockSyncManagerService {
 			CompletableFuture<List<List<Tx>>> future = new CompletableFuture<>();
 
 			long reqId = peer.reserveRequestId();
-			pendingBodyRequests.put(reqId, future);
+			PeerRequestKey requestKey = new PeerRequestKey(peer, reqId);
+			registerBodyRequest(requestKey, future);
 
 			log.debug("Headers-First: Requesting body for #{} from {}", header.getHeight(), peer.getIdentity());
 
-			peer.sendGetBlockBodies(new ArrayList<>(List.of(headerHash)), reqId);
+			try {
+				peer.sendGetBlockBodies(new ArrayList<>(List.of(headerHash)), reqId);
+			} catch (RuntimeException sendFailure) {
+				pendingBodyRequests.remove(requestKey);
+				throw sendFailure;
+			}
 
 			future.orTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
 					.thenAcceptAsync(bodies -> {
-						pendingBodyRequests.remove(reqId);
+						pendingBodyRequests.remove(requestKey);
 
 						if (bodies == null || bodies.isEmpty()) {
 							log.warn("Peer {} sent empty body response for #{}", peer.getIdentity(),
@@ -821,7 +1246,7 @@ public class BlockSyncManagerService {
 							log.warn("Failed to download/process broadcast body for #{} - {}", header.getHeight(),
 									e.getMessage());
 						}
-						pendingBodyRequests.remove(reqId);
+						pendingBodyRequests.remove(requestKey);
 						return null;
 					})
 					.whenComplete((v, e) -> {
@@ -845,12 +1270,22 @@ public class BlockSyncManagerService {
 
 	@EventListener
 	public void onBodiesReceived(P2PBlockBodiesReceivedEvent event) {
-		CompletableFuture<List<List<Tx>>> future = pendingBodyRequests.remove(event.getRequestId());
+		PeerRequestKey requestKey = new PeerRequestKey(event.getPeer(), event.getRequestId());
+		CompletableFuture<List<List<Tx>>> future = pendingBodyRequests.remove(requestKey);
 		if (future != null) {
 			future.complete(event.getBodies());
 		} else {
+			recordUnmatchedResponse("bodies", event.getRequestId(), event.getPeer(), pendingBodyRequests);
 			log.debug("Received bodies with ID {} but no pending request found (Timed out?)", event.getRequestId());
 		}
+	}
+
+	private void recordUnmatchedResponse(String type, long requestId, RemotePeer responsePeer,
+			Map<PeerRequestKey, ?> pendingRequests) {
+		boolean belongsToAnotherPeer = pendingRequests.keySet().stream()
+				.anyMatch(key -> key.requestId() == requestId && key.peer() != responsePeer);
+		registry.counter("p2p.sync.responses.rejected", "type", type, "reason",
+				belongsToAnotherPeer ? "wrong_peer" : "unsolicited").increment();
 	}
 
 	@EventListener

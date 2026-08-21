@@ -27,7 +27,10 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
@@ -67,6 +70,9 @@ public class RemotePeer {
 
 	volatile Address identity;
 	volatile String clientVersion;
+	@Getter(lombok.AccessLevel.NONE)
+	@Setter(lombok.AccessLevel.NONE)
+	volatile Set<String> capabilities = Set.of();
 
 	volatile BigInteger totalDifficulty;
 	volatile Hash headHash;
@@ -87,6 +93,32 @@ public class RemotePeer {
 
 	public long reserveRequestId() {
 		return requestIdCounter.incrementAndGet();
+	}
+
+	/**
+	 * Commits the capabilities negotiated by a successful STATUS handshake.
+	 * PONG status updates intentionally cannot renegotiate this snapshot.
+	 */
+	public void completeCapabilityNegotiation(List<String> negotiatedCapabilities) {
+		if (negotiatedCapabilities == null || negotiatedCapabilities.isEmpty()) {
+			capabilities = Set.of();
+			return;
+		}
+		capabilities = Collections.unmodifiableSet(new LinkedHashSet<>(negotiatedCapabilities));
+	}
+
+	/** Returns the immutable capability snapshot negotiated at handshake time. */
+	public Set<String> getCapabilities() {
+		return capabilities;
+	}
+
+	/** Explicit snapshot alias for callers that need to retain the result. */
+	public Set<String> getCapabilitiesSnapshot() {
+		return capabilities;
+	}
+
+	public boolean supportsCapability(String capability) {
+		return capability != null && capabilities.contains(capability);
 	}
 
 	/**

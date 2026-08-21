@@ -43,15 +43,20 @@ public final class ProductionNetworkSettingsExtension implements BeforeEachCallb
 
 	@Override
 	public void beforeEach(ExtensionContext context) {
+		install(Network.MAINNET);
+	}
+
+	/** Installs frozen production settings for an explicit network in compatibility tests. */
+	public static void install(Network network) {
 		NetworkSettingsProvider.resetForTesting();
 
 		GeneralProperties generalProperties = new GeneralProperties();
-		generalProperties.setNetwork(Network.MAINNET);
+		generalProperties.setNetwork(network);
 		MockEnvironment environment = new MockEnvironment();
 		environment.setActiveProfiles("prod");
 		SandboxRuntimeContext runtimeContext = new SandboxRuntimeContext(
 				ExecutionDomain.PRODUCTION,
-				Network.MAINNET,
+				network,
 				Optional.empty());
 
 		new NetworkSettingsProvider(generalProperties, environment, runtimeContext).init();

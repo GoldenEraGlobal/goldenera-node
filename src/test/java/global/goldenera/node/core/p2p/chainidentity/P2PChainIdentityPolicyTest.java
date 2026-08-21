@@ -39,6 +39,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import global.goldenera.cryptoj.common.BlockHeaderImpl;
 import global.goldenera.cryptoj.datatypes.Address;
@@ -46,6 +48,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.enums.BlockVersion;
 import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.ProductionNetworkSettingsExtension;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesProvider;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesSnapshot;
 import global.goldenera.node.core.node.capabilities.ProofOfWorkRuntimeMode;
@@ -146,25 +149,28 @@ class P2PChainIdentityPolicyTest {
 				.hasMessageContaining("does not match");
 	}
 
-	@Test
-	void productionRequiresMiningEconomicsCapabilityAtActivationButNotBeforeIt() {
+	@ParameterizedTest
+	@CsvSource({ "MAINNET,731503", "TESTNET,716824" })
+	void productionRequiresMiningEconomicsCapabilityExactlyAtEachNetworkActivation(
+			Network network, long activationHeight) {
+		initializeProductionNetwork(network);
 		StoredChainIdentity identity = new StoredChainIdentity(
 				StoredChainIdentity.CURRENT_FORMAT_VERSION,
-				Network.TESTNET.getCode(),
-				"testnet-production",
+				network.getCode(),
+				network.name().toLowerCase() + "-production",
 				"0x" + "1".repeat(64),
 				null);
 		P2PChainIdentityPolicy policy = policy(
-				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty()),
+				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, network, Optional.empty()),
 				identity);
 
-		assertThat(policy.validate(status(NOT_ALLOWLISTED, List.of(), 731_502)).mode())
+		assertThat(policy.validate(status(network, NOT_ALLOWLISTED, List.of(), activationHeight - 1)).mode())
 				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
-		assertThatThrownBy(() -> policy.validate(status(NOT_ALLOWLISTED, List.of(), 731_503)))
+		assertThatThrownBy(() -> policy.validate(status(network, NOT_ALLOWLISTED, List.of(), activationHeight)))
 				.isInstanceOf(RuntimeException.class)
 				.hasMessageContaining("mining-economics-v1");
 		assertThat(policy.validate(status(
-				NOT_ALLOWLISTED, List.of("mining-economics-v1"), 731_503)).mode())
+				network, NOT_ALLOWLISTED, List.of("mining-economics-v1"), activationHeight)).mode())
 				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
 	}
 
@@ -238,10 +244,14 @@ class P2PChainIdentityPolicyTest {
 	}
 
 	private P2PStatusDto status(Address identity, List<String> capabilities, long height) {
+		return status(Network.TESTNET, identity, capabilities, height);
+	}
+
+	private P2PStatusDto status(Network network, Address identity, List<String> capabilities, long height) {
 		return P2PStatusDto.builder()
 				.protocolVersion(1)
 				.nodeVersion("test")
-				.network(Network.TESTNET)
+				.network(network)
 				.nodeIdentity(identity)
 				.capabilities(capabilities)
 				.cumulativeDifficulty(BigInteger.ONE)
@@ -258,6 +268,10 @@ class P2PChainIdentityPolicyTest {
 						.signature(Signature.ZERO)
 						.build())
 				.build();
+	}
+
+	private void initializeProductionNetwork(Network network) {
+		ProductionNetworkSettingsExtension.install(network);
 	}
 
 	private record Fixture(P2PChainIdentityPolicy policy, StoredChainIdentity identity) {

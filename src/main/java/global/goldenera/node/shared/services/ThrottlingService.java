@@ -64,6 +64,12 @@ public class ThrottlingService {
 
     private static final Map<Pattern, Integer> ENDPOINT_COSTS = new LinkedHashMap<>();
     static {
+        // ============= CHECKPOINT SNAPSHOT DISTRIBUTION =============
+        // Keep the cost explicit but low: the bootstrap client downloads only two
+        // chunks in parallel and must not be pushed into source failover by normal use.
+        ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/(archive/)?manifest"), 1);
+        ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/(archive/)?chunks/[0-9]+"), 1);
+
         // ============= BRIDGE API =============
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/block/last.*"), 3);
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/tx/by-hash/.*"), 5);

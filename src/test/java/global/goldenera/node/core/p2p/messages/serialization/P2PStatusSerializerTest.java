@@ -59,6 +59,9 @@ class P2PStatusSerializerTest {
 		assertThat(P2PStatusSerializer.decodeStatus(mainnet).getProtocolVersion()).isEqualTo(1);
 		assertThat(P2PStatusSerializer.decodeStatus(mainnet).getNetwork().getCode()).isZero();
 		assertThat(P2PStatusSerializer.decodeStatus(testnet).getNetwork().getCode()).isEqualTo(1);
+		assertThat(P2PStatusSerializer.decodeStatus(mainnet).getCapabilities()).isEmpty();
+		assertThat(P2PStatusSerializer.encodeStatus(P2PStatusSerializer.decodeStatus(mainnet)))
+				.isEqualTo(mainnet);
 	}
 
 	@Test
@@ -70,6 +73,17 @@ class P2PStatusSerializerTest {
 
 		assertThat(decoded.getCapabilities()).containsExactly("chain-identity-v1", capability);
 		assertThat(decoded.getProtocolVersion()).isEqualTo(1);
+	}
+
+	@Test
+	void roundTripCarriesFutureSyncCapabilityWithoutChangingProtocolVersion() {
+		P2PStatusDto decoded = P2PStatusSerializer.decodeStatus(P2PStatusSerializer.encodeStatus(
+				status(Network.TESTNET, List.of("chain-identity-v1", "state-sync-v1"))));
+
+		assertThat(decoded.getProtocolVersion()).isEqualTo(1);
+		assertThat(decoded.getCapabilities()).containsExactly("chain-identity-v1", "state-sync-v1");
+		assertThatThrownBy(() -> decoded.getCapabilities().add("mutated"))
+				.isInstanceOf(UnsupportedOperationException.class);
 	}
 
 	@Test

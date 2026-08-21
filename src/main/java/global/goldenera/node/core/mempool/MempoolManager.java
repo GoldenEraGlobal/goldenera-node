@@ -50,6 +50,8 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
@@ -404,12 +406,34 @@ public class MempoolManager {
 	 */
 	@EventListener
 	public void onBlockConnected(BlockConnectedEvent event) {
+		if (event.isBatchMember()) {
+			return;
+		}
 		Block newBlock = event.getBlock();
 		if (newBlock.getHeight() == 0) { // Genesis block
 			return;
 		}
 		mempoolEventExecutor.execute(() -> processMempoolBlockEvent(
 				"connect", newBlock, () -> processBlockConnected(newBlock)));
+	}
+
+	@EventListener
+	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
+		if (event.getConnectedSource() != ConnectedSource.SYNC) {
+			return;
+		}
+		Block tip = event.getTipEvent().getBlock();
+		mempoolEventExecutor.execute(() -> processMempoolBlockEvent(
+				"connect", tip, () -> processBlocksConnected(event.getBlockEvents())));
+	}
+
+	private synchronized void processBlocksConnected(List<BlockConnectedEvent> events) {
+		List<Tx> txs = events.stream()
+				.map(BlockConnectedEvent::getBlock)
+				.flatMap(block -> block.getTxs().stream())
+				.toList();
+		log.debug("Mempool: Processing {} synchronized blocks as one eviction/promotion batch.", events.size());
+		mempoolStore.processNewBlock(txs);
 	}
 
 	private synchronized void processBlockConnected(Block newBlock) {

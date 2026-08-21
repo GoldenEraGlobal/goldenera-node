@@ -43,6 +43,8 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -106,6 +108,21 @@ public class MiningEconomicsMetricsService {
 	@EventListener
 	@Order(Ordered.LOWEST_PRECEDENCE)
 	public void onBlockConnected(BlockConnectedEvent event) {
+		if (event.isBatchMember()) {
+			return;
+		}
+		refreshForHead(event);
+	}
+
+	@EventListener
+	@Order(Ordered.LOWEST_PRECEDENCE)
+	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			refreshForHead(event.getTipEvent());
+		}
+	}
+
+	private void refreshForHead(BlockConnectedEvent event) {
 		lastBlockTimestamp.set(event.getBlock().getHeader().getTimestamp());
 		try {
 			refresh(chainHeadStateCache.getHeadState());

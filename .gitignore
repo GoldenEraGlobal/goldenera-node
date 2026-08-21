@@ -79,6 +79,9 @@ application-h2-2.properties
 # Genesis dev configurations (each developer creates their own)
 src/main/resources/genesis/*-dev.json
 .agents
+.agents/*
+.agents/skills/*
 .zed
 CLAUDE.md
 AGENTS.md
+.codex

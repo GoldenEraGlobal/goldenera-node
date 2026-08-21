@@ -25,6 +25,7 @@ package global.goldenera.node.core.blockchain.reorg;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -40,6 +41,7 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
@@ -124,10 +126,12 @@ public class ChainSwitchService {
         masterChainLock.lock();
         try {
             StoredBlock currentBestBlock = chainQueryService.getLatestStoredBlockOrThrow();
+            StoredBlock canonicalAncestor = validateCandidateWork(
+                    commonAncestor, newChainHeaders, currentBestBlock);
             // findChainFrom returns List<StoredBlock> - use StoredBlock.getHash() for
             // comparison
             List<StoredBlock> oldChainStored = chainQueryService.findChainFrom(
-                    commonAncestor.getHash(), currentBestBlock.getHash());
+                    canonicalAncestor.getHash(), currentBestBlock.getHash());
             Collections.reverse(oldChainStored);
 
             List<BlockDisconnectedEvent> blockDisconnectedEvents = new ArrayList<>();
@@ -138,10 +142,10 @@ public class ChainSwitchService {
 
             if (isReorg || oldChainStored.size() > 0) {
                 log.info("{} STARTING: disconnecting {} blocks, connecting {} blocks (common ancestor at height {})",
-                        opName, oldChainStored.size(), newChainHeaders.size(), commonAncestor.getHeight());
+                        opName, oldChainStored.size(), newChainHeaders.size(), canonicalAncestor.getHeight());
             } else {
                 log.info("SYNC: connecting {} blocks from height {}",
-                        newChainHeaders.size(), commonAncestor.getHeight() + 1);
+                        newChainHeaders.size(), canonicalAncestor.getHeight() + 1);
             }
 
             try {
@@ -160,7 +164,7 @@ public class ChainSwitchService {
                         blockDisconnectedEvents.add(new BlockDisconnectedEvent(this, blockToDisconnect));
                     }
 
-                    Block previousBlock = commonAncestor.getBlock();
+                    Block previousBlock = canonicalAncestor.getBlock();
 
                     WorldState worldState = worldStateFactory
                             .createForValidation(previousBlock.getHeader().getStateRootHash());
@@ -238,7 +242,7 @@ public class ChainSwitchService {
 
                         BlockConnectedEvent event = new BlockConnectedEvent(
                                 this,
-                                ConnectedSource.REORG,
+                                isReorg ? ConnectedSource.REORG : ConnectedSource.SYNC,
                                 blockToConnect,
                                 worldState.getBalanceDiffs(),
                                 worldState.getNonceDiffs(),
@@ -257,7 +261,8 @@ public class ChainSwitchService {
                                 result.getActualBurnAmounts(),
                                 blockEvents,
                                 null,
-                                Instant.now());
+                                Instant.now(),
+                                !isReorg);
 
                         blockConnectedEvents.add(event);
                         worldState.prepareForNextBlock();
@@ -298,6 +303,11 @@ public class ChainSwitchService {
             blockDisconnectedEvents.forEach(applicationEventPublisher::publishEvent);
             blockConnectedEvents.forEach(applicationEventPublisher::publishEvent);
 
+            if (!isReorg && !blockConnectedEvents.isEmpty()) {
+                applicationEventPublisher.publishEvent(new BlockConnectionBatchCompletedEvent(
+                        this, ConnectedSource.SYNC, blockConnectedEvents));
+            }
+
             // Publish BlockReorgEvent for webhook notifications when it's a real reorg
             if (isReorg && !oldChainStored.isEmpty()) {
                 StoredBlock oldTip = oldChainStored.get(0); // First in reversed list is the old tip
@@ -311,6 +321,65 @@ public class ChainSwitchService {
         } finally {
             masterChainLock.unlock();
         }
+    }
+
+    /**
+     * Recomputes the candidate's cumulative work from canonical data while the
+     * master-chain lock is held. Advertised peer difficulty and caller-provided
+     * cumulative-difficulty metadata are never sufficient to authorize a swap.
+     */
+    private StoredBlock validateCandidateWork(
+            StoredBlock requestedAncestor,
+            List<StoredBlock> candidateBlocks,
+            StoredBlock currentBestBlock) {
+        if (candidateBlocks.isEmpty()) {
+            throw new GEFailedException("Chain switch candidate must contain at least one block");
+        }
+
+        StoredBlock canonicalAncestor = chainQueryService
+                .getCanonicalStoredBlockByHash(requestedAncestor.getHash())
+                .orElseThrow(() -> new GEFailedException(
+                        "Chain switch ancestor is no longer canonical: " + requestedAncestor.getHash()));
+
+        BigInteger currentWork = requireCumulativeDifficulty(currentBestBlock, "current head");
+        BigInteger candidateWork = requireCumulativeDifficulty(canonicalAncestor, "common ancestor");
+        StoredBlock previous = canonicalAncestor;
+
+        for (StoredBlock candidate : candidateBlocks) {
+            Block block = candidate.getBlock();
+            if (!block.getHeader().getPreviousHash().equals(previous.getHash())
+                    || block.getHeight() != previous.getHeight() + 1) {
+                throw new GEFailedException(
+                        "Chain switch candidate is not contiguous at height " + block.getHeight());
+            }
+
+            BigInteger difficulty = block.getHeader().getDifficulty();
+            if (difficulty == null || difficulty.signum() <= 0) {
+                throw new GEFailedException(
+                        "Chain switch candidate has invalid difficulty at height " + block.getHeight());
+            }
+            candidateWork = candidateWork.add(difficulty);
+            if (!candidateWork.equals(candidate.getCumulativeDifficulty())) {
+                throw new GEFailedException(
+                        "Chain switch cumulative difficulty mismatch at height " + block.getHeight());
+            }
+            previous = candidate;
+        }
+
+        if (candidateWork.compareTo(currentWork) <= 0) {
+            throw new GEFailedException(
+                    "Chain switch candidate does not have more cumulative difficulty than current head"
+                            + " (candidate: " + candidateWork + ", current: " + currentWork + ")");
+        }
+        return canonicalAncestor;
+    }
+
+    private BigInteger requireCumulativeDifficulty(StoredBlock block, String description) {
+        BigInteger cumulativeDifficulty = block.getCumulativeDifficulty();
+        if (cumulativeDifficulty == null || cumulativeDifficulty.signum() <= 0) {
+            throw new GEFailedException("Invalid cumulative difficulty for " + description);
+        }
+        return cumulativeDifficulty;
     }
 
 }

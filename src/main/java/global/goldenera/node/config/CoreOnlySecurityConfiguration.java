@@ -27,6 +27,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -90,6 +91,8 @@ public class CoreOnlySecurityConfiguration {
 				.httpBasic(basic -> basic.disable())
 				.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.authorizeHttpRequests(auth -> {
+					auth.requestMatchers(HttpMethod.GET,
+							"/api/core/v1/sync/snapshots/checkpoint/**").permitAll();
 					if (securityProperties.isCoreApiEnabled()) {
 						auth.anyRequest().denyAll();
 					} else {

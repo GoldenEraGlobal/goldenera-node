@@ -24,6 +24,7 @@
 package global.goldenera.node.core.p2p.netty.handlers;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
@@ -47,6 +48,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeaderImpl;
+import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
@@ -58,6 +60,7 @@ import global.goldenera.node.core.p2p.chainidentity.P2PChainCapability;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Mode;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Validation;
+import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PHandshakeCompletedEvent;
 import global.goldenera.node.core.p2p.events.P2PMempoolHashesRequestedEvent;
 import global.goldenera.node.core.p2p.events.P2PPeerHeadAdvancedEvent;
@@ -65,7 +68,9 @@ import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.messages.NetworkMessage;
 import global.goldenera.node.core.p2p.messages.P2PEnvelope;
+import global.goldenera.node.core.p2p.messages.dtos.common.P2PTxDto;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
+import global.goldenera.node.core.p2p.messages.dtos.sync.P2PBlockBodiesDto;
 import global.goldenera.node.core.p2p.messages.validation.P2PValidation;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
 import global.goldenera.node.core.p2p.netty.P2PChannelAttributes;
@@ -111,6 +116,35 @@ class P2PInboundHandlerChainIdentityTest {
 	}
 
 	@Test
+	void successfulHandshakeCommitsAnImmutableDeduplicatedCapabilitySnapshot() {
+		Fixture fixture = fixture(Runnable::run);
+		P2PStatusDto status = status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.ONE,
+				List.of("chain-identity-v1", "state-sync-v1", "state-sync-v1"));
+
+		fixture.channel.writeInbound(new P2PEnvelope(7, P2PMessageType.STATUS, status));
+
+		assertThat(fixture.channel.isActive()).isTrue();
+		assertThat(fixture.peer.getCapabilitiesSnapshot())
+				.containsExactlyInAnyOrder("chain-identity-v1", "state-sync-v1");
+		assertThat(fixture.peer.supportsCapability("state-sync-v1")).isTrue();
+		assertThat(fixture.peer.supportsCapability("sync-v2")).isFalse();
+		assertThatThrownBy(() -> fixture.peer.getCapabilities().add("mutated"))
+				.isInstanceOf(UnsupportedOperationException.class);
+	}
+
+	@Test
+	void legacyEmptyCapabilitiesRemainSupportedAndProduceEmptySnapshot() {
+		Fixture fixture = fixture(Runnable::run);
+
+		fixture.channel.writeInbound(new P2PEnvelope(7, P2PMessageType.STATUS,
+				status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.ONE, List.of())));
+
+		assertThat(fixture.channel.isActive()).isTrue();
+		assertThat(fixture.peer.getCapabilitiesSnapshot()).isEmpty();
+		assertThat(fixture.peer.supportsCapability("state-sync-v1")).isFalse();
+	}
+
+	@Test
 	void rejectedStatusPublishesNoHandshakeEvent() {
 		Fixture fixture = fixture(Runnable::run);
 		when(fixture.policy.validate(any())).thenThrow(new GEFailedException("chain mismatch"));
@@ -121,7 +155,23 @@ class P2PInboundHandlerChainIdentityTest {
 				status(REMOTE_IDENTITY, BigInteger.ONE)));
 
 		assertThat(fixture.channel.isActive()).isFalse();
+		assertThat(fixture.peer.getIdentity()).isNull();
+		assertThat(fixture.peer.getCapabilitiesSnapshot()).isEmpty();
 		verify(fixture.publisher, never()).publishEvent(any(P2PHandshakeCompletedEvent.class));
+	}
+
+	@Test
+	void pongCannotRenegotiateHandshakeCapabilities() {
+		Fixture fixture = fixture(Runnable::run);
+		fixture.channel.writeInbound(new P2PEnvelope(1, P2PMessageType.STATUS,
+				status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.ONE, List.of("state-sync-v1"))));
+
+		fixture.channel.writeInbound(new P2PEnvelope(2, P2PMessageType.PONG,
+				status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.TEN, List.of("sync-v2"))));
+
+		assertThat(fixture.channel.isActive()).isTrue();
+		assertThat(fixture.peer.getCapabilitiesSnapshot()).containsExactly("state-sync-v1");
+		assertThat(fixture.peer.supportsCapability("sync-v2")).isFalse();
 	}
 
 	@Test
@@ -254,6 +304,23 @@ class P2PInboundHandlerChainIdentityTest {
 		verify(fixture.publisher, times(1)).publishEvent(any(P2PPeerHeadAdvancedEvent.class));
 	}
 
+	@Test
+	void blockBodiesAreForwardedWithoutEagerTransactionValidation() {
+		Fixture fixture = fixture(Runnable::run);
+		fixture.channel.writeInbound(new P2PEnvelope(
+				1, P2PMessageType.STATUS, status(REMOTE_IDENTITY, BigInteger.ONE)));
+		clearInvocations(fixture.publisher, fixture.validation);
+		Tx transaction = mock(Tx.class);
+		P2PBlockBodiesDto bodies = P2PBlockBodiesDto.builder()
+				.bodies(List.of(List.of(P2PTxDto.builder().tx(transaction).build())))
+				.build();
+
+		fixture.channel.writeInbound(new P2PEnvelope(41, P2PMessageType.BLOCK_BODIES, bodies));
+
+		verify(fixture.validation, never()).validateTxDto(any());
+		verify(fixture.publisher).publishEvent(any(P2PBlockBodiesReceivedEvent.class));
+	}
+
 	private Fixture fixture(Executor executor) {
 		ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
 		PeerRegistry peerRegistry = mock(PeerRegistry.class);
@@ -275,6 +342,7 @@ class P2PInboundHandlerChainIdentityTest {
 		ThrottlingProperties throttling = new ThrottlingProperties();
 		throttling.setP2pCapacity(100);
 		throttling.setP2pRefillTokens(100);
+		P2PValidation validation = mock(P2PValidation.class);
 		P2PInboundHandler handler = new P2PInboundHandler(
 				publisher,
 				peerRegistry,
@@ -282,7 +350,7 @@ class P2PInboundHandlerChainIdentityTest {
 				generalProperties,
 				new P2PStatusProvider(chainQuery, generalProperties, identityService, policy),
 				executor,
-				mock(P2PValidation.class),
+				validation,
 				policy,
 				new SimpleMeterRegistry(),
 				throttling);
@@ -290,7 +358,7 @@ class P2PInboundHandlerChainIdentityTest {
 		channel.readOutbound();
 		ArgumentCaptor<RemotePeer> peer = ArgumentCaptor.forClass(RemotePeer.class);
 		verify(peerRegistry).register(peer.capture());
-		return new Fixture(channel, publisher, policy, reputation, peer.getValue());
+		return new Fixture(channel, publisher, policy, reputation, validation, peer.getValue());
 	}
 
 	private P2PStatusDto status(Address identity, BigInteger difficulty) {
@@ -298,12 +366,17 @@ class P2PInboundHandlerChainIdentityTest {
 	}
 
 	private P2PStatusDto status(Network network, Address identity, BigInteger difficulty) {
+		return status(network, identity, difficulty, List.of("chain-identity-v1"));
+	}
+
+	private P2PStatusDto status(Network network, Address identity, BigInteger difficulty,
+			List<String> capabilities) {
 		return P2PStatusDto.builder()
 				.protocolVersion(1)
 				.nodeVersion("peer-v1")
 				.network(network)
 				.nodeIdentity(identity)
-				.capabilities(List.of("chain-identity-v1"))
+				.capabilities(capabilities)
 				.cumulativeDifficulty(difficulty)
 				.bestBlockHeader(header(identity))
 				.build();
@@ -329,6 +402,7 @@ class P2PInboundHandlerChainIdentityTest {
 			ApplicationEventPublisher publisher,
 			P2PChainIdentityPolicy policy,
 			PeerReputationService reputation,
+			P2PValidation validation,
 			RemotePeer peer) {
 	}
 

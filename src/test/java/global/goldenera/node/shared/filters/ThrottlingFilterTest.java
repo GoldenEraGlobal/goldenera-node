@@ -23,9 +23,11 @@
  */
 package global.goldenera.node.shared.filters;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -37,6 +39,9 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import global.goldenera.node.shared.services.ThrottlingService;
 
 class ThrottlingFilterTest {
+
+	private static final String SNAPSHOT_MANIFEST_PATH =
+			"/api/core/v1/sync/snapshots/checkpoint/manifest";
 
 	@Test
 	void bridgeRequestsAreSubjectToSpecificApiRateLimit() throws Exception {
@@ -52,5 +57,41 @@ class ThrottlingFilterTest {
 				new MockFilterChain());
 
 		verify(service).checkSpecificLimit(request, "127.0.0.1", false);
+	}
+
+	@Test
+	void snapshotRequestsAreSubjectToGlobalAndSpecificRateLimits() throws Exception {
+		ThrottlingService service = mock(ThrottlingService.class);
+		when(service.checkGlobalIpLimit(any())).thenReturn(true);
+		when(service.checkSpecificLimit(any(), eq("127.0.0.1"), eq(false))).thenReturn(true);
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", SNAPSHOT_MANIFEST_PATH);
+		request.setRemoteAddr("127.0.0.1");
+
+		new ThrottlingFilter(service).doFilter(
+				request,
+				new MockHttpServletResponse(),
+				new MockFilterChain());
+
+		verify(service).checkGlobalIpLimit(request);
+		verify(service).checkSpecificLimit(request, "127.0.0.1", false);
+	}
+
+	@Test
+	void snapshotRequestIsRejectedWhenSpecificRateLimitIsExceeded() throws Exception {
+		ThrottlingService service = mock(ThrottlingService.class);
+		when(service.checkGlobalIpLimit(any())).thenReturn(true);
+		when(service.checkSpecificLimit(any(), eq("127.0.0.1"), eq(false))).thenReturn(false);
+		MockHttpServletRequest request = new MockHttpServletRequest(
+				"GET",
+				"/api/core/v1/sync/snapshots/checkpoint/archive/chunks/0");
+		request.setRemoteAddr("127.0.0.1");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		MockFilterChain chain = mock(MockFilterChain.class);
+
+		new ThrottlingFilter(service).doFilter(request, response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(429);
+		assertThat(response.getHeader("Retry-After")).isEqualTo("1");
+		verify(chain, never()).doFilter(any(), any());
 	}
 }

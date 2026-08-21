@@ -90,6 +90,9 @@ public class BlockConnectedEvent extends ApplicationEvent {
 
 	final List<BlockEvent> events;
 
+	/** True only when a following batch-boundary event owns head-only/coalesced work. */
+	final boolean batchMember;
+
 	public BlockConnectedEvent(
 			Object source,
 			ConnectedSource connectedSource,
@@ -112,6 +115,36 @@ public class BlockConnectedEvent extends ApplicationEvent {
 			List<BlockEvent> events,
 			Address receivedFrom,
 			Instant receivedAt) {
+		this(source, connectedSource, block, balanceDiffs, nonceDiffs, tokenDiffs, bipDiffs,
+				networkParamsDiff, authoritiesToAdd, authoritiesToRemove, validatorsToAdd,
+				validatorsToRemove, addressAliasesToAdd, addressAliasesToRemove, totalFees,
+				actualRewardPaid, cumulativeDifficulty, actualBurnAmounts, events, receivedFrom,
+				receivedAt, false);
+	}
+
+	public BlockConnectedEvent(
+			Object source,
+			ConnectedSource connectedSource,
+			Block block,
+			Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs,
+			Map<Address, StateDiff<AccountNonceState>> nonceDiffs,
+			Map<Address, StateDiff<TokenState>> tokenDiffs,
+			Map<Hash, StateDiff<BipState>> bipDiffs,
+			StateDiff<NetworkParamsState> networkParamsDiff,
+			Map<Address, AuthorityState> authoritiesToAdd,
+			Map<Address, AuthorityState> authoritiesToRemove,
+			Map<Address, ValidatorState> validatorsToAdd,
+			Map<Address, ValidatorState> validatorsToRemove,
+			Map<String, AddressAliasState> addressAliasesToAdd,
+			Map<String, AddressAliasState> addressAliasesToRemove,
+			Wei totalFees,
+			Wei actualRewardPaid,
+			BigInteger cumulativeDifficulty,
+			Map<Hash, Wei> actualBurnAmounts,
+			List<BlockEvent> events,
+			Address receivedFrom,
+			Instant receivedAt,
+			boolean batchMember) {
 		super(source);
 		this.connectedSource = connectedSource;
 		this.block = block;
@@ -133,6 +166,7 @@ public class BlockConnectedEvent extends ApplicationEvent {
 		this.events = events;
 		this.receivedFrom = receivedFrom;
 		this.receivedAt = receivedAt;
+		this.batchMember = batchMember;
 	}
 
 	@AllArgsConstructor

@@ -36,6 +36,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.p2p.events.P2PHandshakeCompletedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
@@ -64,7 +66,17 @@ public class P2PHeadAnnouncementService {
 
 	@EventListener
 	public void onBlockConnected(BlockConnectedEvent event) {
+		if (event.isBatchMember()) {
+			return;
+		}
 		requestAnnouncement();
+	}
+
+	@EventListener
+	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			requestAnnouncement();
+		}
 	}
 
 	@EventListener

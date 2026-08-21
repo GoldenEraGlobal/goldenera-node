@@ -255,8 +255,6 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					break;
 				case BLOCK_BODIES:
 					P2PBlockBodiesDto bodiesMsg = (P2PBlockBodiesDto) envelope.getPayload();
-					bodiesMsg.getBodies().parallelStream()
-							.forEach(body -> body.parallelStream().forEach(p2pValidation::validateTxDto));
 					applicationEventPublisher.publishEvent(new P2PBlockBodiesReceivedEvent(this,
 							envelope.getRequestId(), peer,
 							bodiesMsg.getBodies().stream()
@@ -386,6 +384,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		peer.setTotalDifficulty(status.getCumulativeDifficulty());
 		peer.setHeadHash(status.getBestBlockHeader().getHash());
 		peer.setHeadHeight(status.getBestBlockHeader().getHeight());
+		peer.completeCapabilityNegotiation(status.getCapabilities());
 	}
 
 	private void updatePeerHeadState(P2PStatusDto status) {

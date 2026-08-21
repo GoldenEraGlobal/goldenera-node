@@ -23,8 +23,10 @@
  */
 package global.goldenera.node;
 
+import java.net.URI;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import global.goldenera.cryptoj.datatypes.Address;
@@ -105,6 +107,36 @@ public class Constants {
          */
         public static DirectoryConfig getDirectoryConfig() {
                 return getDirectoryConfig(getActiveNetwork());
+        }
+
+        // =============================================
+        // SNAPSHOT DISTRIBUTION (service configuration)
+        // =============================================
+
+        /** Trusted HTTPS origins allowed to distribute immutable snapshots. */
+        public record SnapshotDistributionConfig(List<URI> trustedSources) {
+                public SnapshotDistributionConfig {
+                        trustedSources = List.copyOf(trustedSources);
+                }
+        }
+
+        private static final SnapshotDistributionConfig MAINNET_SNAPSHOT_DISTRIBUTION =
+                        new SnapshotDistributionConfig(List.of(
+                                        URI.create("https://node-eu2.goldenera.global/"),
+                                        URI.create("https://node-eu1.goldenera.global/"),
+                                        URI.create("https://node-us1.goldenera.global/"),
+                                        URI.create("https://node-me1.goldenera.global/"),
+                                        URI.create("https://node-asia1.goldenera.global/")));
+
+        private static final SnapshotDistributionConfig TESTNET_SNAPSHOT_DISTRIBUTION =
+                        new SnapshotDistributionConfig(List.of(
+                                        URI.create("https://node-eu1.geram1.com/")));
+
+        public static SnapshotDistributionConfig getSnapshotDistributionConfig(Network network) {
+                return switch (network) {
+                        case MAINNET -> MAINNET_SNAPSHOT_DISTRIBUTION;
+                        case TESTNET -> TESTNET_SNAPSHOT_DISTRIBUTION;
+                };
         }
 
         // =============================================

@@ -83,6 +83,17 @@ class CoreOnlySecurityConfigurationTest {
 	}
 
 	@Test
+	void snapshotPublicationGetsRemainPublicInSecuredCoreOnlyMode() throws Exception {
+		try (Fixture fixture = fixture(true)) {
+			fixture.mockMvc.perform(get("/api/core/v1/sync/snapshots/checkpoint/manifest"))
+					.andExpect(status().isOk());
+
+			verify(fixture.throttlingService).checkGlobalIpLimit(any());
+			verify(fixture.throttlingService).checkSpecificLimit(any(), anyString(), anyBoolean());
+		}
+	}
+
+	@Test
 	void bridgeApiIsDeniedWhenSqlApiKeysAreUnavailable() throws Exception {
 		try (Fixture fixture = fixture(false)) {
 			fixture.mockMvc.perform(get("/api/bridge/v1/probe"))
@@ -169,6 +180,11 @@ class CoreOnlySecurityConfigurationTest {
 		String live() {
 			calls.incrementAndGet();
 			return "UP";
+		}
+
+		@GetMapping("/api/core/v1/sync/snapshots/checkpoint/manifest")
+		String snapshotManifest() {
+			return "{}";
 		}
 
 		@GetMapping("/api/bridge/v1/probe")

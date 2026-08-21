@@ -34,7 +34,9 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
@@ -88,9 +90,20 @@ public class ChainHeadStateCache {
 	@EventListener
 	@Order(Ordered.HIGHEST_PRECEDENCE)
 	public void onBlockConnected(BlockConnectedEvent event) {
+		if (event.isBatchMember()) {
+			return;
+		}
 		// Keep block publication cheap. getHeadState() verifies the canonical root and
 		// performs one synchronized lazy reload on the first consumer thread.
 		activeState.set(null);
+	}
+
+	@EventListener
+	@Order(Ordered.HIGHEST_PRECEDENCE)
+	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			activeState.set(null);
+		}
 	}
 
 	private synchronized WorldState refreshState(Hash rootHash) {

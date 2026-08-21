@@ -53,7 +53,6 @@ import lombok.extern.slf4j.Slf4j;
 public class ExIndexerQueueService {
 
 	private static final int MAX_QUEUE_CAPACITY = 10000;
-	private static final long OFFER_TIMEOUT_MS = 10; // Max time to wait when queue is full
 
 	GeneralProperties generalProperties;
 	ExplorerRuntimeReadiness explorerReadiness;
@@ -91,21 +90,32 @@ public class ExIndexerQueueService {
 				return;
 			}
 
-			// Non-blocking offer with short timeout when queue is at hard limit
-			if (queue.size() >= MAX_QUEUE_CAPACITY) {
-				registry.counter("explorer.queue.blocked").increment();
-				if (!notFull.await(OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-					log.warn("Explorer Queue FULL ({}). Event for block #{} added despite limit.",
-							queue.size(), event.getBlock().getHeight());
-				}
-			}
+			awaitCapacity(1);
 
 			queue.addLast(new ExIndexerTask.ConnectTask(event));
 			notEmpty.signalAll();
+		} finally {
+			lock.unlock();
+		}
+	}
 
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			log.warn("Interrupted while pushing Connect task");
+	/**
+	 * Atomically enqueues a committed sync batch while keeping the capacity in
+	 * block units. The producer waits for the explorer instead of allowing the
+	 * queue (and its full block/state-diff events) to grow without bounds.
+	 */
+	public void pushConnectBatch(List<BlockConnectedEvent> events) {
+		if (!enabled() || events.isEmpty()) {
+			return;
+		}
+		if (events.size() > MAX_QUEUE_CAPACITY) {
+			throw new IllegalArgumentException("Explorer batch exceeds queue capacity: " + events.size());
+		}
+		lock.lock();
+		try {
+			awaitCapacity(events.size());
+			events.forEach(event -> queue.addLast(new ExIndexerTask.ConnectTask(event)));
+			notEmpty.signalAll();
 		} finally {
 			lock.unlock();
 		}
@@ -130,23 +140,23 @@ public class ExIndexerQueueService {
 				return;
 			}
 
-			// Non-blocking offer with short timeout when queue is at hard limit
-			if (queue.size() >= MAX_QUEUE_CAPACITY) {
-				registry.counter("explorer.queue.blocked").increment();
-				if (!notFull.await(OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-					log.warn("Explorer Queue FULL ({}). Event for block #{} added despite limit.",
-							queue.size(), event.getBlock().getHeight());
-				}
-			}
+			awaitCapacity(1);
 
 			queue.addLast(new ExIndexerTask.DisconnectTask(event));
 			notEmpty.signalAll();
-
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			log.warn("Interrupted while pushing Disconnect task");
 		} finally {
 			lock.unlock();
+		}
+	}
+
+	private void awaitCapacity(int requiredCapacity) {
+		boolean blocked = false;
+		while (queue.size() + requiredCapacity > MAX_QUEUE_CAPACITY) {
+			if (!blocked) {
+				registry.counter("explorer.queue.blocked").increment();
+				blocked = true;
+			}
+			notFull.awaitUninterruptibly();
 		}
 	}
 

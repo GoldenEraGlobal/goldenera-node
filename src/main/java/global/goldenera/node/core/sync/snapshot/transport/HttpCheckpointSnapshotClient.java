@@ -1,0 +1,696 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ */
+package global.goldenera.node.core.sync.snapshot.transport;
+
+import static java.nio.file.StandardCopyOption.ATOMIC_MOVE;
+import static java.nio.file.StandardCopyOption.REPLACE_EXISTING;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import org.bouncycastle.jcajce.provider.digest.Keccak;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.core.properties.SnapshotDistributionProperties;
+import global.goldenera.node.core.storage.chainidentity.KnownProductionChainIdentityRegistry;
+import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
+import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits;
+import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotVerifier;
+import global.goldenera.node.core.sync.snapshot.SnapshotChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkDescriptor;
+import global.goldenera.node.shared.properties.GeneralProperties;
+import okhttp3.OkHttpClient;
+import okhttp3.Call;
+import okhttp3.Request;
+import okhttp3.Response;
+import okhttp3.ResponseBody;
+
+@Service
+public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport {
+
+	public static final String MANIFEST_PATH = "/api/core/v1/sync/snapshots/checkpoint/manifest";
+	public static final String CHUNKS_PATH = "/api/core/v1/sync/snapshots/checkpoint/chunks/";
+	public static final String ARCHIVE_MANIFEST_PATH =
+			"/api/core/v1/sync/snapshots/checkpoint/archive/manifest";
+	public static final String ARCHIVE_CHUNKS_PATH =
+			"/api/core/v1/sync/snapshots/checkpoint/archive/chunks/";
+
+	private final ObjectMapper objectMapper;
+	private final SnapshotDistributionProperties properties;
+	private final GeneralProperties generalProperties;
+	private final OkHttpClient httpClient;
+	private final ManifestPreflight manifestPreflight;
+	private static final long WORKER_SHUTDOWN_SECONDS = 30;
+	private static final long MIN_FREE_SPACE_RESERVE = 1024L * 1024;
+	private static final long MAX_FREE_SPACE_RESERVE = 64L * 1024 * 1024;
+
+	@Autowired
+	public HttpCheckpointSnapshotClient(
+			ObjectMapper objectMapper,
+			SnapshotDistributionProperties properties,
+			GeneralProperties generalProperties,
+			ObjectProvider<CheckpointSnapshotVerifier> verifierProvider) {
+		this(objectMapper, properties, generalProperties, client(properties), manifest -> {
+			if (!KnownProductionChainIdentityRegistry.isKnownProductionIdentity(manifest.chainIdentity())) {
+				throw new SnapshotTransportException(
+						"Snapshot manifest is not an exact known production chain identity");
+			}
+			CheckpointSnapshotVerifier verifier = verifierProvider.getIfAvailable();
+			if (verifier == null) {
+				throw new SnapshotTransportException("Snapshot manifest verifier is unavailable");
+			}
+			verifier.verifyManifestMetadataForTransport(manifest);
+		});
+	}
+
+	HttpCheckpointSnapshotClient(
+			ObjectMapper objectMapper,
+			SnapshotDistributionProperties properties,
+			GeneralProperties generalProperties) {
+		this(objectMapper, properties, generalProperties, client(properties), manifest -> { });
+	}
+
+	HttpCheckpointSnapshotClient(
+			ObjectMapper objectMapper,
+			SnapshotDistributionProperties properties,
+			GeneralProperties generalProperties,
+			ManifestPreflight manifestPreflight) {
+		this(objectMapper, properties, generalProperties, client(properties), manifestPreflight);
+	}
+
+	HttpCheckpointSnapshotClient(
+			ObjectMapper objectMapper,
+			SnapshotDistributionProperties properties,
+			GeneralProperties generalProperties,
+			OkHttpClient httpClient) {
+		this(objectMapper, properties, generalProperties, httpClient, manifest -> { });
+	}
+
+	HttpCheckpointSnapshotClient(
+			ObjectMapper objectMapper,
+			SnapshotDistributionProperties properties,
+			GeneralProperties generalProperties,
+			OkHttpClient httpClient,
+			ManifestPreflight manifestPreflight) {
+		this.objectMapper = objectMapper;
+		this.properties = properties;
+		this.generalProperties = generalProperties;
+		this.httpClient = httpClient;
+		this.manifestPreflight = manifestPreflight;
+	}
+
+	public StagedSnapshotDownload stageFromFirstTrustedSource() {
+		properties.validate();
+		if (!properties.isBootstrapEnabled()) {
+			throw failure("Snapshot bootstrap is disabled");
+		}
+		Network network = generalProperties.getNetwork();
+		List<URI> sources = properties.trustedSources(network);
+		if (sources.isEmpty()) {
+			throw failure("No trusted snapshot source configured for " + network);
+		}
+		SnapshotTransportException lastFailure = null;
+		for (URI source : sources) {
+			Path directory = null;
+			try {
+				directory = properties.getStagingDirectory() == null
+						? Files.createTempDirectory("goldenera-checkpoint-snapshot-")
+						: Files.createTempDirectory(prepareDirectory(properties.getStagingDirectory()), "checkpoint-");
+				return stage(source, directory);
+			} catch (IOException | SnapshotTransportException e) {
+				lastFailure = e instanceof SnapshotTransportException transportException
+						? transportException
+						: failure("Could not stage snapshot from " + source, e);
+				deleteOwnedStaging(directory);
+			}
+		}
+		throw failure("All trusted snapshot sources failed for " + network, lastFailure);
+	}
+
+	/**
+	 * Stages both checkpoint state and the complete canonical block archive from
+	 * one trusted origin. A state-only response is never returned from this API.
+	 */
+	public StagedCoreSnapshotArchiveDownload stageFullArchiveFromFirstTrustedSource() {
+		properties.validate();
+		if (!properties.isBootstrapEnabled()) {
+			throw failure("Snapshot bootstrap is disabled");
+		}
+		Network network = generalProperties.getNetwork();
+		List<URI> sources = properties.trustedSources(network);
+		if (sources.isEmpty()) {
+			throw failure("No trusted snapshot source configured for " + network);
+		}
+		SnapshotTransportException lastFailure = null;
+		for (URI source : sources) {
+			Path directory = null;
+			try {
+				directory = properties.getStagingDirectory() == null
+						? Files.createTempDirectory("goldenera-full-core-snapshot-")
+						: Files.createTempDirectory(prepareDirectory(properties.getStagingDirectory()), "full-core-");
+				return stageFullArchive(source, directory);
+			} catch (IOException | SnapshotTransportException e) {
+				lastFailure = e instanceof SnapshotTransportException transportException
+						? transportException
+						: failure("Could not stage full core snapshot from " + source, e);
+				deleteOwnedStaging(directory);
+			}
+		}
+		throw failure("All trusted full core snapshot sources failed for " + network, lastFailure);
+	}
+
+	StagedCoreSnapshotArchiveDownload stageFullArchive(URI trustedSource, Path stagingDirectory) {
+		properties.validate();
+		if (!properties.isBootstrapEnabled()) {
+			throw failure("Snapshot bootstrap is disabled");
+		}
+		URI source = validateAllowedSource(trustedSource);
+		try {
+			Path staging = prepareDirectory(stagingDirectory);
+			Path stateManifestFile = staging.resolve("manifest.json");
+			byte[] stateManifestBytes = downloadManifest(source, MANIFEST_PATH, "Snapshot manifest");
+			SnapshotTransportManifest stateEnvelope = objectMapper.readValue(
+					stateManifestBytes, SnapshotTransportManifest.class);
+			CheckpointSnapshotManifest stateManifest = stateEnvelope.decodeAndVerify();
+			manifestPreflight.verify(stateManifest);
+			List<ResolvedChunk> stateChunks = validateManifest(source, stateManifest);
+
+			Path manifestFile = staging.resolve("archive-manifest.json");
+			byte[] manifestBytes = downloadManifest(source, ARCHIVE_MANIFEST_PATH, "Archive manifest");
+			CoreSnapshotArchiveTransportManifest envelope = objectMapper.readValue(
+					manifestBytes, CoreSnapshotArchiveTransportManifest.class);
+			CoreSnapshotArchiveManifest archiveManifest = envelope.decodeAndVerify();
+			List<ResolvedChunk> chunks = validateArchiveManifest(source, stateManifest, archiveManifest);
+			List<ResolvedChunk> allChunks = new ArrayList<>(stateChunks.size() + chunks.size());
+			allChunks.addAll(stateChunks);
+			allChunks.addAll(chunks);
+			ensureUsableSpace(staging, allChunks);
+			writeManifest(staging, stateManifestFile, "manifest.json.part", stateManifestBytes);
+			writeManifest(staging, manifestFile, "archive-manifest.json.part", manifestBytes);
+			List<Path> stateChunkFiles = downloadChunks(staging, stateChunks, "chunk-");
+			List<Path> chunkFiles = downloadChunks(staging, chunks, "archive-chunk-");
+			StagedSnapshotDownload state = new StagedSnapshotDownload(
+					stateEnvelope, stateManifest, staging, stateManifestFile, stateChunkFiles);
+			return new StagedCoreSnapshotArchiveDownload(
+					state, envelope, archiveManifest, manifestFile, chunkFiles);
+		} catch (SnapshotTransportException e) {
+			throw e;
+		} catch (Exception e) {
+			throw failure("Full core snapshot staging failed: " + e.getMessage(), e);
+		}
+	}
+
+	@Override
+	public StagedSnapshotDownload stage(URI trustedSource, Path stagingDirectory) {
+		properties.validate();
+		if (!properties.isBootstrapEnabled()) {
+			throw failure("Snapshot bootstrap is disabled");
+		}
+		URI source = validateAllowedSource(trustedSource);
+		try {
+			Path staging = prepareDirectory(stagingDirectory);
+			Path manifestFile = staging.resolve("manifest.json");
+			byte[] manifestBytes = downloadManifest(source, MANIFEST_PATH, "Snapshot manifest");
+			SnapshotTransportManifest manifest = objectMapper.readValue(manifestBytes, SnapshotTransportManifest.class);
+			CheckpointSnapshotManifest domainManifest = manifest.decodeAndVerify();
+			manifestPreflight.verify(domainManifest);
+			List<ResolvedChunk> chunks = validateManifest(source, domainManifest);
+			ensureUsableSpace(staging, chunks);
+			writeManifest(staging, manifestFile, "manifest.json.part", manifestBytes);
+			List<Path> chunkFiles = downloadChunks(staging, chunks, "chunk-");
+			return new StagedSnapshotDownload(manifest, domainManifest, staging, manifestFile, chunkFiles);
+		} catch (SnapshotTransportException e) {
+			throw e;
+		} catch (Exception e) {
+			throw failure("Snapshot staging failed: " + e.getMessage(), e);
+		}
+	}
+
+	private byte[] downloadManifest(URI source, String path, String label) throws IOException {
+		URI manifestUri = source.resolve(path);
+		try (Response response = execute(manifestUri); ResponseBody body = response.body()) {
+			if (body == null) {
+				throw failure(label + " response is empty");
+			}
+			if (body.contentLength() > properties.getMaxManifestBytes()) {
+				throw failure(label + " exceeds configured byte limit");
+			}
+			try (InputStream input = body.byteStream(); ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+				copyBounded(input, output, properties.getMaxManifestBytes());
+				return output.toByteArray();
+			}
+		}
+	}
+
+	private List<ResolvedChunk> validateArchiveManifest(
+			URI source,
+			CheckpointSnapshotManifest stateManifest,
+			CoreSnapshotArchiveManifest manifest) {
+		if (manifest == null || manifest.formatVersion() != CoreSnapshotArchiveLimits.FORMAT_VERSION
+				|| !manifest.stateManifestSigningHash().equals(
+						CheckpointSnapshotManifestCodec.signingHash(stateManifest))) {
+			throw failure("Archive manifest is not bound to the staged state manifest");
+		}
+		List<CoreSnapshotBlockChunkDescriptor> descriptors = manifest.blockChunks();
+		if (descriptors.isEmpty() || descriptors.size() > Math.min(
+				properties.getMaxArchiveChunkCount(), CoreSnapshotArchiveLimits.MAX_CHUNK_COUNT)) {
+			throw failure("Archive manifest exceeds configured chunk count");
+		}
+		long nextHeight = 0;
+		long totalBytes = 0;
+		long totalBlocks = 0;
+		List<ResolvedChunk> result = new ArrayList<>(descriptors.size());
+		for (int index = 0; index < descriptors.size(); index++) {
+			CoreSnapshotBlockChunkDescriptor chunk = descriptors.get(index);
+			long expectedLast;
+			try {
+				expectedLast = Math.addExact(chunk.firstHeight(), chunk.blockCount() - 1L);
+				totalBlocks = Math.addExact(totalBlocks, chunk.blockCount());
+				totalBytes = Math.addExact(totalBytes, chunk.byteCount());
+			} catch (ArithmeticException e) {
+				throw failure("Archive chunk descriptor overflow", e);
+			}
+			if (chunk.index() != index || chunk.blockCount() <= 0
+					|| chunk.blockCount() > CoreSnapshotArchiveLimits.MAX_BLOCKS_PER_CHUNK
+					|| chunk.firstHeight() != nextHeight || chunk.lastHeight() != expectedLast
+					|| chunk.byteCount() <= 0
+					|| chunk.byteCount() > Math.min(
+							properties.getMaxArchiveChunkBytes(), CoreSnapshotArchiveLimits.MAX_CHUNK_BYTES)) {
+				throw failure("Archive chunk descriptor is invalid at index " + index);
+			}
+			nextHeight = Math.addExact(expectedLast, 1L);
+			if (totalBlocks > CoreSnapshotArchiveLimits.MAX_TOTAL_BLOCKS
+					|| totalBytes > Math.min(
+							properties.getMaxArchiveTotalBytes(), CoreSnapshotArchiveLimits.MAX_TOTAL_BYTES)) {
+				throw failure("Archive manifest exceeds configured total limits");
+			}
+			URI uri = source.resolve(ARCHIVE_CHUNKS_PATH + index);
+			if (!sameOrigin(source, uri)) {
+				throw failure("Archive chunk URL must use the trusted manifest origin");
+			}
+			result.add(new ResolvedChunk(index, uri, chunk.byteCount(), chunk.contentHash()));
+		}
+		long expectedBlocks;
+		try {
+			expectedBlocks = Math.addExact(stateManifest.checkpointHeight(), 1L);
+		} catch (ArithmeticException e) {
+			throw failure("Archive checkpoint height overflow", e);
+		}
+		if (totalBlocks != expectedBlocks || nextHeight != expectedBlocks) {
+			throw failure("Archive does not cover genesis through the state checkpoint");
+		}
+		return List.copyOf(result);
+	}
+
+	private List<ResolvedChunk> validateManifest(URI source, CheckpointSnapshotManifest manifest) {
+		if (manifest == null || manifest.formatVersion() != CheckpointSnapshotLimits.FORMAT_VERSION
+				|| manifest.networkCode() != generalProperties.getNetwork().getCode()
+				|| manifest.checkpointHeight() < 0 || manifest.checkpointHash() == null
+				|| manifest.checkpointStateRoot() == null || manifest.chainIdentity() == null
+				|| manifest.headerSegment() == null) {
+			throw failure("Snapshot manifest identity/version metadata is invalid");
+		}
+		if (manifest.headerSegment().headers().size() > CheckpointSnapshotLimits.MAX_HEADER_COUNT) {
+			throw failure("Snapshot manifest exceeds header count limit");
+		}
+		if (manifest.chunks().size() > Math.min(properties.getMaxChunkCount(), CheckpointSnapshotLimits.MAX_CHUNK_COUNT)) {
+			throw failure("Snapshot manifest exceeds configured chunk count");
+		}
+		long totalNodeBytes = 0;
+		long totalDownloadBytes = 0;
+		List<ResolvedChunk> result = new ArrayList<>(manifest.chunks().size());
+		for (int index = 0; index < manifest.chunks().size(); index++) {
+			SnapshotChunkDescriptor chunk = manifest.chunks().get(index);
+			if (chunk == null || chunk.index() != index || chunk.id() == null || chunk.id().isBlank()
+					|| chunk.nodeCount() < 0 || chunk.nodeCount() > CheckpointSnapshotLimits.MAX_NODES_PER_CHUNK
+					|| chunk.byteCount() < 0 || chunk.byteCount() > CheckpointSnapshotLimits.MAX_CHUNK_BYTES) {
+				throw failure("Snapshot chunk descriptor is invalid at index " + index);
+			}
+			long encodedByteCount = encodedByteCount(chunk);
+			if (encodedByteCount > properties.getMaxChunkBytes()) {
+				throw failure("Encoded snapshot chunk exceeds configured byte limit at index " + index);
+			}
+			URI uri = resolveChunkUri(source, chunk);
+			totalNodeBytes = Math.addExact(totalNodeBytes, chunk.byteCount());
+			totalDownloadBytes = Math.addExact(totalDownloadBytes, encodedByteCount);
+			if (totalNodeBytes > CheckpointSnapshotLimits.MAX_TOTAL_BYTES
+					|| totalDownloadBytes > properties.getMaxTotalBytes()) {
+				throw failure("Snapshot manifest exceeds configured total byte limit");
+			}
+			result.add(new ResolvedChunk(index, uri, encodedByteCount, chunk.contentHash()));
+		}
+		return List.copyOf(result);
+	}
+
+	private long encodedByteCount(SnapshotChunkDescriptor chunk) {
+		try {
+			return Math.addExact(4L, Math.addExact(chunk.byteCount(), Math.multiplyExact(36L, chunk.nodeCount())));
+		} catch (ArithmeticException e) {
+			throw failure("Encoded snapshot chunk size overflow", e);
+		}
+	}
+
+	private URI resolveChunkUri(URI source, SnapshotChunkDescriptor chunk) {
+		URI uri;
+		if (chunk.url() == null || chunk.url().isBlank()) {
+			uri = source.resolve(CHUNKS_PATH + chunk.index());
+		} else {
+			try {
+				uri = new URI(chunk.url());
+			} catch (URISyntaxException e) {
+				throw failure("Snapshot chunk URL is invalid", e);
+			}
+		}
+		if (!uri.isAbsolute() || uri.getHost() == null || uri.getUserInfo() != null || uri.getFragment() != null
+				|| !sameOrigin(source, uri)) {
+			throw failure("Snapshot chunk URL must use the trusted manifest origin");
+		}
+		properties.validateTrustedSource(origin(uri));
+		return uri;
+	}
+
+	private List<Path> downloadChunks(Path staging, List<ResolvedChunk> chunks, String filePrefix) throws Exception {
+		ExecutorService executor = Executors.newFixedThreadPool(properties.getParallelism());
+		Set<Call> activeCalls = ConcurrentHashMap.newKeySet();
+		List<Future<Path>> futures = chunks.stream()
+				.map(chunk -> executor.submit(() -> downloadChunk(staging, chunk, filePrefix, activeCalls)))
+				.toList();
+		boolean completed = false;
+		try {
+			List<Path> paths = new ArrayList<>(futures.size());
+			for (Future<Path> future : futures) {
+				try {
+					paths.add(future.get());
+				} catch (ExecutionException e) {
+					futures.forEach(item -> item.cancel(true));
+					Throwable cause = e.getCause();
+					if (cause instanceof SnapshotTransportException transportException) {
+						throw transportException;
+					}
+					throw failure("Snapshot chunk download failed", cause);
+				}
+			}
+			paths.sort(Comparator.comparing(Path::toString));
+			completed = true;
+			return List.copyOf(paths);
+		} finally {
+			if (completed) {
+				executor.shutdown();
+			} else {
+				futures.forEach(item -> item.cancel(true));
+				activeCalls.forEach(Call::cancel);
+				executor.shutdownNow();
+			}
+			try {
+				if (!executor.awaitTermination(WORKER_SHUTDOWN_SECONDS, TimeUnit.SECONDS)) {
+					activeCalls.forEach(Call::cancel);
+					executor.shutdownNow();
+					throw failure("Snapshot download workers did not terminate after cancellation");
+				}
+			} catch (InterruptedException e) {
+				activeCalls.forEach(Call::cancel);
+				executor.shutdownNow();
+				Thread.currentThread().interrupt();
+				throw failure("Interrupted while waiting for snapshot download workers", e);
+			}
+		}
+	}
+
+	private Path downloadChunk(
+			Path staging, ResolvedChunk chunk, String filePrefix, Set<Call> activeCalls) throws IOException {
+		Path target = safeTarget(staging, filePrefix + "%05d.bin".formatted(chunk.index()));
+		if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+			if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && verifyFile(target, chunk)) {
+				return target;
+			}
+			Files.delete(target);
+		}
+		Path partial = safeTarget(staging, target.getFileName() + ".part");
+		Files.deleteIfExists(partial);
+		Call call = httpClient.newCall(new Request.Builder().url(chunk.uri().toString()).get().build());
+		activeCalls.add(call);
+		try (Response response = execute(call); ResponseBody body = response.body()) {
+			long configuredChunkLimit = filePrefix.startsWith("archive-")
+					? properties.getMaxArchiveChunkBytes() : properties.getMaxChunkBytes();
+			if (body == null || body.contentLength() > chunk.encodedByteCount()
+					|| body.contentLength() > configuredChunkLimit) {
+				throw failure("Snapshot chunk response size is invalid at index " + chunk.index());
+			}
+			Keccak.Digest256 digest = new Keccak.Digest256();
+			long count;
+			try (InputStream input = body.byteStream(); OutputStream output = Files.newOutputStream(partial)) {
+				count = copyChunk(input, output, digest, chunk.encodedByteCount());
+			}
+			Hash actualHash = Hash.wrap(digest.digest());
+			if (count != chunk.encodedByteCount() || !actualHash.equals(chunk.contentHash())) {
+				throw failure("Snapshot chunk size/hash mismatch at index " + chunk.index());
+			}
+			moveVerified(partial, target);
+			return target;
+		} catch (RuntimeException | IOException e) {
+			Files.deleteIfExists(partial);
+			throw e;
+		} finally {
+			activeCalls.remove(call);
+		}
+	}
+
+	private boolean verifyFile(Path file, ResolvedChunk chunk) throws IOException {
+		if (Files.size(file) != chunk.encodedByteCount()) {
+			return false;
+		}
+		Keccak.Digest256 digest = new Keccak.Digest256();
+		byte[] buffer = new byte[64 * 1024];
+		try (InputStream input = Files.newInputStream(file)) {
+			for (int read; (read = input.read(buffer)) >= 0;) {
+				if (read > 0) {
+					digest.update(buffer, 0, read);
+				}
+			}
+		}
+		return Hash.wrap(digest.digest()).equals(chunk.contentHash());
+	}
+
+	private Response execute(URI uri) throws IOException {
+		return execute(httpClient.newCall(new Request.Builder().url(uri.toString()).get().build()));
+	}
+
+	private Response execute(Call call) throws IOException {
+		Response response = call.execute();
+		if (!response.isSuccessful()) {
+			int code = response.code();
+			response.close();
+			throw failure("Snapshot HTTP request failed with status " + code);
+		}
+		return response;
+	}
+
+	private void ensureUsableSpace(Path staging, List<ResolvedChunk> chunks) throws IOException {
+		long required = 0;
+		for (ResolvedChunk chunk : chunks) {
+			required = Math.addExact(required, chunk.encodedByteCount());
+		}
+		long usable = Files.getFileStore(staging).getUsableSpace();
+		if (!hasSufficientUsableSpace(required, usable)) {
+			throw failure("Snapshot staging filesystem has insufficient usable space: requires "
+					+ required + " payload bytes plus safety reserve, has " + usable);
+		}
+	}
+
+	static boolean hasSufficientUsableSpace(long requiredPayloadBytes, long usableBytes) {
+		if (requiredPayloadBytes < 0 || usableBytes < 0) {
+			return false;
+		}
+		long fivePercent = requiredPayloadBytes / 20
+				+ (requiredPayloadBytes % 20 == 0 ? 0 : 1);
+		long reserve = Math.min(MAX_FREE_SPACE_RESERVE, Math.max(MIN_FREE_SPACE_RESERVE, fivePercent));
+		return requiredPayloadBytes <= Long.MAX_VALUE - reserve
+				&& requiredPayloadBytes + reserve <= usableBytes;
+	}
+
+	private URI validateAllowedSource(URI source) {
+		properties.validateTrustedSource(source);
+		URI requestedOrigin = origin(source);
+		boolean allowed = properties.trustedSources(generalProperties.getNetwork()).stream()
+				.map(this::origin)
+				.anyMatch(requestedOrigin::equals);
+		if (!allowed) {
+			throw failure("Snapshot source is not trusted for " + generalProperties.getNetwork());
+		}
+		return requestedOrigin;
+	}
+
+	private URI origin(URI uri) {
+		try {
+			return new URI(uri.getScheme().toLowerCase(), null, uri.getHost().toLowerCase(), effectivePort(uri),
+					"/", null, null);
+		} catch (URISyntaxException e) {
+			throw failure("Invalid snapshot origin", e);
+		}
+	}
+
+	private boolean sameOrigin(URI left, URI right) {
+		return origin(left).equals(origin(right));
+	}
+
+	private int effectivePort(URI uri) {
+		if (uri.getPort() >= 0) {
+			return uri.getPort();
+		}
+		return "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+	}
+
+	private Path prepareDirectory(Path directory) throws IOException {
+		if (directory == null) {
+			throw failure("Snapshot staging directory is required");
+		}
+		Path absolute = directory.toAbsolutePath().normalize();
+		rejectSymlinkComponents(absolute);
+		Files.createDirectories(absolute);
+		rejectSymlinkComponents(absolute);
+		Path real = absolute.toRealPath(LinkOption.NOFOLLOW_LINKS);
+		if (!real.equals(absolute)) {
+			throw failure("Snapshot staging directory must resolve without symbolic links");
+		}
+		return real;
+	}
+
+	private void rejectSymlinkComponents(Path absolute) {
+		Path current = absolute.getRoot();
+		for (Path component : absolute) {
+			current = current.resolve(component);
+			if (Files.isSymbolicLink(current)) {
+				throw failure("Snapshot staging path must not contain symbolic links");
+			}
+		}
+	}
+
+	private void deleteOwnedStaging(Path directory) {
+		if (directory == null) {
+			return;
+		}
+		try (var paths = Files.walk(directory)) {
+			paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+				try {
+					Files.deleteIfExists(path);
+				} catch (IOException ignored) {
+					// Best-effort cleanup of a directory created by this client invocation.
+				}
+			});
+		} catch (IOException ignored) {
+			// The original transport failure remains authoritative.
+		}
+	}
+
+	private Path safeTarget(Path staging, String fileName) {
+		Path target = staging.resolve(fileName).normalize();
+		if (!target.getParent().equals(staging)) {
+			throw failure("Snapshot staging path escaped its directory");
+		}
+		return target;
+	}
+
+	private void writeManifest(Path staging, Path target, String partialName, byte[] bytes) throws IOException {
+		Path partial = safeTarget(staging, partialName);
+		Files.deleteIfExists(partial);
+		Files.write(partial, bytes);
+		moveVerified(partial, target);
+	}
+
+	private void moveVerified(Path source, Path target) throws IOException {
+		try {
+			Files.move(source, target, ATOMIC_MOVE, REPLACE_EXISTING);
+		} catch (java.nio.file.AtomicMoveNotSupportedException e) {
+			Files.move(source, target, REPLACE_EXISTING);
+		}
+	}
+
+	private long copyChunk(InputStream input, OutputStream output, Keccak.Digest256 digest, long limit)
+			throws IOException {
+		byte[] buffer = new byte[64 * 1024];
+		long count = 0;
+		for (int read; (read = input.read(buffer)) >= 0;) {
+			if (read == 0) {
+				continue;
+			}
+			count = Math.addExact(count, read);
+			if (count > limit) {
+				throw failure("Snapshot chunk exceeded its declared size");
+			}
+			digest.update(buffer, 0, read);
+			output.write(buffer, 0, read);
+		}
+		return count;
+	}
+
+	private void copyBounded(InputStream input, OutputStream output, long limit) throws IOException {
+		byte[] buffer = new byte[16 * 1024];
+		long count = 0;
+		for (int read; (read = input.read(buffer)) >= 0;) {
+			if (read == 0) {
+				continue;
+			}
+			count = Math.addExact(count, read);
+			if (count > limit) {
+				throw failure("Snapshot manifest exceeded configured byte limit");
+			}
+			output.write(buffer, 0, read);
+		}
+	}
+
+	private static OkHttpClient client(SnapshotDistributionProperties properties) {
+		properties.validate();
+		return new OkHttpClient.Builder()
+				.followRedirects(false)
+				.followSslRedirects(false)
+				.connectTimeout(properties.getConnectTimeout().toMillis(), TimeUnit.MILLISECONDS)
+				.readTimeout(properties.getReadTimeout().toMillis(), TimeUnit.MILLISECONDS)
+				.callTimeout(properties.getCallTimeout().toMillis(), TimeUnit.MILLISECONDS)
+				.build();
+	}
+
+	private SnapshotTransportException failure(String message) {
+		return new SnapshotTransportException(message);
+	}
+
+	private SnapshotTransportException failure(String message, Throwable cause) {
+		return new SnapshotTransportException(message, cause);
+	}
+
+	private record ResolvedChunk(int index, URI uri, long encodedByteCount, Hash contentHash) {
+	}
+
+	@FunctionalInterface
+	interface ManifestPreflight {
+		void verify(CheckpointSnapshotManifest manifest);
+	}
+}

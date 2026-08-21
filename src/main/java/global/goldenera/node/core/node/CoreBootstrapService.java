@@ -43,6 +43,7 @@ import global.goldenera.node.core.p2p.services.DirectoryService;
 import global.goldenera.node.core.processing.MiningEconomicsActivationService;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.sync.BlockSyncManagerService;
+import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotBootstrapCoordinator;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -64,6 +65,7 @@ public class CoreBootstrapService {
 	MiningEconomicsActivationService miningEconomicsActivationService;
 	AuthoritativeChainIdentityProvider chainIdentityProvider;
 	CoreRuntimeReadinessTracker readiness;
+	CoreSnapshotBootstrapCoordinator snapshotBootstrapCoordinator;
 
 	@EventListener
 	public void onApplicationReady(ApplicationReadyEvent event) {
@@ -94,6 +96,7 @@ public class CoreBootstrapService {
 	private void initializationDb() {
 		try {
 			blockGenesisService.checkAndInitGenesisBlock();
+			snapshotBootstrapCoordinator.tryBootstrapFreshNode();
 			chainHeadStateCache.init();
 			miningEconomicsActivationService.assertHeadReady(
 					chainHeadStateCache.getHeadState(), chainQuery.getLatestStoredBlockOrThrow().getHeight());

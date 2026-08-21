@@ -25,6 +25,9 @@ package global.goldenera.node.core.monitoring;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -41,6 +44,9 @@ import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
@@ -115,6 +121,42 @@ class MiningEconomicsMetricsServiceTest {
 				.gauge().value()).isEqualTo(3);
 		assertThat(registry.get("blockchain.mining.seconds_since_last_block").gauge().value())
 				.isGreaterThanOrEqualTo(5);
+	}
+
+	@Test
+	void refreshesHeadMetricsOnceAtSyncBatchBoundary() {
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		WorldState state = mock(WorldState.class);
+		NetworkParamsState params = mock(NetworkParamsState.class);
+		when(params.getVersion()).thenReturn(NetworkParamsStateVersion.V1);
+		when(state.getParams()).thenReturn(params);
+		ChainHeadStateCache stateCache = mock(ChainHeadStateCache.class);
+		when(stateCache.getHeadState()).thenReturn(state);
+		MiningEconomicsMetricsService service = new MiningEconomicsMetricsService(
+				registry, stateCache, new ValidatorMiningPolicyService());
+		BlockConnectedEvent first = connectedEvent(1);
+		BlockConnectedEvent tip = connectedEvent(2);
+
+		service.onBlockConnected(first);
+		service.onBlockConnected(tip);
+		verify(stateCache, never()).getHeadState();
+
+		service.onBlockConnectionBatchCompleted(new BlockConnectionBatchCompletedEvent(
+				this, ConnectedSource.SYNC, List.of(first, tip)));
+
+		verify(stateCache, times(1)).getHeadState();
+	}
+
+	private BlockConnectedEvent connectedEvent(long height) {
+		global.goldenera.cryptoj.common.Block block = mock(global.goldenera.cryptoj.common.Block.class,
+				Answers.RETURNS_DEEP_STUBS);
+		when(block.getHeight()).thenReturn(height);
+		when(block.getHeader().getTimestamp()).thenReturn(Instant.ofEpochSecond(height));
+		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
+		when(event.getConnectedSource()).thenReturn(ConnectedSource.SYNC);
+		when(event.isBatchMember()).thenReturn(true);
+		when(event.getBlock()).thenReturn(block);
+		return event;
 	}
 
 	private ValidatorState validator(MiningLimitMode mode) {

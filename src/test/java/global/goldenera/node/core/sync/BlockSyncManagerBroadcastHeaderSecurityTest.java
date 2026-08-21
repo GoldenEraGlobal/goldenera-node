@@ -55,7 +55,6 @@ import global.goldenera.node.core.p2p.events.P2PHeadersReceivedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
-import global.goldenera.node.core.p2p.services.P2PHeadAnnouncementService;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -81,6 +80,20 @@ class BlockSyncManagerBroadcastHeaderSecurityTest {
 				this, 0, nonValidator.peer, List.of(nonValidator.header)));
 
 		verify(nonValidator.peer, never()).sendGetBlockBodies(any(), anyLong());
+	}
+
+	@Test
+	void synchronousBroadcastBodySendFailureRemovesPendingRequestImmediately() {
+		Fixture fixture = fixture();
+		when(fixture.peer.reserveRequestId()).thenReturn(73L);
+		doThrow(new IllegalStateException("channel closed"))
+				.when(fixture.peer).sendGetBlockBodies(any(), anyLong());
+
+		fixture.service.onHeadersReceived(new P2PHeadersReceivedEvent(
+				this, 0, fixture.peer, List.of(fixture.header)));
+
+		assertThat(fixture.service.runtimeSnapshot().pendingBodyRequests()).isZero();
+		assertThat(fixture.service.runtimeSnapshot().pendingBroadcastDownloads()).isZero();
 	}
 
 	@Test
@@ -113,7 +126,7 @@ class BlockSyncManagerBroadcastHeaderSecurityTest {
 		AtomicInteger syncChecks = new AtomicInteger();
 		CountDownLatch firstCheck = new CountDownLatch(1);
 		CountDownLatch unexpectedSecondCheck = new CountDownLatch(1);
-		when(fixture.peerRegistry.getSyncCandidate(anyLong())).thenAnswer(invocation -> {
+		when(fixture.peerRegistry.getSyncCandidate(any())).thenAnswer(invocation -> {
 			if (syncChecks.incrementAndGet() == 1) {
 				firstCheck.countDown();
 			} else {
@@ -175,7 +188,6 @@ class BlockSyncManagerBroadcastHeaderSecurityTest {
 				chainQuery,
 				mock(BlockReorgs.class),
 				peerRegistry,
-				mock(P2PHeadAnnouncementService.class),
 				mock(PeerReputationService.class),
 				ingestion);
 		return new Fixture(service, validator, ingestion, peerRegistry, peer, header, parentBlock, localBest);

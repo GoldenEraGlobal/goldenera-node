@@ -40,6 +40,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.p2p.events.P2PHandshakeCompletedEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
@@ -52,8 +54,15 @@ class P2PHeadAnnouncementServiceTest {
 		ThreadPoolTaskScheduler scheduler = mock(ThreadPoolTaskScheduler.class);
 		P2PHeadAnnouncementService service = new P2PHeadAnnouncementService(
 				scheduler, mock(PeerRegistry.class), mock(P2PStatusProvider.class));
+		BlockConnectedEvent blockEvent = mock(BlockConnectedEvent.class);
+		when(blockEvent.getConnectedSource()).thenReturn(ConnectedSource.SYNC);
+		when(blockEvent.isBatchMember()).thenReturn(true);
 
-		service.onBlockConnected(mock(BlockConnectedEvent.class));
+		service.onBlockConnected(blockEvent);
+		verify(scheduler, never()).schedule(any(Runnable.class), any(Instant.class));
+
+		service.onBlockConnectionBatchCompleted(new BlockConnectionBatchCompletedEvent(
+				this, ConnectedSource.SYNC, List.of(blockEvent)));
 
 		verify(scheduler).schedule(any(Runnable.class), any(Instant.class));
 	}
