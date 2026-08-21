@@ -327,7 +327,6 @@ services:
   node:
     image: ${GOLDENERA_IMAGE}
     pull_policy: ${GOLDENERA_PULL_POLICY}
-    container_name: goldenera_node
     restart: unless-stopped
     env_file: [.env]
     environment:
@@ -352,7 +351,6 @@ EOF
 
   db:
     image: postgres:18.1-alpine
-    container_name: goldenera_db
     restart: unless-stopped
     env_file: [.env]
     command: postgres -c shared_buffers=512MB -c max_connections=100
@@ -491,7 +489,7 @@ tune_linux_hugepages() {
   is_true "$MINING_ENABLE" || return 0
   [ "$(uname -s)" = Linux ] || return 0
   if "$SKIP_DOCKER_CHECK"; then return 0; fi
-  info "Nastavujem 2000 huge pages pre RandomX mining..."
+  info "Configuring 2000 huge pages for RandomX mining..."
   printf '%s\n' 'vm.nr_hugepages=2000' | sudo_run tee /etc/sysctl.d/99-goldenera-node.conf >/dev/null
   sudo_run sysctl --system >/dev/null
 }

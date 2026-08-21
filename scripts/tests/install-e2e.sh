@@ -7,10 +7,14 @@ API_PORT="${GOLDENERA_E2E_API_PORT:-18080}"
 P2P_PORT="${GOLDENERA_E2E_P2P_PORT:-19000}"
 EXPLORER_ENABLE="${GOLDENERA_E2E_EXPLORER_ENABLE:-false}"
 
+compose() {
+  (cd "$TEST_ROOT" && docker compose "$@")
+}
+
 # shellcheck disable=SC2329 # Invoked through the EXIT trap.
 cleanup() {
   if [ -f "$TEST_ROOT/compose.yaml" ]; then
-    (cd "$TEST_ROOT" && docker compose down >/dev/null 2>&1) || true
+    compose down >/dev/null 2>&1 || true
   fi
   rm -rf "$TEST_ROOT"
 }
@@ -42,13 +46,13 @@ for _ in $(seq 1 90); do
     printf 'GoldenEra installer end-to-end test passed with the local sandbox image.\n'
     exit 0
   fi
-  if ! docker inspect goldenera_node --format '{{.State.Running}}' 2>/dev/null | grep -q true; then
-    docker logs --tail 160 goldenera_node >&2 || true
+  if ! compose ps --status running --services 2>/dev/null | grep -Fxq node; then
+    compose logs --tail 160 node >&2 || true
     exit 1
   fi
   sleep 2
 done
 
-docker logs --tail 160 goldenera_node >&2 || true
+compose logs --tail 160 node >&2 || true
 printf 'Timed out waiting for the node liveness endpoint.\n' >&2
 exit 1

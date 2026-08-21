@@ -180,7 +180,6 @@ services:
   node:
     image: ${GOLDENERA_IMAGE}
     pull_policy: ${GOLDENERA_PULL_POLICY}
-    container_name: goldenera_node
     restart: unless-stopped
     env_file: [.env]
     environment:
@@ -205,7 +204,6 @@ if ($explorerEnabled) {
 
   db:
     image: postgres:18.1-alpine
-    container_name: goldenera_db
     restart: unless-stopped
     env_file: [.env]
     command: postgres -c shared_buffers=512MB -c max_connections=100

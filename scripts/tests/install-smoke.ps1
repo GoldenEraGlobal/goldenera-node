@@ -9,6 +9,9 @@ function Assert-True([bool]$Condition, [string]$Message) {
 function Assert-Contains([string]$Path, [string]$Text) {
     Assert-True ((Get-Content -Raw $Path).Contains($Text)) "$Path does not contain: $Text"
 }
+function Assert-NotContains([string]$Path, [string]$Text) {
+    Assert-True (-not (Get-Content -Raw $Path).Contains($Text)) "$Path unexpectedly contains: $Text"
+}
 
 try {
     $env:GOLDENERA_P2P_HOST = "203.0.113.20"
@@ -27,6 +30,7 @@ try {
     Assert-Contains (Join-Path $InstallDir ".env") "GOLDENERA_IMAGE=goldenera-node:sandbox-local"
     Assert-Contains (Join-Path $InstallDir ".env") "POSTGRESQL_PASSWORD=postgres-secret"
     Assert-Contains (Join-Path $InstallDir "compose.yaml") "image: postgres:18.1-alpine"
+    Assert-NotContains (Join-Path $InstallDir "compose.yaml") "container_name:"
 
     $env:GOLDENERA_P2P_HOST = "203.0.113.21"
     $env:GOLDENERA_MINING_ENABLE = "false"

@@ -118,6 +118,7 @@ class MempoolManagerMaintenanceRaceTest {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(nonce.getNonce()).thenReturn(headNonce);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(Long.MAX_VALUE));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(Long.MAX_VALUE));
 		when(state.getNonce(ALICE)).thenReturn(nonce);
 		when(state.getBalance(any(Address.class), any(Address.class))).thenReturn(balance);
 		when(cache.getHeadState()).thenReturn(state);

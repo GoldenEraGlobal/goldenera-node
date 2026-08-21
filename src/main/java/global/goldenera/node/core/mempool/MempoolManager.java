@@ -359,12 +359,14 @@ public class MempoolManager {
 			mempoolStore.resynchronizeSenders(chainNonces);
 		}
 		if (!successfullyValidatedSenders.isEmpty()) {
+			Map<Address, MempoolStore.SenderBalances> senderBalances;
 			try {
-				mempoolStore.reconcileSenderBalances(
-						loadSenderBalances(successfullyValidatedSenders, projectedNativeBalances));
+				senderBalances = loadSenderBalances(successfullyValidatedSenders, projectedNativeBalances);
 			} catch (RuntimeException exception) {
 				log.warn("Skipping mempool balance reconciliation because chain state is unavailable", exception);
+				return;
 			}
+			mempoolStore.reconcileSenderBalances(senderBalances);
 		}
 	}
 
@@ -381,8 +383,9 @@ public class MempoolManager {
 							token -> worldState.getBalance(sender, token).getBalance());
 				}
 			}
-			Wei nativeBalance = projectedNativeBalances.getOrDefault(sender,
-					worldState.getBalance(sender, Address.NATIVE_TOKEN).getSpendableBalance());
+			Wei nativeBalance = projectedNativeBalances.containsKey(sender)
+					? projectedNativeBalances.get(sender)
+					: worldState.getBalance(sender, Address.NATIVE_TOKEN).getSpendableBalance();
 			result.put(sender, new MempoolStore.SenderBalances(nativeBalance, tokenBalances));
 		}
 		return result;
