@@ -69,7 +69,7 @@ random_base64() {
 }
 
 prompt() {
-  local target="$1" message="$2" default_value="${3:-}" answer=""
+  local target="$1" message="$2" default_value="${3:-}" input_value=""
   if "$NON_INTERACTIVE"; then
     printf -v "$target" '%s' "$default_value"
     return
@@ -80,8 +80,8 @@ prompt() {
   else
     printf '%s: ' "$message" >"$TTY_DEVICE"
   fi
-  IFS= read -r answer <"$TTY_DEVICE" || true
-  printf -v "$target" '%s' "${answer:-$default_value}"
+  IFS= read -r input_value <"$TTY_DEVICE" || true
+  printf -v "$target" '%s' "${input_value:-$default_value}"
 }
 
 prompt_secret() {
@@ -256,6 +256,9 @@ select_configuration() {
   NODE_IMAGE="${GOLDENERA_IMAGE:-${NODE_IMAGE:-$(existing_env_value GOLDENERA_IMAGE "$DEFAULT_IMAGE")}}"
   if [ "$NODE_IMAGE" = "$LOCAL_IMAGE" ] || is_true "${GOLDENERA_LOCAL_IMAGE:-false}"; then
     NODE_IMAGE="$LOCAL_IMAGE"
+  fi
+  prompt NODE_IMAGE "Docker image" "$NODE_IMAGE"
+  if [ "$NODE_IMAGE" = "$LOCAL_IMAGE" ]; then
     PULL_POLICY="never"
   else
     PULL_POLICY="always"

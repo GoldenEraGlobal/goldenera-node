@@ -33,11 +33,15 @@ import global.goldenera.node.Constants.ForkName;
 class ConstantsMiningEconomicsTest {
 
 	@Test
-	void productionNetworksActivateAtDummyHeightTen() {
+	void mainnetActivatesAtDummyHeightTen() {
 		assertThat(Constants.getConsensusSettings(Network.MAINNET, "prod").forkActivationBlocks())
 				.containsEntry(ForkName.MINING_ECONOMICS, 10L);
+	}
+
+	@Test
+	void testnetActivatesOneHourAfterReferenceBlock() {
 		assertThat(Constants.getConsensusSettings(Network.TESTNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 10L);
+				.containsEntry(ForkName.MINING_ECONOMICS, 715_670L);
 	}
 
 	@Test

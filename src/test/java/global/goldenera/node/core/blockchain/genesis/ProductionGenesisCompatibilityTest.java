@@ -55,9 +55,9 @@ class ProductionGenesisCompatibilityTest {
 	private static final String TESTNET_RESOURCE = "genesis/genesis-testnet-prod.json";
 
 	private static final String MAINNET_RESOURCE_SHA_256 =
-			"504300c34b0d7602d9d8accd566b8c9c20acb96f758fcf6c19755594f4237736";
+			"b4c071e6f455ca492ea8d8eb33985a04694c560b7ec963501644fe5c3ee68413";
 	private static final String TESTNET_RESOURCE_SHA_256 =
-			"6bd30bf951a360c8b5d28fba2a145f1e4a40056a714e1bbafdf27a94320ebdc2";
+			"d4257f03ef0661a36aed6bde73d48903a50f82c07c9d50394d359fae7381e73e";
 
 	private static final Hash MAINNET_GENESIS_BLOCK_HASH = Hash.fromHexString(
 			"0x924fd3c5b501e1ccef10ca08cb6b473382d44618533d32339752988e469a516f");

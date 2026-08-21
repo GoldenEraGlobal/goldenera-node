@@ -145,7 +145,8 @@ public class Constants {
                         // Fork activation blocks
                         Map.of(
                                         ForkName.GENESIS, 0L,
-                                        ForkName.MINING_ECONOMICS, 10L),
+                                        // 120 blocks (~1 hour) after block 715,550 at 30 seconds per block
+                                        ForkName.MINING_ECONOMICS, 715_670L),
                         // Block checkpoints
                         Map.of(),
                         // Max block size overrides

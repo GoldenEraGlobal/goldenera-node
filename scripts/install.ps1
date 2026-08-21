@@ -118,6 +118,7 @@ if ([string]::IsNullOrWhiteSpace($Image)) {
     $Image = Env-OrDefault "GOLDENERA_IMAGE" (Get-ExistingValue "GOLDENERA_IMAGE" $DefaultImage)
 }
 if ($LocalImage -or ((Env-OrDefault "GOLDENERA_LOCAL_IMAGE" "false") -eq "true")) { $Image = $LocalImageName }
+$Image = Ask "Docker image" $Image
 $pullPolicy = if ($Image -eq $LocalImageName) { "never" } else { "always" }
 
 $network = (Ask "Network (MAINNET/TESTNET)" (Env-OrDefault "GOLDENERA_NETWORK" (Get-ExistingValue "NETWORK" "MAINNET"))).ToUpperInvariant()

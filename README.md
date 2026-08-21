@@ -42,9 +42,9 @@ plugin when they are missing. For a manual installation, install them first.
 ### Automated installer (recommended)
 
 The installer detects the operating system, installs Docker when it is missing,
-asks for the installation directory, network, public P2P address, ports, mining
-settings, reward address, node identity, and the built-in Explorer/indexer. It
-generates secrets and starts the node from Docker Compose.
+asks for the installation directory, Docker image, network, public P2P address,
+ports, mining settings, reward address, node identity, and the built-in
+Explorer/indexer. It generates secrets and starts the node from Docker Compose.
 
 Ubuntu, Debian, or macOS:
 
