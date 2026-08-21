@@ -221,6 +221,7 @@ public class BlockSyncManagerService {
 				bodyTelemetry.activeRequests(),
 				bodyTelemetry.peakActiveRequests(),
 				bodyTelemetry.activePeers(),
+				bodyTelemetry.peakActivePeers(),
 				MAX_PERSIST_BATCH_BYTES,
 				currentPersistBatchBytes,
 				peakPersistBatchBytes);
@@ -247,6 +248,7 @@ public class BlockSyncManagerService {
 			int activeBodyRequests,
 			int peakActiveBodyRequests,
 			int activeBodyPeers,
+			int peakActiveBodyPeers,
 			long persistenceBatchByteLimit,
 			long persistenceBatchCurrentBytes,
 			long persistenceBatchPeakBytes) {
@@ -1009,6 +1011,7 @@ public class BlockSyncManagerService {
 		private long peakReservedBytes;
 		private int activeRequests;
 		private int peakActiveRequests;
+		private int peakActivePeers;
 
 		synchronized void begin() {
 			activeRequestsByPeer.clear();
@@ -1016,6 +1019,7 @@ public class BlockSyncManagerService {
 			peakReservedBytes = 0;
 			activeRequests = 0;
 			peakActiveRequests = 0;
+			peakActivePeers = 0;
 		}
 
 		synchronized void requestIssued(RemotePeer peer, long bytes) {
@@ -1024,6 +1028,7 @@ public class BlockSyncManagerService {
 			activeRequests++;
 			peakActiveRequests = Math.max(peakActiveRequests, activeRequests);
 			activeRequestsByPeer.merge(peer, 1, Integer::sum);
+			peakActivePeers = Math.max(peakActivePeers, activeRequestsByPeer.size());
 		}
 
 		synchronized void requestCompleted(RemotePeer peer, long bytes) {
@@ -1051,11 +1056,11 @@ public class BlockSyncManagerService {
 
 		synchronized Snapshot snapshot() {
 			return new Snapshot(reservedBytes, peakReservedBytes, activeRequests,
-					peakActiveRequests, activeRequestsByPeer.size());
+					peakActiveRequests, activeRequestsByPeer.size(), peakActivePeers);
 		}
 
 		record Snapshot(long reservedBytes, long peakReservedBytes, int activeRequests,
-				int peakActiveRequests, int activePeers) {
+				int peakActiveRequests, int activePeers, int peakActivePeers) {
 		}
 	}
 

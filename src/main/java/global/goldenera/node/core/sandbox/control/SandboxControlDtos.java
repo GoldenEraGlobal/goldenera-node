@@ -168,7 +168,17 @@ final class SandboxControlDtos {
 			int headerBatchLimit,
 			int bodyBatchLimit,
 			int pipelineDepthLimit,
-			int persistenceBatchLimit) {
+			int persistenceBatchLimit,
+			long bodyInflightByteLimit,
+			long bodyInflightReservedBytes,
+			long bodyInflightPeakReservedBytes,
+			int activeBodyRequests,
+			int peakActiveBodyRequests,
+			int activeBodyPeers,
+			int peakActiveBodyPeers,
+			long persistenceBatchByteLimit,
+			long persistenceBatchCurrentBytes,
+			long persistenceBatchPeakBytes) {
 	}
 
 	record PowRuntimeAudit(

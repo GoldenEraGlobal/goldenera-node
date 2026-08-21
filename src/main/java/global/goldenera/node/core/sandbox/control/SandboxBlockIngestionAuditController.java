@@ -144,7 +144,17 @@ final class SandboxBlockIngestionAuditController {
 				snapshot.headerBatchLimit(),
 				snapshot.bodyBatchLimit(),
 				snapshot.pipelineDepthLimit(),
-				snapshot.persistenceBatchLimit());
+				snapshot.persistenceBatchLimit(),
+				snapshot.bodyInflightByteLimit(),
+				snapshot.bodyInflightReservedBytes(),
+				snapshot.bodyInflightPeakReservedBytes(),
+				snapshot.activeBodyRequests(),
+				snapshot.peakActiveBodyRequests(),
+				snapshot.activeBodyPeers(),
+				snapshot.peakActiveBodyPeers(),
+				snapshot.persistenceBatchByteLimit(),
+				snapshot.persistenceBatchCurrentBytes(),
+				snapshot.persistenceBatchPeakBytes());
 	}
 
 	@GetMapping("/runtime/pow")

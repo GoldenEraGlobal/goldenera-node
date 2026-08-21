@@ -192,6 +192,7 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 		assertThat(processed).isEqualTo(1_000);
 		assertThat(fixture.requests.stream().map(BodyRequest::peer).distinct()).hasSize(3);
 		assertThat(snapshot.peakActiveBodyRequests()).isBetween(2, snapshot.pipelineDepthLimit());
+		assertThat(snapshot.peakActiveBodyPeers()).isBetween(2, 3);
 		assertThat(snapshot.bodyInflightPeakReservedBytes())
 				.isLessThanOrEqualTo(snapshot.bodyInflightByteLimit());
 		assertThat(snapshot.bodyInflightReservedBytes()).isZero();
