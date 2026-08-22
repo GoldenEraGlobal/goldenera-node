@@ -55,6 +55,7 @@ public class ExIndexerCoordinateService {
 	final MeterRegistry registry;
 	final ExIndexerQueueService queueService;
 	final ExIndexerService indexer;
+	final ExplorerIndexingExecutionGate executionGate;
 
 	final Thread worker = new Thread(this::processQueue, "Explorer-Coordinator");
 	final AtomicBoolean running = new AtomicBoolean(true);
@@ -100,6 +101,9 @@ public class ExIndexerCoordinateService {
 				if (task == null)
 					continue; // Should not happen with blocking take, but safety check
 
+				if (!explorerReadiness.isReady()) {
+					continue;
+				}
 				boolean success = processTaskWithRetryStrategy(task);
 				if (!success) {
 					triggerPanicMode(task);
@@ -145,13 +149,19 @@ public class ExIndexerCoordinateService {
 	}
 
 	private void processTask(ExIndexerTask task) {
-		if (task instanceof ExIndexerTask.ConnectTask ct) {
-			indexer.handleBlockConnected(ct.getEvent());
-		} else if (task instanceof ExIndexerTask.DisconnectTask dt) {
-			indexer.handleBlockDisconnected(dt.getEvent());
-		} else {
-			throw new IllegalArgumentException("Unknown task type: " + task.getClass().getName());
-		}
+		executionGate.run(() -> {
+			if (!explorerReadiness.isReady()) {
+				return;
+			}
+			if (task instanceof ExIndexerTask.ConnectTask ct) {
+				indexer.handleBlockConnected(ct.getEvent());
+			} else if (task instanceof ExIndexerTask.DisconnectTask dt) {
+				indexer.handleBlockDisconnected(dt.getEvent());
+			} else {
+				throw new IllegalArgumentException("Unknown task type: " + task.getClass().getName());
+			}
+			queueService.markTaskProcessed();
+		});
 	}
 
 	private void triggerPanicMode(ExIndexerTask task) {

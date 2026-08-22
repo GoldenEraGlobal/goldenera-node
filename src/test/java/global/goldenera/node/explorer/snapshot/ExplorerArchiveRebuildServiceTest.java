@@ -106,6 +106,22 @@ class ExplorerArchiveRebuildServiceTest {
 	}
 
 	@Test
+	void canonicalChangeRetriesInsideTheSameRebuildAndFinishesReady() {
+		ExplorerArchiveReplayEngine engine = mock(ExplorerArchiveReplayEngine.class);
+		doThrow(new ExplorerCanonicalArchiveChangedException("reorg"))
+				.doNothing()
+				.when(engine).rebuildToCanonicalHead();
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		ExplorerArchiveRebuildService service = new ExplorerArchiveRebuildService(
+				properties(true), readiness, engine, directExecutor());
+
+		service.start();
+
+		verify(engine, times(2)).rebuildToCanonicalHead();
+		assertThat(readiness.status().state()).isEqualTo(ExplorerReadinessState.READY);
+	}
+
+	@Test
 	void disabledExplorerDoesNoFallbackWork() {
 		ExplorerArchiveReplayEngine engine = mock(ExplorerArchiveReplayEngine.class);
 		ExecutorService executor = mock(ExecutorService.class);

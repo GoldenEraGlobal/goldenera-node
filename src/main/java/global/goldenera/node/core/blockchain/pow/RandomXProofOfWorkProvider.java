@@ -73,6 +73,11 @@ public class RandomXProofOfWorkProvider implements ProofOfWorkProvider {
 		return randomXManager.isInitializationInProgress();
 	}
 
+	@Override
+	public int verificationConcurrencyLimit(int availableProcessors) {
+		return randomXManager.verificationConcurrencyLimit(availableProcessors);
+	}
+
 	public boolean isDatasetAllocated() {
 		return randomXManager.isDatasetAllocated();
 	}

@@ -25,6 +25,8 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.List;
+
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
@@ -33,6 +35,7 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.Connecte
 import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -47,13 +50,18 @@ public class ExIndexerNodeListener {
 	GeneralProperties generalProperties;
 	ExplorerRuntimeReadiness explorerReadiness;
 	ExIndexerQueueService queueService;
+	ExplorerArchiveRebuildService archiveRebuildService;
 
 	@EventListener
 	public void onBlockConnected(BlockConnectedEvent event) {
-		if (!generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
+		if (!generalProperties.isExplorerEnable()) {
 			return;
 		}
 		if (event.isBatchMember()) {
+			return;
+		}
+		if (!explorerReadiness.isReady()) {
+			queueService.recordSkippedBatch(List.of(event));
 			return;
 		}
 		queueService.pushConnect(event);
@@ -61,17 +69,28 @@ public class ExIndexerNodeListener {
 
 	@EventListener
 	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
-		if (!generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
+		if (!generalProperties.isExplorerEnable()) {
 			return;
 		}
 		if (event.getConnectedSource() == ConnectedSource.SYNC) {
-			queueService.pushConnectBatch(event.getBlockEvents());
+			if (!explorerReadiness.isReady()) {
+				queueService.recordSkippedBatch(event.getBlockEvents());
+				return;
+			}
+			if (queueService.pushConnectBatch(event.getBlockEvents())
+					== ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED) {
+				archiveRebuildService.start();
+			}
 		}
 	}
 
 	@EventListener
 	public void onBlockDisconnected(BlockDisconnectedEvent event) {
-		if (!generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
+		if (!generalProperties.isExplorerEnable()) {
+			return;
+		}
+		if (!explorerReadiness.isReady()) {
+			queueService.recordSkippedDisconnect();
 			return;
 		}
 		queueService.pushDisconnect(event);

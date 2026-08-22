@@ -27,6 +27,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
@@ -94,51 +95,95 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 	public void rebuildToCanonicalHead() {
 		StoredBlock target = chainQuery.getLatestStoredBlockOrThrow();
 		ExStatus resumeStatus = statusService.getStatus().orElse(null);
-		long resumeHeight = resumeStatus == null ? -1L : resumeStatus.getSyncedBlockHeight();
+		long resumeHeight = canonicalResumeHeight(resumeStatus, target);
 		if (resumeHeight > target.getHeight()) {
-			throw new ExplorerSnapshotException("Explorer rebuild resume height is above canonical head");
-		}
-		if (resumeStatus != null) {
-			StoredBlock resumeBlock = canonical(resumeHeight);
-			if (!resumeBlock.getHash().equals(resumeStatus.getSyncedBlockHash())) {
-				throw new ExplorerSnapshotException("Explorer rebuild resume hash is not canonical");
-			}
+			throw new ExplorerCanonicalArchiveChangedException(
+					"Explorer rebuild resume height is above canonical head");
 		}
 		try (IsolatedWorldStateStorage isolated = IsolatedWorldStateStorage.temporary("explorer-rebuild-")) {
 			Hash previousRoot = MerkleTrie.EMPTY_TRIE_NODE_HASH;
-			for (long height = 0; height <= target.getHeight(); height++) {
-				StoredBlock stored = canonical(height);
-				WorldState worldState = isolated.worldStateFactory().createForValidation(previousRoot);
-				BlockConnectedEvent event;
-				if (height == 0) {
-					event = executeGenesis(worldState, stored);
-				} else {
-					event = executeBlock(worldState, stored);
+			Hash previousBlockHash = null;
+			long nextHeight = 0L;
+			while (true) {
+				while (nextHeight <= target.getHeight()) {
+					StoredBlock stored = canonical(nextHeight);
+					if (nextHeight > 0
+							&& !stored.getBlock().getHeader().getPreviousHash().equals(previousBlockHash)) {
+						throw new ExplorerCanonicalArchiveChangedException(
+								"Canonical parent changed during explorer rebuild at " + nextHeight);
+					}
+					WorldState worldState = isolated.worldStateFactory().createForValidation(previousRoot);
+					BlockConnectedEvent event = nextHeight == 0
+							? executeGenesis(worldState, stored)
+							: executeBlock(worldState, stored);
+					Hash calculated = worldState.calculateRootHash();
+					if (!calculated.equals(stored.getBlock().getHeader().getStateRootHash())) {
+						throw stateRootFailure(nextHeight, stored);
+					}
+					isolated.persist(worldState);
+					previousRoot = calculated;
+					previousBlockHash = stored.getHash();
+					if (nextHeight > resumeHeight) {
+						indexerService.handleBlockConnected(event);
+					}
+					if (nextHeight > 0 && nextHeight % YIELD_INTERVAL == 0) {
+						Thread.yield();
+					}
+					nextHeight++;
 				}
-				Hash calculated = worldState.calculateRootHash();
-				if (!calculated.equals(stored.getBlock().getHeader().getStateRootHash())) {
-					throw new ExplorerSnapshotException("Explorer rebuild state root mismatch at block " + height);
+
+				StoredBlock processedTarget = canonical(target.getHeight());
+				if (!processedTarget.getHash().equals(target.getHash())) {
+					throw new ExplorerCanonicalArchiveChangedException(
+							"Canonical target changed during explorer rebuild");
 				}
-				isolated.persist(worldState);
-				previousRoot = calculated;
-				if (height > resumeHeight) {
-					indexerService.handleBlockConnected(event);
+				StoredBlock current = chainQuery.getLatestStoredBlockOrThrow();
+				if (current.getHeight() == target.getHeight() && current.getHash().equals(target.getHash())) {
+					assertExplorerCaughtUp(target);
+					return;
 				}
-				if (height > 0 && height % YIELD_INTERVAL == 0) {
-					Thread.yield();
+				if (current.getHeight() < target.getHeight()) {
+					throw new ExplorerCanonicalArchiveChangedException(
+							"Canonical head moved behind explorer rebuild target");
 				}
-			}
-			StoredBlock current = chainQuery.getLatestStoredBlockOrThrow();
-			ExStatus status = statusService.getStatusOrThrow();
-			if (current.getHeight() != target.getHeight() || !current.getHash().equals(target.getHash())
-					|| status.getSyncedBlockHeight() != target.getHeight()
-					|| !status.getSyncedBlockHash().equals(target.getHash())) {
-				throw new ExplorerSnapshotException("Canonical chain changed during explorer rebuild");
+				target = current;
 			}
 		} catch (ExplorerSnapshotException e) {
 			throw e;
 		} catch (Exception e) {
 			throw new ExplorerSnapshotException("Explorer archive rebuild failed", e);
+		}
+	}
+
+	private long canonicalResumeHeight(ExStatus resumeStatus, StoredBlock target) {
+		if (resumeStatus == null) {
+			return -1L;
+		}
+		if (resumeStatus.getSyncedBlockHeight() > target.getHeight()) {
+			return resumeStatus.getSyncedBlockHeight();
+		}
+		Optional<StoredBlock> canonical = chainQuery.getStoredBlockByHeight(resumeStatus.getSyncedBlockHeight());
+		if (canonical.isPresent() && canonical.get().getHash().equals(resumeStatus.getSyncedBlockHash())) {
+			return resumeStatus.getSyncedBlockHeight();
+		}
+		return -1L;
+	}
+
+	private ExplorerSnapshotException stateRootFailure(long height, StoredBlock replayed) {
+		Optional<Hash> currentHash = chainQuery.getBlockHashByHeight(height);
+		if (currentHash.isEmpty() || !currentHash.get().equals(replayed.getHash())) {
+			return new ExplorerCanonicalArchiveChangedException(
+					"Canonical block changed during explorer rebuild at " + height);
+		}
+		return new ExplorerSnapshotException("Explorer rebuild state root mismatch at block " + height);
+	}
+
+	private void assertExplorerCaughtUp(StoredBlock target) {
+		ExStatus status = statusService.getStatusOrThrow();
+		if (status.getSyncedBlockHeight() != target.getHeight()
+				|| !status.getSyncedBlockHash().equals(target.getHash())) {
+			throw new ExplorerCanonicalArchiveChangedException(
+					"Explorer status did not catch the moving canonical head");
 		}
 	}
 
@@ -148,7 +193,8 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 		Hash indexed = chainQuery.getBlockHashByHeight(height)
 				.orElseThrow(() -> new ExplorerSnapshotException("Missing canonical height index " + height));
 		if (!indexed.equals(block.getHash())) {
-			throw new ExplorerSnapshotException("Canonical block changed during explorer rebuild at " + height);
+			throw new ExplorerCanonicalArchiveChangedException(
+					"Canonical block changed during explorer rebuild at " + height);
 		}
 		return block;
 	}

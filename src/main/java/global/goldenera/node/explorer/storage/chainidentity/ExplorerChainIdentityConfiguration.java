@@ -47,7 +47,9 @@ import global.goldenera.node.explorer.snapshot.ExplorerCheckpointSnapshotImporte
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBootstrapService;
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotRemoteSource;
 import global.goldenera.node.explorer.snapshot.IsolatedExplorerArchiveReplayEngine;
+import global.goldenera.node.explorer.services.indexer.business.ExIndexerQueueService;
 import global.goldenera.node.explorer.services.indexer.business.ExIndexerService;
+import global.goldenera.node.explorer.services.indexer.business.ExplorerIndexingExecutionGate;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import liquibase.integration.spring.SpringLiquibase;
@@ -142,8 +144,11 @@ public class ExplorerChainIdentityConfiguration {
 	ExplorerArchiveRebuildService explorerArchiveRebuildService(
 			GeneralProperties generalProperties,
 			ExplorerRuntimeReadiness readiness,
-			ExplorerArchiveReplayEngine replayEngine) {
-		return new ExplorerArchiveRebuildService(generalProperties, readiness, replayEngine);
+			ExplorerArchiveReplayEngine replayEngine,
+			ExplorerIndexingExecutionGate executionGate,
+			ExIndexerQueueService queueService) {
+		return new ExplorerArchiveRebuildService(
+				generalProperties, readiness, replayEngine, executionGate, queueService);
 	}
 
 	@Bean(name = ExplorerChainIdentityInitializer.BEAN_NAME)

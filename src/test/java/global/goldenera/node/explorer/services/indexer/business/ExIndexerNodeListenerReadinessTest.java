@@ -36,6 +36,7 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
 import global.goldenera.node.shared.properties.GeneralProperties;
 
 class ExIndexerNodeListenerReadinessTest {
@@ -46,8 +47,9 @@ class ExIndexerNodeListenerReadinessTest {
 		properties.setExplorerEnable(true);
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
+		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
-		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue);
+		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue, rebuild);
 		when(readiness.isReady()).thenReturn(false);
 
 		listener.onBlockConnected(event);
@@ -65,13 +67,14 @@ class ExIndexerNodeListenerReadinessTest {
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		when(readiness.isReady()).thenReturn(true);
 		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
+		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
 		BlockConnectedEvent first = mock(BlockConnectedEvent.class);
 		BlockConnectedEvent tip = mock(BlockConnectedEvent.class);
 		when(first.getConnectedSource()).thenReturn(ConnectedSource.SYNC);
 		when(tip.getConnectedSource()).thenReturn(ConnectedSource.SYNC);
 		when(first.isBatchMember()).thenReturn(true);
 		when(tip.isBatchMember()).thenReturn(true);
-		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue);
+		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue, rebuild);
 
 		listener.onBlockConnected(first);
 		listener.onBlockConnected(tip);
@@ -83,5 +86,44 @@ class ExIndexerNodeListenerReadinessTest {
 				this, ConnectedSource.SYNC, events));
 
 		verify(queue).pushConnectBatch(events);
+	}
+
+	@Test
+	void queueOverflowStartsOneBackgroundRebuildWithoutBlockingThePublisher() {
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
+		when(readiness.isReady()).thenReturn(true);
+		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
+		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
+		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
+		List<BlockConnectedEvent> events = List.of(event);
+		when(queue.pushConnectBatch(events))
+				.thenReturn(ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED);
+		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue, rebuild);
+
+		listener.onBlockConnectionBatchCompleted(new BlockConnectionBatchCompletedEvent(
+				this, ConnectedSource.SYNC, events));
+
+		verify(rebuild).start();
+	}
+
+	@Test
+	void disabledExplorerDoesNoQueueOrRebuildWork() {
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(false);
+		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
+		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
+		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
+		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue, rebuild);
+		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
+
+		listener.onBlockConnected(event);
+		listener.onBlockConnectionBatchCompleted(new BlockConnectionBatchCompletedEvent(
+				this, ConnectedSource.SYNC, List.of(event)));
+
+		verify(queue, never()).pushConnect(event);
+		verify(queue, never()).pushConnectBatch(List.of(event));
+		verify(rebuild, never()).start();
 	}
 }

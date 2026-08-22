@@ -27,13 +27,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
+import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.common.Block;
@@ -48,6 +52,7 @@ import global.goldenera.node.core.blockchain.genesis.GenesisInitializer;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.processing.StateProcessor;
+import global.goldenera.node.core.processing.StateProcessor.ExecutionResult;
 import global.goldenera.node.core.state.IsolatedWorldStateStorage;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
@@ -91,6 +96,57 @@ class IsolatedExplorerArchiveReplayEngineTest {
 		verify(fixture.indexer(), never()).handleBlockConnected(any());
 	}
 
+	@Test
+	void catchesAHeadThatAdvancesDuringReplayWithoutMissingTheFinalExplorerBlock() throws Exception {
+		Hash root = genesisRoot();
+		BlockHeader genesisHeader = mock(BlockHeader.class);
+		when(genesisHeader.getStateRootHash()).thenReturn(root);
+		when(genesisHeader.getTimestamp()).thenReturn(GENESIS_TIME);
+		Block genesisBlock = mock(Block.class);
+		when(genesisBlock.getHeight()).thenReturn(0L);
+		when(genesisBlock.getHeader()).thenReturn(genesisHeader);
+		StoredBlock genesis = stored(genesisBlock, 0L, GENESIS_HASH);
+
+		Hash blockOneHash = Hash.fromHexString("0x" + "7".repeat(64));
+		BlockHeader blockOneHeader = mock(BlockHeader.class);
+		when(blockOneHeader.getPreviousHash()).thenReturn(GENESIS_HASH);
+		when(blockOneHeader.getStateRootHash()).thenReturn(root);
+		Block blockOne = mock(Block.class);
+		when(blockOne.getHeight()).thenReturn(1L);
+		when(blockOne.getHeader()).thenReturn(blockOneHeader);
+		when(blockOne.getTxs()).thenReturn(List.of());
+		StoredBlock blockOneStored = stored(blockOne, 1L, blockOneHash);
+
+		ChainQuery chainQuery = mock(ChainQuery.class);
+		when(chainQuery.getLatestStoredBlockOrThrow())
+				.thenReturn(genesis, blockOneStored, blockOneStored);
+		when(chainQuery.getStoredBlockByHeight(0)).thenReturn(Optional.of(genesis));
+		when(chainQuery.getStoredBlockByHeight(1)).thenReturn(Optional.of(blockOneStored));
+		when(chainQuery.getBlockHashByHeight(0)).thenReturn(Optional.of(GENESIS_HASH));
+		when(chainQuery.getBlockHashByHeight(1)).thenReturn(Optional.of(blockOneHash));
+
+		ExecutionResult result = mock(ExecutionResult.class);
+		when(result.getTotalFeesCollected()).thenReturn(Wei.ZERO);
+		when(result.getMinerActualRewardPaid()).thenReturn(Wei.ZERO);
+		when(result.getActualBurnAmounts()).thenReturn(Map.of());
+		StateProcessor processor = mock(StateProcessor.class);
+		when(processor.executeTransactions(any(), any(), any(), any())).thenReturn(result);
+		BlockEventExtractor extractor = mock(BlockEventExtractor.class);
+		when(extractor.extractEvents(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+				.thenReturn(List.of());
+		ExIndexerService indexer = mock(ExIndexerService.class);
+		ExIndexerStatusCoreService status = mock(ExIndexerStatusCoreService.class);
+		when(status.getStatus()).thenReturn(Optional.empty());
+		when(status.getStatusOrThrow()).thenReturn(
+				new ExStatus(1, 1, blockOneHash, GENESIS_TIME, "test"));
+		IsolatedExplorerArchiveReplayEngine engine = new IsolatedExplorerArchiveReplayEngine(
+				chainQuery, processor, extractor, indexer, status);
+
+		engine.rebuildToCanonicalHead();
+
+		verify(indexer, times(2)).handleBlockConnected(any(BlockConnectedEvent.class));
+	}
+
 	private Fixture fixture(Hash stateRoot, Optional<ExStatus> initialStatus) {
 		BlockHeader header = mock(BlockHeader.class);
 		when(header.getStateRootHash()).thenReturn(stateRoot);
@@ -116,6 +172,17 @@ class IsolatedExplorerArchiveReplayEngineTest {
 		IsolatedExplorerArchiveReplayEngine engine = new IsolatedExplorerArchiveReplayEngine(
 				chainQuery, mock(StateProcessor.class), mock(BlockEventExtractor.class), indexer, status);
 		return new Fixture(engine, indexer);
+	}
+
+	private StoredBlock stored(Block block, long height, Hash hash) {
+		StoredBlock stored = mock(StoredBlock.class);
+		when(stored.getHeight()).thenReturn(height);
+		when(stored.getHash()).thenReturn(hash);
+		when(stored.getBlock()).thenReturn(block);
+		when(stored.getCumulativeDifficulty()).thenReturn(BigInteger.ONE);
+		when(stored.getReceivedFrom()).thenReturn(Address.ZERO);
+		when(stored.getReceivedAt()).thenReturn(GENESIS_TIME);
+		return stored;
 	}
 
 	private Hash genesisRoot() throws Exception {

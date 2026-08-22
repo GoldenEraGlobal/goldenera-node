@@ -165,6 +165,12 @@ public class RandomXManager {
 		return activeVMs.get();
 	}
 
+	public int verificationConcurrencyLimit(int availableProcessors) {
+		return Math.min(
+				MiningProperties.MAX_LIGHT_HASHING_THREADS,
+				Math.max(1, availableProcessors));
+	}
+
 	public RandomXMiningMemoryMode getMiningMemoryMode() {
 		return miningProperties.getMemoryMode();
 	}

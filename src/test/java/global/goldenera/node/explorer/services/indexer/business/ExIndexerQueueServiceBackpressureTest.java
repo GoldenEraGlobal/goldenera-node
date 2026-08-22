@@ -28,6 +28,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -40,6 +41,29 @@ import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class ExIndexerQueueServiceBackpressureTest {
+
+	@Test
+	@Timeout(2)
+	void fullSyncQueueSwitchesToRebuildWithoutBlockingOrPartialAdmission() {
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		readiness.ready();
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		ExIndexerQueueService queue = new ExIndexerQueueService(properties, readiness, registry);
+		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
+		assertThat(queue.pushConnectBatch(Collections.nCopies(10_000, event)))
+				.isEqualTo(ExIndexerQueueService.BatchAdmission.ENQUEUED);
+
+		long started = System.nanoTime();
+		ExIndexerQueueService.BatchAdmission admission = queue.pushConnectBatch(List.of(event));
+
+		assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).isLessThan(100L);
+		assertThat(admission).isEqualTo(ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED);
+		assertThat(queue.size()).isZero();
+		assertThat(readiness.isReady()).isFalse();
+		assertThat(registry.counter("explorer.queue.overflow_to_rebuild").count()).isEqualTo(1.0);
+	}
 
 	@Test
 	@Timeout(5)
@@ -62,5 +86,25 @@ class ExIndexerQueueServiceBackpressureTest {
 
 		producer.get(1, TimeUnit.SECONDS);
 		assertThat(queue.size()).isEqualTo(10_000);
+	}
+
+	@Test
+	void normalSyncBatchPreservesLiveEventOrder() throws Exception {
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		readiness.ready();
+		ExIndexerQueueService queue = new ExIndexerQueueService(
+				properties, readiness, new SimpleMeterRegistry());
+		BlockConnectedEvent first = mock(BlockConnectedEvent.class);
+		BlockConnectedEvent second = mock(BlockConnectedEvent.class);
+		BlockConnectedEvent third = mock(BlockConnectedEvent.class);
+
+		assertThat(queue.pushConnectBatch(List.of(first, second, third)))
+				.isEqualTo(ExIndexerQueueService.BatchAdmission.ENQUEUED);
+
+		assertThat(queue.take().getEvent()).isSameAs(first);
+		assertThat(queue.take().getEvent()).isSameAs(second);
+		assertThat(queue.take().getEvent()).isSameAs(third);
 	}
 }

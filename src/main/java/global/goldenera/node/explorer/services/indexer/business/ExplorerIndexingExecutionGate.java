@@ -21,27 +21,24 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.blockchain.pow;
+package global.goldenera.node.explorer.services.indexer.business;
 
-import java.util.Optional;
-import java.util.function.Function;
+import java.util.concurrent.locks.ReentrantLock;
 
-/**
- * Consensus proof-of-work provider shared by mining and validation.
- */
-public interface ProofOfWorkProvider {
+import org.springframework.stereotype.Component;
 
-	void prepareForMining(long height);
+/** Serializes live explorer writes with full archive rebuilds. */
+@Component
+public final class ExplorerIndexingExecutionGate {
 
-	ProofOfWorkHasher openMiningHasher();
+	private final ReentrantLock lock = new ReentrantLock(true);
 
-	ProofOfWorkHasher openVerificationHasher(long height,
-			Function<Long, Optional<byte[]>> seedBlockProvider);
-
-	boolean isInitializationInProgress();
-
-	/** Maximum useful verifier concurrency for this provider and runtime. */
-	default int verificationConcurrencyLimit(int availableProcessors) {
-		return Math.max(1, availableProcessors);
+	public void run(Runnable operation) {
+		lock.lock();
+		try {
+			operation.run();
+		} finally {
+			lock.unlock();
+		}
 	}
 }

@@ -119,6 +119,10 @@ public class BlockValidator {
 		return validateHeader(header, Collections.emptyMap());
 	}
 
+	public int headerValidationConcurrencyLimit(int availableProcessors) {
+		return proofOfWorkProvider.verificationConcurrencyLimit(availableProcessors);
+	}
+
 	public StatelessValidatedHeader validateHeader(@NonNull BlockHeader header, @NonNull Map<Long, Hash> batchContext) {
 		try {
 			if (header.getHeight() == 0) {

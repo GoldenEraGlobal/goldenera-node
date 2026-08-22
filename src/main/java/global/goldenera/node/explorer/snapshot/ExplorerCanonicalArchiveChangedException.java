@@ -21,27 +21,12 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.blockchain.pow;
+package global.goldenera.node.explorer.snapshot;
 
-import java.util.Optional;
-import java.util.function.Function;
+/** Signals a transient canonical-chain change while replaying explorer data. */
+public final class ExplorerCanonicalArchiveChangedException extends ExplorerSnapshotException {
 
-/**
- * Consensus proof-of-work provider shared by mining and validation.
- */
-public interface ProofOfWorkProvider {
-
-	void prepareForMining(long height);
-
-	ProofOfWorkHasher openMiningHasher();
-
-	ProofOfWorkHasher openVerificationHasher(long height,
-			Function<Long, Optional<byte[]>> seedBlockProvider);
-
-	boolean isInitializationInProgress();
-
-	/** Maximum useful verifier concurrency for this provider and runtime. */
-	default int verificationConcurrencyLimit(int availableProcessors) {
-		return Math.max(1, availableProcessors);
+	public ExplorerCanonicalArchiveChangedException(String message) {
+		super(message);
 	}
 }

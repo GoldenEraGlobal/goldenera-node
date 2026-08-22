@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -58,6 +59,7 @@ public class ExIndexerQueueService {
 	ExplorerRuntimeReadiness explorerReadiness;
 	MeterRegistry registry;
 	Deque<ExIndexerTask> queue = new ArrayDeque<>(MAX_QUEUE_CAPACITY);
+	AtomicLong catchUpLagBlocks = new AtomicLong();
 
 	ReentrantLock lock = new ReentrantLock(true);
 	Condition notEmpty = lock.newCondition();
@@ -69,6 +71,7 @@ public class ExIndexerQueueService {
 			return;
 		}
 		registry.gaugeCollectionSize("explorer.queue.size", Tags.empty(), queue);
+		registry.gauge("explorer.catchup.lag.blocks", catchUpLagBlocks);
 	}
 
 	public void pushConnect(BlockConnectedEvent event) {
@@ -84,6 +87,7 @@ public class ExIndexerQueueService {
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
+				markTaskProcessed();
 				notFull.signalAll();
 				log.debug("Optimization: Skipped flickering (Disconnect->Connect) for block #{}",
 						event.getBlock().getHeight());
@@ -93,6 +97,7 @@ public class ExIndexerQueueService {
 			awaitCapacity(1);
 
 			queue.addLast(new ExIndexerTask.ConnectTask(event));
+			catchUpLagBlocks.incrementAndGet();
 			notEmpty.signalAll();
 		} finally {
 			lock.unlock();
@@ -100,22 +105,35 @@ public class ExIndexerQueueService {
 	}
 
 	/**
-	 * Atomically enqueues a committed sync batch while keeping the capacity in
-	 * block units. The producer waits for the explorer instead of allowing the
-	 * queue (and its full block/state-diff events) to grow without bounds.
+	 * Atomically enqueues a committed sync batch without waiting for explorer
+	 * capacity. Overflow abandons the stale live queue and requests a canonical
+	 * archive rebuild so the core sync publisher can return immediately.
 	 */
-	public void pushConnectBatch(List<BlockConnectedEvent> events) {
+	public BatchAdmission pushConnectBatch(List<BlockConnectedEvent> events) {
 		if (!enabled() || events.isEmpty()) {
-			return;
-		}
-		if (events.size() > MAX_QUEUE_CAPACITY) {
-			throw new IllegalArgumentException("Explorer batch exceeds queue capacity: " + events.size());
+			return BatchAdmission.IGNORED;
 		}
 		lock.lock();
 		try {
-			awaitCapacity(events.size());
+			if (events.size() > MAX_QUEUE_CAPACITY
+					|| queue.size() + events.size() > MAX_QUEUE_CAPACITY) {
+				int discarded = queue.size();
+				queue.clear();
+				catchUpLagBlocks.addAndGet(events.size());
+				notFull.signalAll();
+				explorerReadiness.rebuilding(
+						"Explorer live queue overflowed and is rebuilding from the local canonical archive");
+				registry.counter("explorer.queue.overflow_to_rebuild").increment();
+				log.warn(
+						"Explorer queue cannot atomically admit {} committed sync blocks ({} queued); "
+								+ "switching to nonblocking local archive rebuild",
+						events.size(), discarded);
+				return BatchAdmission.REBUILD_REQUIRED;
+			}
 			events.forEach(event -> queue.addLast(new ExIndexerTask.ConnectTask(event)));
+			catchUpLagBlocks.addAndGet(events.size());
 			notEmpty.signalAll();
+			return BatchAdmission.ENQUEUED;
 		} finally {
 			lock.unlock();
 		}
@@ -134,6 +152,7 @@ public class ExIndexerQueueService {
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
+				markTaskProcessed();
 				notFull.signalAll();
 				log.debug("Optimization: Skipped indexing/reverting block #{} (cancelled in queue)",
 						event.getBlock().getHeight());
@@ -143,6 +162,7 @@ public class ExIndexerQueueService {
 			awaitCapacity(1);
 
 			queue.addLast(new ExIndexerTask.DisconnectTask(event));
+			catchUpLagBlocks.incrementAndGet();
 			notEmpty.signalAll();
 		} finally {
 			lock.unlock();
@@ -151,13 +171,39 @@ public class ExIndexerQueueService {
 
 	private void awaitCapacity(int requiredCapacity) {
 		boolean blocked = false;
+		long blockedSince = 0L;
 		while (queue.size() + requiredCapacity > MAX_QUEUE_CAPACITY) {
 			if (!blocked) {
 				registry.counter("explorer.queue.blocked").increment();
 				blocked = true;
+				blockedSince = System.nanoTime();
 			}
 			notFull.awaitUninterruptibly();
 		}
+		if (blocked) {
+			registry.timer("explorer.queue.blocked.duration")
+					.record(System.nanoTime() - blockedSince, TimeUnit.NANOSECONDS);
+		}
+	}
+
+	public void recordSkippedBatch(List<BlockConnectedEvent> events) {
+		if (generalProperties.isExplorerEnable() && !events.isEmpty()) {
+			catchUpLagBlocks.addAndGet(events.size());
+		}
+	}
+
+	public void recordSkippedDisconnect() {
+		if (generalProperties.isExplorerEnable()) {
+			catchUpLagBlocks.incrementAndGet();
+		}
+	}
+
+	public void markTaskProcessed() {
+		catchUpLagBlocks.updateAndGet(current -> Math.max(0L, current - 1L));
+	}
+
+	public void markRebuildComplete() {
+		catchUpLagBlocks.set(0L);
 	}
 
 	public ExIndexerTask take() throws InterruptedException {
@@ -224,5 +270,11 @@ public class ExIndexerQueueService {
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	public enum BatchAdmission {
+		ENQUEUED,
+		REBUILD_REQUIRED,
+		IGNORED
 	}
 }
