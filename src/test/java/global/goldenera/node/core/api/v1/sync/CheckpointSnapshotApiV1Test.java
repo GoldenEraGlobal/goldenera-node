@@ -25,8 +25,12 @@ package global.goldenera.node.core.api.v1.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
@@ -36,9 +40,9 @@ import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.MediaType;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import global.goldenera.node.core.properties.SnapshotDistributionProperties;
 
@@ -83,8 +87,8 @@ class CheckpointSnapshotApiV1Test {
 		properties.setPublishPublicOrigin(URI.create("https://snapshots.example.test/"));
 		CheckpointSnapshotApiV1 controller = new CheckpointSnapshotApiV1(properties);
 
-		ResponseEntity<StreamingResponseBody> manifestResponse = controller.manifest();
-		ResponseEntity<StreamingResponseBody> chunkResponse = controller.chunk("0");
+		ResponseEntity<Resource> manifestResponse = controller.manifest();
+		ResponseEntity<Resource> chunkResponse = controller.chunk("0");
 		assertThat(manifestResponse.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_JSON);
 		assertThat(chunkResponse.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
 		assertThat(body(manifestResponse)).isEqualTo(manifest);
@@ -119,20 +123,22 @@ class CheckpointSnapshotApiV1Test {
 		CheckpointSnapshotApiV1 controller = new CheckpointSnapshotApiV1(
 				properties, new SnapshotStreamLimiter(properties));
 
-		ResponseEntity<StreamingResponseBody> held = controller.chunk("0");
-		ResponseEntity<StreamingResponseBody> rejected = controller.chunk("0");
+		ResponseEntity<Resource> held = controller.chunk("0");
+		ResponseEntity<Resource> rejected = controller.chunk("0");
 		assertThat(rejected.getStatusCode().value()).isEqualTo(429);
 		assertThat(rejected.getHeaders().getFirst("Retry-After")).isEqualTo("1");
 		assertThat(body(held)).isEqualTo("chunk".getBytes(StandardCharsets.UTF_8));
 		assertThat(body(controller.chunk("0"))).isEqualTo("chunk".getBytes(StandardCharsets.UTF_8));
 
-		ResponseEntity<StreamingResponseBody> failing = controller.chunk("0");
-		assertThatThrownBy(() -> failing.getBody().writeTo(new OutputStream() {
-			@Override
-			public void write(int value) throws IOException {
-				throw new IOException("client disconnected");
-			}
-		})).isInstanceOf(IOException.class).hasMessageContaining("client disconnected");
+		ResponseEntity<Resource> failing = controller.chunk("0");
+		try (var input = failing.getBody().getInputStream()) {
+			assertThatThrownBy(() -> input.transferTo(new OutputStream() {
+				@Override
+				public void write(int value) throws IOException {
+					throw new IOException("client disconnected");
+				}
+			})).isInstanceOf(IOException.class).hasMessageContaining("client disconnected");
+		}
 		assertThat(body(controller.chunk("0"))).isEqualTo("chunk".getBytes(StandardCharsets.UTF_8));
 	}
 
@@ -149,16 +155,66 @@ class CheckpointSnapshotApiV1Test {
 		properties.setPublishPublicOrigin(URI.create("https://snapshots.example.test/"));
 		CheckpointSnapshotApiV1 controller = new CheckpointSnapshotApiV1(properties);
 
-		ResponseEntity<StreamingResponseBody> response = controller.versionChunk(version, "0");
+		ResponseEntity<Resource> response = controller.versionChunk(version, "0");
 		assertThat(body(response)).isEqualTo("versioned-chunk".getBytes(StandardCharsets.UTF_8));
 		assertThat(response.getHeaders().getCacheControl()).contains("immutable");
 		assertThat(controller.versionChunk("../" + version, "0").getStatusCode().value()).isEqualTo(404);
 	}
 
-	private byte[] body(ResponseEntity<StreamingResponseBody> response) throws Exception {
+	@Test
+	void servesEveryVersionedEntityChunkThroughIndependentLeasedResources() throws Exception {
+		String version = "snapshot-0-" + "cd".repeat(32) + "-s1-a2-e1-x1";
+		Path versionDirectory = Files.createDirectories(publishDirectory.resolve("versions").resolve(version));
+		Files.writeString(versionDirectory.resolve("manifest.json"), "state-manifest");
+		Files.writeString(versionDirectory.resolve("archive-manifest.json"), "archive-manifest");
+		byte[][] chunks = {
+				"entity-zero".getBytes(StandardCharsets.UTF_8),
+				"entity-one".getBytes(StandardCharsets.UTF_8),
+				"entity-two".getBytes(StandardCharsets.UTF_8)
+		};
+		for (int index = 0; index < chunks.length; index++) {
+			Files.write(versionDirectory.resolve("entity-chunk-%05d.zst".formatted(index)), chunks[index]);
+		}
+		SnapshotDistributionProperties properties = new SnapshotDistributionProperties();
+		properties.setPublishEnabled(true);
+		properties.setPublishDirectory(publishDirectory);
+		properties.setPublishPublicOrigin(URI.create("https://snapshots.example.test/"));
+		CheckpointSnapshotApiV1 controller = new CheckpointSnapshotApiV1(properties);
+
+		ResponseEntity<Resource> first = controller.versionArchiveEntityChunk(version, "0");
+		ResponseEntity<Resource> second = controller.versionArchiveEntityChunk(version, "1");
+		ResponseEntity<Resource> third = controller.versionArchiveEntityChunk(version, "2");
+
+		assertThat(body(first)).isEqualTo(chunks[0]);
+		assertThat(body(second)).isEqualTo(chunks[1]);
+		assertThat(body(third)).isEqualTo(chunks[2]);
+		assertThat(body(controller.versionArchiveEntityChunk(version, "1"))).isEqualTo(chunks[1]);
+	}
+
+	@Test
+	void servesVersionedEntityChunkSynchronouslyWithoutAsyncDispatch() throws Exception {
+		String version = "snapshot-0-" + "ef".repeat(32) + "-s1-a2-e1-x1";
+		Path versionDirectory = Files.createDirectories(publishDirectory.resolve("versions").resolve(version));
+		Files.writeString(versionDirectory.resolve("manifest.json"), "state-manifest");
+		Files.writeString(versionDirectory.resolve("archive-manifest.json"), "archive-manifest");
+		byte[] entity = "entity-one".getBytes(StandardCharsets.UTF_8);
+		Files.write(versionDirectory.resolve("entity-chunk-00001.zst"), entity);
+		SnapshotDistributionProperties properties = new SnapshotDistributionProperties();
+		properties.setPublishEnabled(true);
+		properties.setPublishDirectory(publishDirectory);
+		properties.setPublishPublicOrigin(URI.create("https://snapshots.example.test/"));
+
+		standaloneSetup(new CheckpointSnapshotApiV1(properties)).build()
+				.perform(get("/api/core/v1/sync/snapshots/checkpoint/versions/{version}/archive/entities/1", version))
+				.andExpect(status().isOk())
+				.andExpect(request().asyncNotStarted())
+				.andExpect(content().bytes(entity));
+	}
+
+	private byte[] body(ResponseEntity<Resource> response) throws Exception {
 		assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
-		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		response.getBody().writeTo(output);
-		return output.toByteArray();
+		try (var input = response.getBody().getInputStream()) {
+			return input.readAllBytes();
+		}
 	}
 }

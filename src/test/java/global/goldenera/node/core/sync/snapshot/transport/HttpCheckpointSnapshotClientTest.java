@@ -245,6 +245,17 @@ class HttpCheckpointSnapshotClientTest {
 	}
 
 	@Test
+	void aggregateManifestFailurePreservesActionableHttpStatus() throws Exception {
+		serveManifest(manifest(null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0));
+
+		assertThatThrownBy(() -> client(properties(true)).stageFullArchiveFromFirstTrustedSource())
+				.isInstanceOf(SnapshotTransportException.class)
+				.hasMessageContaining("All trusted full core snapshot manifests failed")
+				.hasMessageContaining("status 404")
+				.hasCauseInstanceOf(SnapshotTransportException.class);
+	}
+
+	@Test
 	void fullArchiveTrustedSourceFailoverCleansFailedStaging() throws Exception {
 		SnapshotTransportManifest stateEnvelope = manifest(
 				null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
@@ -297,7 +308,9 @@ class HttpCheckpointSnapshotClientTest {
 
 		assertThatThrownBy(() -> client(properties).stageFullArchiveFromFirstTrustedSource())
 				.isInstanceOf(SnapshotTransportException.class)
-				.hasMessageContaining("checkpoint 0");
+				.hasMessageContaining("checkpoint 0")
+				.hasMessageContaining("status 503")
+				.hasCauseInstanceOf(SnapshotTransportException.class);
 		assertThat(chunkRequests).hasValue(1);
 		assertThat(archiveRequests).hasValue(1);
 
@@ -310,6 +323,35 @@ class HttpCheckpointSnapshotClientTest {
 		try (var children = Files.list(cacheBase)) {
 			assertThat(children).isEmpty();
 		}
+	}
+
+	@Test
+	void aggregateStagingFailurePreservesActionableChunkHashMismatch() throws Exception {
+		SnapshotTransportManifest stateEnvelope = manifest(null, Hash.ZERO.toHexString(), 0, 0);
+		serveManifest(stateEnvelope);
+		byte[] archiveChunk = archiveChunk(1, CoreSnapshotArchiveLimits.FORMAT_VERSION);
+		serveArchive(archiveManifest(stateEnvelope, 0, archiveChunk), archiveChunk);
+
+		assertThatThrownBy(() -> client(properties(true)).stageFullArchiveFromFirstTrustedSource())
+				.isInstanceOf(SnapshotTransportException.class)
+				.hasMessageContaining("checkpoint 0")
+				.hasMessageContaining("size/hash mismatch")
+				.hasCauseInstanceOf(SnapshotTransportException.class);
+	}
+
+	@Test
+	void aggregateStagingFailurePreservesActionableChunkFormatMismatch() throws Exception {
+		SnapshotTransportManifest stateEnvelope = manifest(
+				null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
+		serveManifest(stateEnvelope);
+		byte[] archiveChunk = archiveChunk(1, 1);
+		serveArchive(archiveManifest(stateEnvelope, 0, archiveChunk), archiveChunk);
+
+		assertThatThrownBy(() -> client(properties(true)).stageFullArchiveFromFirstTrustedSource())
+				.isInstanceOf(SnapshotTransportException.class)
+				.hasMessageContaining("checkpoint 0")
+				.hasMessageContaining("chunk format is incompatible")
+				.hasCauseInstanceOf(SnapshotTransportException.class);
 	}
 
 	@Test

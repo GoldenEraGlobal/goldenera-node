@@ -184,7 +184,7 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 				deleteOwnedStaging(directory);
 			}
 		}
-		throw failure("All trusted snapshot sources failed for " + network, lastFailure);
+		throw aggregateFailure("All trusted snapshot sources failed for " + network, lastFailure);
 	}
 
 	/**
@@ -211,7 +211,7 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 			}
 		}
 		if (candidates.isEmpty()) {
-			throw failure("All trusted full core snapshot manifests failed for " + network, lastFailure);
+			throw aggregateFailure("All trusted full core snapshot manifests failed for " + network, lastFailure);
 		}
 
 		List<TrustedSnapshotCandidate> selectedAnchors = selectHighestTrustedGroup(candidates.stream()
@@ -245,7 +245,7 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 				}
 			}
 		}
-		throw failure("All trusted sources for checkpoint " + highestCheckpoint + " failed", lastFailure);
+		throw aggregateFailure("All trusted sources for checkpoint " + highestCheckpoint + " failed", lastFailure);
 	}
 
 	private void verifyStagedFormatHeaders(StagedCoreSnapshotArchiveDownload staged) {
@@ -949,6 +949,14 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 
 	private SnapshotTransportException failure(String message, Throwable cause) {
 		return new SnapshotTransportException(message, cause);
+	}
+
+	private SnapshotTransportException aggregateFailure(
+			String message, SnapshotTransportException lastFailure) {
+		if (lastFailure == null || lastFailure.getMessage() == null || lastFailure.getMessage().isBlank()) {
+			return failure(message, lastFailure);
+		}
+		return failure(message + ": " + lastFailure.getMessage(), lastFailure);
 	}
 
 	private record ResolvedChunk(int index, URI uri, long encodedByteCount, Hash contentHash) {

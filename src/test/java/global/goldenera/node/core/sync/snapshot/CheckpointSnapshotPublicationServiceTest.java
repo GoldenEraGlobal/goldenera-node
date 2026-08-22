@@ -32,7 +32,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -49,8 +48,8 @@ import java.util.Optional;
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -327,11 +326,11 @@ class CheckpointSnapshotPublicationServiceTest {
 		return List.copyOf(blocks);
 	}
 
-	private byte[] body(ResponseEntity<StreamingResponseBody> response) throws Exception {
+	private byte[] body(ResponseEntity<Resource> response) throws Exception {
 		assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
-		ByteArrayOutputStream output = new ByteArrayOutputStream();
-		response.getBody().writeTo(output);
-		return output.toByteArray();
+		try (var input = response.getBody().getInputStream()) {
+			return input.readAllBytes();
+		}
 	}
 
 	private record Fixture(

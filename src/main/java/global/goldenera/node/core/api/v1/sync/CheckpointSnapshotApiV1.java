@@ -23,18 +23,20 @@
  */
 package global.goldenera.node.core.api.v1.sync;
 
+import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.channels.Channels;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static java.nio.file.StandardOpenOption.READ;
 
+import org.springframework.core.io.AbstractResource;
+import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -43,7 +45,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import global.goldenera.node.core.properties.SnapshotDistributionProperties;
 import global.goldenera.node.core.sync.snapshot.publication.SnapshotPublicationDirectorySelector;
@@ -74,12 +75,12 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/manifest")
-	public ResponseEntity<StreamingResponseBody> manifest() {
+	public ResponseEntity<Resource> manifest() {
 		return serve("manifest.json", properties.getMaxManifestBytes(), false, MediaType.APPLICATION_JSON);
 	}
 
 	@GetMapping("/chunks/{index}")
-	public ResponseEntity<StreamingResponseBody> chunk(@PathVariable String index) {
+	public ResponseEntity<Resource> chunk(@PathVariable String index) {
 		Integer parsed = parseIndex(index, properties.getMaxChunkCount());
 		if (parsed == null) {
 			return ResponseEntity.notFound().build();
@@ -89,12 +90,12 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/archive/manifest")
-	public ResponseEntity<StreamingResponseBody> archiveManifest() {
+	public ResponseEntity<Resource> archiveManifest() {
 		return serve("archive-manifest.json", properties.getMaxManifestBytes(), false, MediaType.APPLICATION_JSON);
 	}
 
 	@GetMapping("/archive/chunks/{index}")
-	public ResponseEntity<StreamingResponseBody> archiveChunk(@PathVariable String index) {
+	public ResponseEntity<Resource> archiveChunk(@PathVariable String index) {
 		Integer parsed = parseIndex(index, properties.getMaxArchiveChunkCount());
 		if (parsed == null) {
 			return ResponseEntity.notFound().build();
@@ -104,7 +105,7 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/archive/entities/{index}")
-	public ResponseEntity<StreamingResponseBody> archiveEntityChunk(@PathVariable String index) {
+	public ResponseEntity<Resource> archiveEntityChunk(@PathVariable String index) {
 		Integer parsed = parseIndex(index, properties.getMaxArchiveChunkCount());
 		if (parsed == null) {
 			return ResponseEntity.notFound().build();
@@ -114,13 +115,13 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/explorer/manifest")
-	public ResponseEntity<StreamingResponseBody> explorerManifest() {
+	public ResponseEntity<Resource> explorerManifest() {
 		return serve(ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME,
 				properties.getMaxManifestBytes(), false, MediaType.APPLICATION_JSON);
 	}
 
 	@GetMapping("/explorer/chunks/{fileName}")
-	public ResponseEntity<StreamingResponseBody> explorerChunk(@PathVariable String fileName) {
+	public ResponseEntity<Resource> explorerChunk(@PathVariable String fileName) {
 		if (!isExplorerChunkFileName(fileName)) {
 			return ResponseEntity.notFound().build();
 		}
@@ -129,12 +130,12 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/versions/{version}/manifest")
-	public ResponseEntity<StreamingResponseBody> versionManifest(@PathVariable String version) {
+	public ResponseEntity<Resource> versionManifest(@PathVariable String version) {
 		return serveVersion(version, "manifest.json", properties.getMaxManifestBytes(), false, MediaType.APPLICATION_JSON);
 	}
 
 	@GetMapping("/versions/{version}/chunks/{index}")
-	public ResponseEntity<StreamingResponseBody> versionChunk(
+	public ResponseEntity<Resource> versionChunk(
 			@PathVariable String version, @PathVariable String index) {
 		Integer parsed = parseIndex(index, properties.getMaxChunkCount());
 		return parsed == null ? ResponseEntity.notFound().build()
@@ -143,13 +144,13 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/versions/{version}/archive/manifest")
-	public ResponseEntity<StreamingResponseBody> versionArchiveManifest(@PathVariable String version) {
+	public ResponseEntity<Resource> versionArchiveManifest(@PathVariable String version) {
 		return serveVersion(
 				version, "archive-manifest.json", properties.getMaxManifestBytes(), false, MediaType.APPLICATION_JSON);
 	}
 
 	@GetMapping("/versions/{version}/archive/chunks/{index}")
-	public ResponseEntity<StreamingResponseBody> versionArchiveChunk(
+	public ResponseEntity<Resource> versionArchiveChunk(
 			@PathVariable String version, @PathVariable String index) {
 		Integer parsed = parseIndex(index, properties.getMaxArchiveChunkCount());
 		return parsed == null ? ResponseEntity.notFound().build()
@@ -158,7 +159,7 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/versions/{version}/archive/entities/{index}")
-	public ResponseEntity<StreamingResponseBody> versionArchiveEntityChunk(
+	public ResponseEntity<Resource> versionArchiveEntityChunk(
 			@PathVariable String version, @PathVariable String index) {
 		Integer parsed = parseIndex(index, properties.getMaxArchiveChunkCount());
 		return parsed == null ? ResponseEntity.notFound().build()
@@ -167,13 +168,13 @@ public class CheckpointSnapshotApiV1 {
 	}
 
 	@GetMapping("/versions/{version}/explorer/manifest")
-	public ResponseEntity<StreamingResponseBody> versionExplorerManifest(@PathVariable String version) {
+	public ResponseEntity<Resource> versionExplorerManifest(@PathVariable String version) {
 		return serveVersion(version, ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME,
 				properties.getMaxManifestBytes(), false, MediaType.APPLICATION_JSON);
 	}
 
 	@GetMapping("/versions/{version}/explorer/chunks/{fileName}")
-	public ResponseEntity<StreamingResponseBody> versionExplorerChunk(
+	public ResponseEntity<Resource> versionExplorerChunk(
 			@PathVariable String version, @PathVariable String fileName) {
 		return !isExplorerChunkFileName(fileName) ? ResponseEntity.notFound().build()
 				: serveVersion(version, fileName,
@@ -203,21 +204,22 @@ public class CheckpointSnapshotApiV1 {
 		}
 	}
 
-	private ResponseEntity<StreamingResponseBody> serve(
+	private ResponseEntity<Resource> serve(
 			String fileName, long maxBytes, boolean immutable, MediaType contentType) {
 		return serveFromBase(null, fileName, maxBytes, immutable, contentType);
 	}
 
-	private ResponseEntity<StreamingResponseBody> serveVersion(
+	private ResponseEntity<Resource> serveVersion(
 			String version, String fileName, long maxBytes, boolean immutable, MediaType contentType) {
 		return serveFromBase(version, fileName, maxBytes, immutable, contentType);
 	}
 
-	private ResponseEntity<StreamingResponseBody> serveFromBase(
+	private ResponseEntity<Resource> serveFromBase(
 			String version, String fileName, long maxBytes, boolean immutable, MediaType contentType) {
 		if (!properties.isPublishEnabled() || properties.getPublishDirectory() == null) {
 			return ResponseEntity.notFound().build();
 		}
+		SnapshotStreamLimiter.Lease streamLease = null;
 		try {
 			properties.validate();
 			Path base = version == null
@@ -232,37 +234,93 @@ public class CheckpointSnapshotApiV1 {
 				return ResponseEntity.notFound().build();
 			}
 			Path real = candidate.toRealPath(LinkOption.NOFOLLOW_LINKS);
-			FileChannel channel = FileChannel.open(real, READ, LinkOption.NOFOLLOW_LINKS);
-			long size = channel.size();
+			long size = Files.size(real);
 			if (!real.getParent().equals(base) || size < 0 || size > maxBytes) {
-				channel.close();
 				return ResponseEntity.notFound().build();
 			}
-			SnapshotStreamLimiter.Lease streamLease = streamLimiter.tryAcquire();
+			streamLease = streamLimiter.tryAcquire();
 			if (streamLease == null) {
-				channel.close();
 				return ResponseEntity.status(429).header("Retry-After", "1").build();
 			}
-			StreamingResponseBody body = output -> {
-				try (streamLease; channel; InputStream input = Channels.newInputStream(channel)) {
-					input.transferTo(output);
-				}
-			};
-			try {
-				return ResponseEntity.ok()
-						.contentType(contentType)
-						.contentLength(size)
-						.cacheControl(immutable
-								? CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable()
-								: CacheControl.noCache())
-						.body(body);
-			} catch (RuntimeException e) {
+			Resource body = new LeasedSnapshotResource(real, size, streamLease);
+			streamLease = null;
+			return ResponseEntity.ok()
+					.contentType(contentType)
+					.contentLength(size)
+					.cacheControl(immutable
+							? CacheControl.maxAge(Duration.ofDays(365)).cachePublic().immutable()
+							: CacheControl.noCache())
+					.body(body);
+		} catch (IOException | RuntimeException e) {
+			if (streamLease != null) {
 				streamLease.close();
-				channel.close();
+			}
+			return ResponseEntity.notFound().build();
+		}
+	}
+
+	private static final class LeasedSnapshotResource extends AbstractResource {
+
+		private final Path path;
+		private final long size;
+		private final SnapshotStreamLimiter.Lease lease;
+		private final AtomicBoolean opened = new AtomicBoolean();
+
+		private LeasedSnapshotResource(Path path, long size, SnapshotStreamLimiter.Lease lease) {
+			this.path = path;
+			this.size = size;
+			this.lease = lease;
+		}
+
+		@Override
+		public String getDescription() {
+			return "immutable checkpoint snapshot artifact " + path.getFileName();
+		}
+
+		@Override
+		public String getFilename() {
+			return path.getFileName().toString();
+		}
+
+		@Override
+		public long contentLength() {
+			return size;
+		}
+
+		@Override
+		public InputStream getInputStream() throws IOException {
+			if (!opened.compareAndSet(false, true)) {
+				throw new IOException("Snapshot response body can be opened only once");
+			}
+			try {
+				return new LeasedInputStream(Files.newInputStream(path, READ), lease);
+			} catch (IOException | RuntimeException e) {
+				lease.close();
 				throw e;
 			}
-		} catch (IOException | RuntimeException e) {
-			return ResponseEntity.notFound().build();
+		}
+	}
+
+	private static final class LeasedInputStream extends FilterInputStream {
+
+		private final SnapshotStreamLimiter.Lease lease;
+		private final AtomicBoolean closed = new AtomicBoolean();
+
+		private LeasedInputStream(InputStream input, SnapshotStreamLimiter.Lease lease) {
+			super(input);
+			this.lease = lease;
+		}
+
+		@Override
+		public void close() throws IOException {
+			if (!closed.compareAndSet(false, true)) {
+				return;
+			}
+			try {
+				super.close();
+			} finally {
+				lease.close();
+			}
 		}
 	}
 
