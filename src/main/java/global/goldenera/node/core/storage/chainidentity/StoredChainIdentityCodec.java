@@ -36,7 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 
 /** Stable, strict binary encoding used only for the RocksDB metadata value. */
-final class StoredChainIdentityCodec {
+public final class StoredChainIdentityCodec {
 
 	private static final int MAGIC = 0x47454349; // GECI
 	private static final int HASH_BYTES = 32;
@@ -46,7 +46,7 @@ final class StoredChainIdentityCodec {
 	private StoredChainIdentityCodec() {
 	}
 
-	static byte[] encode(StoredChainIdentity identity) {
+	public static byte[] encode(StoredChainIdentity identity) {
 		byte[] chainId = identity.chainId().getBytes(StandardCharsets.UTF_8);
 		try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 				DataOutputStream output = new DataOutputStream(bytes)) {
@@ -66,7 +66,7 @@ final class StoredChainIdentityCodec {
 		}
 	}
 
-	static StoredChainIdentity decode(byte[] encoded) {
+	public static StoredChainIdentity decode(byte[] encoded) {
 		if (encoded == null || encoded.length > MAX_ENCODED_BYTES) {
 			throw new IllegalArgumentException("Invalid chain identity metadata length");
 		}

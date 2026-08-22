@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.archive;
 
@@ -26,6 +45,7 @@ import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockDecoder;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockEncoder;
 import global.goldenera.node.core.sync.snapshot.SnapshotVerificationException;
+import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
 
 /**
  * Deterministic, length-delimited stream format for canonical V1
@@ -82,8 +102,21 @@ public final class CoreSnapshotBlockChunkCodec {
 		return encoded;
 	}
 
-	public static Reader open(InputStream source, CoreSnapshotBlockChunkDescriptor descriptor) {
-		return new Reader(source, descriptor);
+	public static Reader openCompressed(InputStream source, CoreSnapshotBlockChunkDescriptor descriptor) {
+		return openCompressed(source, descriptor, CoreSnapshotArchiveLimits.FORMAT_VERSION);
+	}
+
+	public static Reader openCompressed(
+			InputStream source, CoreSnapshotBlockChunkDescriptor descriptor, int archiveFormatVersion) {
+		Objects.requireNonNull(descriptor, "descriptor");
+		if (descriptor.compression() != CoreSnapshotChunkCompression.ZSTD) {
+			throw failure("Unsupported archive block chunk compression: " + descriptor.compression());
+		}
+		InputStream verified = CoreSnapshotCompression.openVerifiedZstd(
+				source,
+				descriptor.compressedByteCount(), descriptor.compressedContentHash(),
+				descriptor.uncompressedByteCount(), descriptor.uncompressedContentHash());
+		return new Reader(verified, descriptor, archiveFormatVersion);
 	}
 
 	public static final class Reader implements AutoCloseable {
@@ -93,7 +126,8 @@ public final class CoreSnapshotBlockChunkCodec {
 		private int readBlocks;
 		private boolean finished;
 
-		private Reader(InputStream source, CoreSnapshotBlockChunkDescriptor descriptor) {
+		private Reader(
+				InputStream source, CoreSnapshotBlockChunkDescriptor descriptor, int archiveFormatVersion) {
 			this.input = new DataInputStream(Objects.requireNonNull(source, "source"));
 			this.descriptor = Objects.requireNonNull(descriptor, "descriptor");
 			try {
@@ -101,7 +135,10 @@ public final class CoreSnapshotBlockChunkCodec {
 				int version = input.readInt();
 				int index = input.readInt();
 				int count = input.readInt();
-				if (magic != MAGIC || version != FORMAT_VERSION || index != descriptor.index()
+				if (magic != MAGIC
+						|| !SnapshotFormatCompatibility.supportsBlockChunkForArchive(
+								archiveFormatVersion, version)
+						|| index != descriptor.index()
 						|| count != descriptor.blockCount()) {
 					throw failure("Archive block chunk header does not match descriptor " + descriptor.index());
 				}
@@ -168,7 +205,8 @@ public final class CoreSnapshotBlockChunkCodec {
 				}
 				finished = true;
 			} catch (IOException e) {
-				throw failure("Cannot finish archive block chunk " + descriptor.index(), e);
+				throw failure("Cannot finish archive block chunk " + descriptor.index()
+						+ ": " + e.getMessage(), e);
 			}
 		}
 

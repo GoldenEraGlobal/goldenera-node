@@ -35,6 +35,7 @@ import org.springframework.core.PriorityOrdered;
 
 import global.goldenera.node.core.storage.chainidentity.ChainStorageGuardException;
 import global.goldenera.node.core.storage.chainidentity.ChainIdentityBindingInitializer;
+import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorInitializer;
 
 /** Core identity -&gt; non-fatal explorer SQL boundary -&gt; guarded workers. */
 public final class ExplorerChainIdentityOrdering implements BeanFactoryPostProcessor, PriorityOrdered {
@@ -63,6 +64,10 @@ public final class ExplorerChainIdentityOrdering implements BeanFactoryPostProce
 		}
 		BeanDefinition initializer = registry.getBeanDefinition(ExplorerChainIdentityInitializer.BEAN_NAME);
 		addDependency(initializer, ChainIdentityBindingInitializer.BEAN_NAME);
+		String floorInitializer = beanName(CoreSnapshotCheckpointFloorInitializer.class);
+		if (registry.containsBeanDefinition(floorInitializer)) {
+			addDependency(initializer, floorInitializer);
+		}
 		for (String beanName : LAZY_SQL_INFRASTRUCTURE) {
 			if (registry.containsBeanDefinition(beanName)) {
 				registry.getBeanDefinition(beanName).setLazyInit(true);
@@ -74,6 +79,11 @@ public final class ExplorerChainIdentityOrdering implements BeanFactoryPostProce
 						ExplorerChainIdentityInitializer.BEAN_NAME);
 			}
 		}
+	}
+
+	private String beanName(Class<?> type) {
+		String simpleName = type.getSimpleName();
+		return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
 	}
 
 	private void addDependency(BeanDefinition definition, String dependency) {

@@ -108,6 +108,7 @@ import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.RocksDBRepository;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class MiningEconomicsBlockIngestionIntegrationTest {
@@ -630,12 +631,13 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					chainQuery,
 					blockRepository,
 					worldStateFactory,
-					stateProcessor,
-					blockValidator,
-					events,
-					lock,
-					entityIndex,
-					eventExtractor);
+						stateProcessor,
+						blockValidator,
+						events,
+						lock,
+						entityIndex,
+						eventExtractor,
+						CoreSnapshotCheckpointFloorPolicy.withoutFloor());
 			blockReorgs = new BlockReorgs(chainSwitchService);
 			BlockStateTransitions transitions = new BlockStateTransitions(
 					blockRepository,

@@ -1,204 +1,250 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.bootstrap;
 
+import static global.goldenera.node.core.storage.chainidentity.ChainIdentityExecutionScope.DEVELOPMENT;
+import static global.goldenera.node.core.storage.chainidentity.ChainIdentityExecutionScope.KNOWN_PRODUCTION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.same;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.util.Optional;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
+import org.junit.jupiter.api.io.TempDir;
 
-import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.properties.SnapshotDistributionProperties;
-import global.goldenera.node.core.sync.CoreSnapshotArchiveReplayer;
-import global.goldenera.node.core.sync.snapshot.SnapshotVerificationException;
+import global.goldenera.node.core.storage.chainidentity.ChainIdentityExpectation;
+import global.goldenera.node.core.storage.chainidentity.ChainIdentityPreflight;
+import global.goldenera.node.core.storage.chainidentity.ExpectedChainIdentityProvider;
+import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
+import global.goldenera.node.core.sync.snapshot.SnapshotChunkSource;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveChunkSource;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveVerifier;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityChunkSource;
 import global.goldenera.node.core.sync.snapshot.archive.VerifiedCoreSnapshotArchive;
 import global.goldenera.node.core.sync.snapshot.transport.HttpCheckpointSnapshotClient;
 import global.goldenera.node.core.sync.snapshot.transport.StagedCoreSnapshotArchiveDownload;
 import global.goldenera.node.core.sync.snapshot.transport.StagedSnapshotDownload;
-import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
-import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 
 class CoreSnapshotBootstrapCoordinatorTest {
 
-	@Test
-	void disabledBootstrapDoesNotInspectChainOrPerformHttp() {
-		Fixture fixture = new Fixture(false, true);
-
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
-				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.DISABLED);
-		verify(fixture.chainQuery, never()).getLatestBlockHeight();
-		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
-	}
+	@TempDir
+	Path temporaryDirectory;
 
 	@Test
-	void existingChainNeverPerformsHttpBootstrap() {
-		Fixture fixture = new Fixture(true, true);
-		when(fixture.chainQuery.getLatestBlockHeight()).thenReturn(Optional.of(12L));
+	void populatedLegacyTargetSkipsHttpAndRemainsUntouched() throws Exception {
+		Path target = temporaryDirectory.resolve("legacy-blockchain");
+		Files.createDirectory(target);
+		Path legacyFile = target.resolve("legacy-data");
+		Files.writeString(legacyFile, "preserve-me");
+		Fixture fixture = new Fixture(target);
 
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
 				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.INELIGIBLE);
+
+		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
+		assertThat(Files.readString(legacyFile)).isEqualTo("preserve-me");
+	}
+
+	@Test
+	void symlinkedLegacyParentSkipsSnapshotAndLeavesCorePathUntouched() throws Exception {
+		Path realParent = Files.createDirectory(temporaryDirectory.resolve("real-parent"));
+		Path realTarget = Files.createDirectory(realParent.resolve("blockchain"));
+		Files.writeString(realTarget.resolve("legacy-data"), "preserve-me");
+		Path linkedParent = temporaryDirectory.resolve("linked-parent");
+		try {
+			Files.createSymbolicLink(linkedParent, realParent);
+		} catch (UnsupportedOperationException | IOException e) {
+			assumeTrue(false, "Symbolic links are unavailable: " + e.getMessage());
+		}
+		Fixture fixture = new Fixture(linkedParent.resolve("blockchain"));
+
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
+				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.INELIGIBLE);
+		assertThat(realTarget.resolve("legacy-data")).hasContent("preserve-me");
 		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
 	}
 
 	@Test
-	void networkWithoutHardcodedCheckpointNeverPerformsHttpBootstrap() {
-		Fixture fixture = new Fixture(true, true);
+	void disabledBootstrapStillRunsRecoveryAndNeverDownloads() {
+		Fixture fixture = new Fixture(temporaryDirectory.resolve("blockchain"));
+		fixture.properties.setBootstrapEnabled(false);
+
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
+				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.DISABLED);
+
+		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
+	}
+
+	@Test
+	void explorerEnabledDoesNotBlockCoreFastPath() {
+		Fixture fixture = new Fixture(temporaryDirectory.resolve("blockchain"));
+
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
+				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.FALLBACK_INVALID_OR_UNAVAILABLE);
+
+		verify(fixture.httpClient).stageFullArchiveFromFirstTrustedSource();
+	}
+
+	@Test
+	void missingHardcodedCheckpointSkipsHttp() {
+		Fixture fixture = new Fixture(temporaryDirectory.resolve("blockchain"));
 		when(fixture.checkpointRegistry.hasConfiguredCheckpoints()).thenReturn(false);
 
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
 				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.INELIGIBLE);
 		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
 	}
 
 	@Test
-	void nonProductionGenesisIdentityNeverPerformsTrustedHttpBootstrap() {
-		Fixture fixture = new Fixture(true, true);
-		when(fixture.chainIdentityProvider.identity()).thenReturn(new StoredChainIdentity(
-				1, 1, "sandbox", "0x" + "ab".repeat(32), "cd".repeat(32)));
+	void nonProductionIdentitySkipsTrustedHttp() {
+		Fixture fixture = new Fixture(temporaryDirectory.resolve("blockchain"));
+		StoredChainIdentity developmentIdentity = new StoredChainIdentity(
+				1, 0, "development-mainnet", "0x" + "01".repeat(32), null);
+		when(fixture.expectedIdentityProvider.expectedIdentity())
+				.thenReturn(new ChainIdentityExpectation(developmentIdentity, DEVELOPMENT));
 
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
 				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.INELIGIBLE);
 		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
 	}
 
 	@Test
-	void unavailableAtomicPipelineFallsBackBeforeDownloadingStateOnlySnapshot() {
-		Fixture fixture = new Fixture(true, false);
+	void explorerDisabledUsesFiveSourceVerifierAndActivatesPreparedDatabase() throws Exception {
+		Fixture fixture = new Fixture(temporaryDirectory.resolve("blockchain"));
+		fixture.stubVerifiedPipeline();
 
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
-				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.FALLBACK_PIPELINE_UNAVAILABLE);
-		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
+				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.ACTIVATED);
+
+		verify(fixture.verifier).verify(
+				same(fixture.archiveManifest), same(fixture.stateManifest), same(fixture.stateChunks),
+				same(fixture.blockChunks), same(fixture.entityChunks));
+		verify(fixture.importer).prepare(fixture.staged, fixture.verified);
+		verify(fixture.activator).activateCanonical(fixture.prepared);
 	}
 
 	@Test
-	void invalidFullArchiveFallsBackWithoutImportOrActivation() throws Exception {
-		Fixture fixture = new Fixture(true, true);
-		StagedCoreSnapshotArchiveDownload staged = stagedDownload();
-		when(fixture.httpClient.stageFullArchiveFromFirstTrustedSource()).thenReturn(staged);
-		when(fixture.verifier.verify(any(), any(), any(), any()))
-				.thenThrow(new SnapshotVerificationException("invalid archive"));
+	void invalidDownloadLeavesEligibleTargetUntouchedAndFallsBackToP2p() throws Exception {
+		Path target = temporaryDirectory.resolve("blockchain");
+		Fixture fixture = new Fixture(target);
+		when(fixture.httpClient.stageFullArchiveFromFirstTrustedSource())
+				.thenThrow(new IllegalStateException("unavailable"));
 
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
 				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.FALLBACK_INVALID_OR_UNAVAILABLE);
-		verify(fixture.importer, never()).prepare(any(), any());
-		verify(fixture.activator, never()).activateCanonical(any());
+
+		assertThat(target).doesNotExist();
+		verify(fixture.activator, never()).activateCanonical(fixture.prepared);
 	}
 
 	@Test
-	void activationFailureIsFatalAndNeverReportedAsV1Fallback() throws Exception {
-		Fixture fixture = new Fixture(true, true);
-		StagedCoreSnapshotArchiveDownload staged = stagedDownload();
-		VerifiedCoreSnapshotArchive verified = mock(VerifiedCoreSnapshotArchive.class);
-		PreparedCoreSnapshotImport prepared = mock(PreparedCoreSnapshotImport.class);
-		when(fixture.httpClient.stageFullArchiveFromFirstTrustedSource()).thenReturn(staged);
-		when(fixture.verifier.verify(any(), any(), any(), any())).thenReturn(verified);
-		when(verified.activationEligible()).thenReturn(true);
-		when(fixture.importer.prepare(staged, verified)).thenReturn(prepared);
-		when(prepared.verifiedArchive()).thenReturn(verified);
-		org.mockito.Mockito.doThrow(new IllegalStateException("ambiguous live write"))
-				.when(fixture.activator).activateCanonical(prepared);
+	void failureBeforeActivationJournalAllowsP2pFallback() throws Exception {
+		Fixture fixture = new Fixture(temporaryDirectory.resolve("blockchain"));
+		fixture.stubVerifiedPipeline();
+		doThrow(new IllegalStateException("before journal"))
+				.when(fixture.activator).activateCanonical(fixture.prepared);
 
-		assertThatThrownBy(fixture.coordinator::tryBootstrapFreshNode)
+		assertThat(fixture.coordinator.tryBootstrapBeforeStorageOpen())
+				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.FALLBACK_INVALID_OR_UNAVAILABLE);
+	}
+
+	@Test
+	void malformedRecoveryJournalFailsClosedBeforeHttp() throws Exception {
+		Path target = temporaryDirectory.resolve("blockchain");
+		Path journal = temporaryDirectory.resolve(".blockchain.snapshot-activation-v1.journal");
+		Files.writeString(journal, "malformed");
+		Fixture fixture = new Fixture(target);
+
+		assertThatThrownBy(fixture.coordinator::tryBootstrapBeforeStorageOpen)
 				.isInstanceOf(CoreSnapshotBootstrapActivationException.class)
-				.hasMessageContaining("refusing unsafe v1 fallback");
-	}
-
-	@Test
-	void verifiedArchiveUsesSafeCanonicalReplayWhenAtomicSwapIsUnavailable() throws Exception {
-		Fixture fixture = new Fixture(true, true, false);
-		StagedCoreSnapshotArchiveDownload staged = stagedDownload();
-		VerifiedCoreSnapshotArchive verified = mock(VerifiedCoreSnapshotArchive.class);
-		when(fixture.httpClient.stageFullArchiveFromFirstTrustedSource()).thenReturn(staged);
-		when(fixture.verifier.verify(any(), any(), any(), any())).thenReturn(verified);
-		when(verified.activationEligible()).thenReturn(true);
-		when(fixture.replayer.replay(staged, verified)).thenReturn(
-				new CoreSnapshotArchiveReplayer.ReplayResult(10, 20, 10, mock(global.goldenera.cryptoj.datatypes.Hash.class)));
-
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
-				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.REPLAYED);
-		verify(fixture.replayer).replay(staged, verified);
-		verify(fixture.importer, never()).prepare(any(), any());
-		verify(fixture.activator, never()).activateCanonical(any());
-	}
-
-	@Test
-	void replayFailureFallsBackToV1BecauseOnlyAtomicCanonicalPrefixesCanHaveCommitted() throws Exception {
-		Fixture fixture = new Fixture(true, true, false);
-		StagedCoreSnapshotArchiveDownload staged = stagedDownload();
-		VerifiedCoreSnapshotArchive verified = mock(VerifiedCoreSnapshotArchive.class);
-		when(fixture.httpClient.stageFullArchiveFromFirstTrustedSource()).thenReturn(staged);
-		when(fixture.verifier.verify(any(), any(), any(), any())).thenReturn(verified);
-		when(verified.activationEligible()).thenReturn(true);
-		when(fixture.replayer.replay(staged, verified))
-				.thenThrow(new IllegalStateException("corrupt tail after committed canonical prefix"));
-
-		assertThat(fixture.coordinator.tryBootstrapFreshNode())
-				.isEqualTo(CoreSnapshotBootstrapCoordinator.Outcome.FALLBACK_INVALID_OR_UNAVAILABLE);
-		verify(fixture.replayer).replay(staged, verified);
-		verify(fixture.importer, never()).prepare(any(), any());
-		verify(fixture.activator, never()).activateCanonical(any());
+				.hasMessageContaining("recovery failed");
+		verify(fixture.httpClient, never()).stageFullArchiveFromFirstTrustedSource();
 	}
 
 	private static final class Fixture {
 
 		private final SnapshotDistributionProperties properties = new SnapshotDistributionProperties();
-		private final ChainQuery chainQuery = mock(ChainQuery.class);
 		private final HttpCheckpointSnapshotClient httpClient = mock(HttpCheckpointSnapshotClient.class);
 		private final CoreSnapshotArchiveVerifier verifier = mock(CoreSnapshotArchiveVerifier.class);
 		private final CoreSnapshotArchiveImporter importer = mock(CoreSnapshotArchiveImporter.class);
 		private final CoreSnapshotCanonicalActivator activator = mock(CoreSnapshotCanonicalActivator.class);
-		private final CoreSnapshotArchiveReplayer replayer = mock(CoreSnapshotArchiveReplayer.class);
 		private final CheckpointRegistry checkpointRegistry = mock(CheckpointRegistry.class);
-		private final AuthoritativeChainIdentityProvider chainIdentityProvider =
-				mock(AuthoritativeChainIdentityProvider.class);
+		private final ExpectedChainIdentityProvider expectedIdentityProvider = mock(ExpectedChainIdentityProvider.class);
+		private final ChainIdentityPreflight chainIdentityPreflight = mock(ChainIdentityPreflight.class);
 		private final CoreSnapshotBootstrapCoordinator coordinator;
+		private final StagedCoreSnapshotArchiveDownload staged = mock(StagedCoreSnapshotArchiveDownload.class);
+		private final StagedSnapshotDownload stateDownload = mock(StagedSnapshotDownload.class);
+		private final CheckpointSnapshotManifest stateManifest = mock(CheckpointSnapshotManifest.class);
+		private final CoreSnapshotArchiveManifest archiveManifest = mock(CoreSnapshotArchiveManifest.class);
+		private final SnapshotChunkSource stateChunks = mock(SnapshotChunkSource.class);
+		private final CoreSnapshotArchiveChunkSource blockChunks = mock(CoreSnapshotArchiveChunkSource.class);
+		private final CoreSnapshotEntityChunkSource entityChunks = mock(CoreSnapshotEntityChunkSource.class);
+		private final VerifiedCoreSnapshotArchive verified = mock(VerifiedCoreSnapshotArchive.class);
+		private final PreparedCoreSnapshotImport prepared = mock(PreparedCoreSnapshotImport.class);
 
-		private Fixture(boolean enabled, boolean pipelineAvailable) {
-			this(enabled, pipelineAvailable, pipelineAvailable);
-		}
-
-		private Fixture(boolean enabled, boolean verifierAvailable, boolean atomicPipelineAvailable) {
-			properties.setBootstrapEnabled(enabled);
-			when(chainQuery.getLatestBlockHeight()).thenReturn(Optional.of(0L));
+		private Fixture(Path target) {
+			properties.setBootstrapEnabled(true);
 			when(checkpointRegistry.hasConfiguredCheckpoints()).thenReturn(true);
-			when(chainIdentityProvider.identity()).thenReturn(new StoredChainIdentity(
+			StoredChainIdentity identity = new StoredChainIdentity(
 					1, 0, "mainnet",
-					"0x924fd3c5b501e1ccef10ca08cb6b473382d44618533d32339752988e469a516f", null));
+					"0x924fd3c5b501e1ccef10ca08cb6b473382d44618533d32339752988e469a516f", null);
+			when(expectedIdentityProvider.expectedIdentity())
+					.thenReturn(new ChainIdentityExpectation(identity, KNOWN_PRODUCTION));
+			CoreSnapshotFilesystemActivation filesystemActivation =
+					new CoreSnapshotFilesystemActivation(target.toAbsolutePath().normalize());
 			coordinator = new CoreSnapshotBootstrapCoordinator(
-					properties,
-					chainQuery,
-					httpClient,
-					provider(verifierAvailable ? verifier : null),
-					provider(atomicPipelineAvailable ? importer : null),
-					provider(atomicPipelineAvailable ? activator : null),
-					replayer,
-					checkpointRegistry,
-					chainIdentityProvider);
+					properties, httpClient, verifier, importer, activator,
+					filesystemActivation, checkpointRegistry, expectedIdentityProvider, chainIdentityPreflight);
 		}
-	}
 
-	@SuppressWarnings("unchecked")
-	private static <T> ObjectProvider<T> provider(T value) {
-		ObjectProvider<T> provider = mock(ObjectProvider.class);
-		when(provider.getIfUnique()).thenReturn(value);
-		return provider;
-	}
-
-	private static StagedCoreSnapshotArchiveDownload stagedDownload() {
-		StagedCoreSnapshotArchiveDownload staged = mock(StagedCoreSnapshotArchiveDownload.class);
-		when(staged.stateSnapshot()).thenReturn(mock(StagedSnapshotDownload.class));
-		return staged;
+		private void stubVerifiedPipeline() throws Exception {
+			when(httpClient.stageFullArchiveFromFirstTrustedSource()).thenReturn(staged);
+			when(staged.stateSnapshot()).thenReturn(stateDownload);
+			when(stateDownload.domainManifest()).thenReturn(stateManifest);
+			when(stateDownload.chunkSource()).thenReturn(stateChunks);
+			when(staged.archiveManifest()).thenReturn(archiveManifest);
+			when(staged.blockChunkSource()).thenReturn(blockChunks);
+			when(staged.entityChunkSource()).thenReturn(entityChunks);
+			when(verifier.verify(archiveManifest, stateManifest, stateChunks, blockChunks, entityChunks))
+					.thenReturn(verified);
+			when(verified.activationEligible()).thenReturn(true);
+			when(verified.checkpointHeight()).thenReturn(123L);
+			when(importer.prepare(staged, verified)).thenReturn(prepared);
+			when(prepared.verifiedArchive()).thenReturn(verified);
+		}
 	}
 }

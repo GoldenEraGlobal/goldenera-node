@@ -69,6 +69,9 @@ public class ThrottlingService {
         // chunks in parallel and must not be pushed into source failover by normal use.
         ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/(archive/)?manifest"), 1);
         ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/(archive/)?chunks/[0-9]+"), 1);
+        ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/archive/entities/[0-9]+"), 1);
+        ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/explorer/manifest"), 1);
+        ENDPOINT_COSTS.put(Pattern.compile("/api/core/v1/sync/snapshots/checkpoint/explorer/chunks/[^/]+"), 1);
 
         // ============= BRIDGE API =============
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/block/last.*"), 3);

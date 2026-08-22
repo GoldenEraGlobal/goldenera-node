@@ -53,6 +53,7 @@
         <micrometer-extras.version>0.2.2</micrometer-extras.version>
         <license-maven-plugin.version>4.6</license-maven-plugin.version>
         <bucket4j.version>8.15.0</bucket4j.version>
+        <zstd-jni.version>1.5.7-6</zstd-jni.version>
         <mockito.version>5.17.0</mockito.version>
         <jmh.version>1.37</jmh.version>
         <testcontainers.version>1.21.4</testcontainers.version>
@@ -318,6 +319,11 @@
             <groupId>com.bucket4j</groupId>
             <artifactId>bucket4j_jdk17-core</artifactId>
             <version>${bucket4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+            <version>${zstd-jni.version}</version>
         </dependency>
     </dependencies>
 

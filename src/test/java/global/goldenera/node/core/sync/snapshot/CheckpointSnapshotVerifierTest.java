@@ -29,6 +29,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -57,9 +58,12 @@ import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifestCodec;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveVerifier;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkCodec;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotChunkCompression;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotCompression;
 import global.goldenera.node.core.sync.snapshot.archive.VerifiedCoreSnapshotArchive;
 
 class CheckpointSnapshotVerifierTest {
@@ -212,7 +216,7 @@ class CheckpointSnapshotVerifierTest {
 	}
 
 	@Test
-	void fullArchiveSuppliesFreshNodeWorkAnchorWithoutLocalChainHistory() {
+	void fullArchiveSuppliesFreshNodeWorkAnchorWithoutLocalChainHistory() throws Exception {
 		Fixture fixture = fixture();
 		CheckpointSnapshotManifest original = fixture.bundle.manifest();
 		List<SnapshotHeader> completeHeaders = original.headerSegment().headers();
@@ -242,10 +246,17 @@ class CheckpointSnapshotVerifierTest {
 					.build();
 		}).toList();
 		Bytes blockChunk = CoreSnapshotBlockChunkCodec.encodeChunk(0, storedBlocks);
+		ByteArrayOutputStream compressedOutput = new ByteArrayOutputStream();
+		CoreSnapshotCompression.writeZstd(
+				new ByteArrayInputStream(blockChunk.toArrayUnsafe()), compressedOutput);
+		Bytes compressedBlockChunk = Bytes.wrap(compressedOutput.toByteArray());
 		CoreSnapshotBlockChunkDescriptor blockDescriptor = new CoreSnapshotBlockChunkDescriptor(
-				0, 0, original.checkpointHeight(), storedBlocks.size(), blockChunk.size(), Hash.hash(blockChunk));
+				0, 0, original.checkpointHeight(), storedBlocks.size(), CoreSnapshotChunkCompression.ZSTD,
+				compressedBlockChunk.size(), Hash.hash(compressedBlockChunk),
+				blockChunk.size(), Hash.hash(blockChunk));
 		CoreSnapshotArchiveManifest archiveManifest = new CoreSnapshotArchiveManifest(
-				1, CheckpointSnapshotManifestCodec.signingHash(shortStateManifest), List.of(blockDescriptor));
+				CoreSnapshotArchiveLimits.FORMAT_VERSION,
+				CheckpointSnapshotManifestCodec.signingHash(shortStateManifest), List.of(blockDescriptor));
 		CheckpointSnapshotVerifier freshStateVerifier = new CheckpointSnapshotVerifier(
 				checkpointRegistryFor(shortStateManifest), archiveChain, 1);
 		assertThatThrownBy(() -> freshStateVerifier.verify(
@@ -258,7 +269,7 @@ class CheckpointSnapshotVerifierTest {
 				archiveManifest,
 				shortStateManifest,
 				ignored -> nodeSource(fixture.bundle.chunks().getFirst().nodes()),
-				ignored -> new ByteArrayInputStream(blockChunk.toArrayUnsafe()));
+				ignored -> new ByteArrayInputStream(compressedBlockChunk.toArrayUnsafe()));
 
 		assertThat(verified.activationEligible()).isTrue();
 		assertThat(verified.checkpointHash()).isEqualTo(shortStateManifest.checkpointHash());

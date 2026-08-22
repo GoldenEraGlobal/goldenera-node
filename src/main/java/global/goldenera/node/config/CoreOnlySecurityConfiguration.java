@@ -24,6 +24,7 @@
 package global.goldenera.node.config;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
@@ -41,6 +42,7 @@ import global.goldenera.node.shared.properties.SecurityProperties;
 /** SQL-free HTTP security graph used by explicitly configured core-only nodes. */
 @Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @ConditionalOnProperty(
 			prefix = "ge.general",
 			name = "postgresql-enable",

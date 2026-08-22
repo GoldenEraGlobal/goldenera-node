@@ -28,6 +28,11 @@ import java.sql.SQLException;
 import org.springframework.beans.factory.InitializingBean;
 
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
+import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBootstrapService;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotException;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.extern.slf4j.Slf4j;
 
 /** Explorer-only readiness boundary. Failures isolate explorer from core. */
@@ -40,24 +45,67 @@ public final class ExplorerChainIdentityInitializer implements InitializingBean 
 	private final ExplorerSchemaMigrator schemaMigrator;
 	private final ExplorerChainIdentityGuard guard;
 	private final ExplorerRuntimeReadiness readiness;
+	private final GeneralProperties generalProperties;
+	private final ExplorerSnapshotBootstrapService snapshotBootstrap;
+	private final ExplorerArchiveRebuildService archiveRebuild;
 
 	public ExplorerChainIdentityInitializer(
 			AuthoritativeChainIdentityProvider authoritativeIdentityProvider,
 			ExplorerSchemaMigrator schemaMigrator,
 			ExplorerChainIdentityGuard guard,
 			ExplorerRuntimeReadiness readiness) {
+		this(authoritativeIdentityProvider, schemaMigrator, guard, readiness, null, null, null);
+	}
+
+	public ExplorerChainIdentityInitializer(
+			AuthoritativeChainIdentityProvider authoritativeIdentityProvider,
+			ExplorerSchemaMigrator schemaMigrator,
+			ExplorerChainIdentityGuard guard,
+			ExplorerRuntimeReadiness readiness,
+			GeneralProperties generalProperties,
+			ExplorerSnapshotBootstrapService snapshotBootstrap) {
+		this(authoritativeIdentityProvider, schemaMigrator, guard, readiness,
+				generalProperties, snapshotBootstrap, null);
+	}
+
+	public ExplorerChainIdentityInitializer(
+			AuthoritativeChainIdentityProvider authoritativeIdentityProvider,
+			ExplorerSchemaMigrator schemaMigrator,
+			ExplorerChainIdentityGuard guard,
+			ExplorerRuntimeReadiness readiness,
+			GeneralProperties generalProperties,
+			ExplorerSnapshotBootstrapService snapshotBootstrap,
+			ExplorerArchiveRebuildService archiveRebuild) {
 		this.authoritativeIdentityProvider = authoritativeIdentityProvider;
 		this.schemaMigrator = schemaMigrator;
 		this.guard = guard;
 		this.readiness = readiness;
+		this.generalProperties = generalProperties;
+		this.snapshotBootstrap = snapshotBootstrap;
+		this.archiveRebuild = archiveRebuild;
 	}
 
 	@Override
 	public void afterPropertiesSet() {
+		if (generalProperties != null && !generalProperties.isExplorerEnable()) {
+			return;
+		}
 		try {
 			schemaMigrator.migrate();
-			guard.verifyAndBind(authoritativeIdentityProvider.identity());
+			StoredChainIdentity identity = authoritativeIdentityProvider.identity();
+			guard.verifyAndBind(identity);
+			if (snapshotBootstrap != null) {
+				snapshotBootstrap.prepareForIndexing(identity);
+			}
 			readiness.ready();
+		} catch (ExplorerSnapshotException e) {
+			if (archiveRebuild != null) {
+				archiveRebuild.start();
+			} else {
+				readiness.failed(ExplorerReadinessState.SNAPSHOT_UNAVAILABLE, e.getMessage());
+			}
+			log.error("Explorer snapshot bootstrap failed; core remains available and local rebuild starts: {}",
+					e.getMessage());
 		} catch (ExplorerChainIdentityException e) {
 			readiness.failed(e.state(), e.getMessage());
 			log.error("Explorer disabled by its storage safety boundary: {}", e.getMessage());

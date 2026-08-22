@@ -1,23 +1,49 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -51,6 +77,14 @@ import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveExpor
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveVerifier;
 import global.goldenera.node.core.api.v1.sync.CheckpointSnapshotApiV1;
+import global.goldenera.node.explorer.snapshot.ExplorerCheckpointSnapshotExporter;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotArtifactExporter;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBinding;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotChunkDescriptor;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotManifest;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotManifestCodec;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotException;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotTable;
 
 class CheckpointSnapshotPublicationServiceTest {
 
@@ -89,6 +123,7 @@ class CheckpointSnapshotPublicationServiceTest {
 			SnapshotDistributionProperties properties = new SnapshotDistributionProperties();
 			properties.setPublishEnabled(true);
 			properties.setPublishDirectory(target);
+			properties.setPublishPublicOrigin(URI.create("https://snapshots.example.test/"));
 			CheckpointSnapshotApiV1 controller = new CheckpointSnapshotApiV1(properties);
 			assertThat(body(controller.manifest())).isEqualTo(Files.readAllBytes(target.resolve("manifest.json")));
 			assertThat(body(controller.chunk("0"))).isEqualTo(Files.readAllBytes(target.resolve("chunk-00000.bin")));
@@ -126,6 +161,98 @@ class CheckpointSnapshotPublicationServiceTest {
 			try (var files = Files.list(parent)) {
 				assertThat(files).isEmpty();
 			}
+		}
+	}
+
+	@Test
+	void publishesExplorerArtifactsBoundToTheGeneratedCoreManifests() throws Exception {
+		try (PersistentWorldStateTestSupport storage =
+				new PersistentWorldStateTestSupport(temporaryDirectory.resolve("explorer-publication-state-db"))) {
+			Fixture fixture = fixture(storage);
+			ObjectMapper objectMapper = new ObjectMapper();
+			ExplorerSnapshotManifestCodec codec = new ExplorerSnapshotManifestCodec(objectMapper);
+			ExplorerCheckpointSnapshotExporter explorerExporter = mock(ExplorerCheckpointSnapshotExporter.class);
+			byte[] explorerChunk = "explorer-snapshot".getBytes(StandardCharsets.UTF_8);
+			when(explorerExporter.export(any(), any(Path.class), eq(64 * 1024))).thenAnswer(invocation -> {
+				ExplorerSnapshotBinding binding = invocation.getArgument(0, ExplorerSnapshotBinding.class);
+				Path destination = invocation.getArgument(1, Path.class);
+				Files.createDirectory(destination);
+				String fileName = "explorer-status-0.bin";
+				Files.write(destination.resolve(fileName), explorerChunk);
+				ExplorerSnapshotChunkDescriptor descriptor = new ExplorerSnapshotChunkDescriptor(
+						ExplorerSnapshotTable.STATUS, ExplorerSnapshotTable.SCHEMA_VERSION, 0, 1,
+						explorerChunk.length,
+						HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(explorerChunk)),
+						fileName);
+				ExplorerSnapshotManifest manifest = codec.sign(new ExplorerSnapshotManifest(
+						ExplorerSnapshotManifest.FORMAT_VERSION, binding.carrierNetworkCode(), binding.chainId(),
+						binding.genesisHash(), binding.checkpointHeight(), binding.checkpointHash(),
+						binding.checkpointStateRoot(), binding.coreStateSigningHash(),
+						binding.coreArchiveSigningHash(), "77".repeat(32),
+						Map.of(ExplorerSnapshotTable.STATUS.tableName(), ExplorerSnapshotTable.SCHEMA_VERSION),
+						Map.of(ExplorerSnapshotTable.STATUS.tableName(), 1L), List.of(descriptor), null));
+				Files.write(destination.resolve(ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME),
+						codec.encode(manifest));
+				return manifest;
+			});
+			Path target = Files.createDirectory(temporaryDirectory.resolve("explorer-publication-parent"))
+					.resolve("checkpoint-2");
+
+			CheckpointSnapshotPublicationService.PublicationResult result = fixture.publicationService
+					.prepareCombinedWithOptionalExplorer(2, target, true, explorerExporter, 64 * 1024);
+
+			assertThat(result.explorerManifest()).isNotNull();
+			assertThat(result.explorerManifest().checkpointHeight()).isEqualTo(2);
+			assertThat(result.explorerChunkCount()).isEqualTo(1);
+			assertThat(result.explorerManifest().coreStateSigningHash())
+					.isEqualTo(result.stateManifestSigningHash().toHexString().substring(2));
+			assertThat(result.explorerManifest().coreArchiveSigningHash())
+					.isEqualTo(result.archiveManifestSigningHash().toHexString().substring(2));
+			assertThat(Files.readAllBytes(target.resolve("explorer-status-0.bin"))).isEqualTo(explorerChunk);
+			assertThat(Files.readAllBytes(target.resolve(ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME)))
+					.isEqualTo(codec.encode(result.explorerManifest()));
+		}
+	}
+
+	@Test
+	void optionalLaggingExplorerIsOmittedWithoutInvalidatingCorePublication() throws Exception {
+		try (PersistentWorldStateTestSupport storage =
+				new PersistentWorldStateTestSupport(temporaryDirectory.resolve("lagging-explorer-state-db"))) {
+			Fixture fixture = fixture(storage);
+			ExplorerSnapshotArtifactExporter explorerExporter = mock(ExplorerSnapshotArtifactExporter.class);
+			when(explorerExporter.export(any(), any(Path.class), eq(64 * 1024)))
+					.thenThrow(new ExplorerSnapshotException("Explorer is not indexed exactly at core head"));
+			Path target = Files.createDirectory(temporaryDirectory.resolve("lagging-explorer-parent"))
+					.resolve("current-head");
+
+			CheckpointSnapshotPublicationService.PublicationResult result = fixture.publicationService
+					.prepareCombinedWithOptionalExplorer(2, target, true, explorerExporter, 64 * 1024);
+
+			assertThat(result.verifiedArchive().activationEligible()).isTrue();
+			assertThat(result.explorerManifest()).isNull();
+			assertThat(result.explorerChunkCount()).isZero();
+			assertThat(target.resolve("manifest.json")).exists();
+			assertThat(target.resolve("archive-manifest.json")).exists();
+			assertThat(target.resolve(ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME)).doesNotExist();
+		}
+	}
+
+	@Test
+	void disabledExplorerPerformsZeroExplorerInteractions() throws Exception {
+		try (PersistentWorldStateTestSupport storage =
+				new PersistentWorldStateTestSupport(temporaryDirectory.resolve("disabled-explorer-state-db"))) {
+			Fixture fixture = fixture(storage);
+			ExplorerSnapshotArtifactExporter explorerExporter = mock(ExplorerSnapshotArtifactExporter.class);
+			Path target = Files.createDirectory(temporaryDirectory.resolve("disabled-explorer-parent"))
+					.resolve("current-head");
+
+			CheckpointSnapshotPublicationService.PublicationResult result = fixture.publicationService
+					.prepareCombinedWithOptionalExplorer(2, target, false, explorerExporter, 64 * 1024);
+
+			verify(explorerExporter, never()).export(any(), any(), eq(64 * 1024));
+			assertThat(result.explorerManifest()).isNull();
+			assertThat(result.explorerChunkCount()).isZero();
+			assertThat(target.resolve("manifest.json")).exists();
 		}
 	}
 

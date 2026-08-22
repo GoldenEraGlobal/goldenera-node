@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.archive;
 
@@ -17,6 +36,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -34,6 +54,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.PrivateKey;
 import global.goldenera.cryptoj.enums.BlockVersion;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
+import global.goldenera.merkletrie.NodeLoader;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
@@ -43,6 +64,7 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotVerifier;
+import global.goldenera.node.core.sync.snapshot.CheckpointStateSupplementVerifier;
 import global.goldenera.node.core.sync.snapshot.SnapshotExportException;
 import global.goldenera.node.core.sync.snapshot.SnapshotHeader;
 import global.goldenera.node.core.sync.snapshot.SnapshotHeaderSegment;
@@ -82,7 +104,9 @@ class CoreSnapshotArchiveExporterTest {
 				.extracting(CoreSnapshotBlockChunkDescriptor::firstHeight)
 				.containsExactly(0L, 1L, 2L);
 		assertThat(first.manifest().blockChunks())
-				.allMatch(chunk -> chunk.byteCount() <= oneBlockChunkLimit);
+				.allMatch(chunk -> chunk.uncompressedByteCount() <= oneBlockChunkLimit)
+				.allMatch(chunk -> chunk.compression() == CoreSnapshotChunkCompression.ZSTD)
+				.allMatch(chunk -> chunk.compressedByteCount() > 0);
 		assertThat(first.canonicalManifestBytes())
 				.isEqualTo(CoreSnapshotArchiveManifestCodec.canonicalBytes(first.manifest()));
 		assertThat(first.manifestSigningHash())
@@ -93,11 +117,20 @@ class CoreSnapshotArchiveExporterTest {
 		assertThat(envelope.decodeAndVerify()).isEqualTo(first.manifest());
 
 		CheckpointSnapshotVerifier stateVerifier = mock(CheckpointSnapshotVerifier.class);
+		CoreSnapshotEntityIndexVerifier entityVerifier = mock(CoreSnapshotEntityIndexVerifier.class);
 		SnapshotChunkSource stateSource = ignored -> null;
+		when(entityVerifier.verify(any(), any(), any(), any()))
+				.thenReturn(new CoreSnapshotEntityIndexVerifier.VerificationResult(Map.of(), 0, 0, 0));
 		when(stateVerifier.verifyWithFullHistoryAnchor(
-				same(fixture.stateManifest), same(stateSource), any(VerifiedCoreArchiveHistory.class)))
-				.thenReturn(fixture.stateResult);
-		VerifiedCoreSnapshotArchive verified = new CoreSnapshotArchiveVerifier(stateVerifier).verify(
+				same(fixture.stateManifest), same(stateSource), any(VerifiedCoreArchiveHistory.class),
+				any(CheckpointStateSupplementVerifier.class)))
+				.thenAnswer(invocation -> {
+					CheckpointStateSupplementVerifier supplement = invocation.getArgument(3);
+					supplement.verify(fixture.stateManifest.checkpointStateRoot(), mock(NodeLoader.class));
+					return fixture.stateResult;
+				});
+		VerifiedCoreSnapshotArchive verified = new CoreSnapshotArchiveVerifier(
+				stateVerifier, entityVerifier).verify(
 				first.manifest(), fixture.stateManifest, stateSource,
 				descriptor -> Files.newInputStream(first.chunkFiles().get(descriptor.index())));
 		assertThat(verified.activationEligible()).isTrue();

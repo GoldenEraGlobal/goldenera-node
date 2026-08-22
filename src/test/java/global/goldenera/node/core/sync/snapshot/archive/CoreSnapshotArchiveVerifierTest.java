@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.archive;
 
@@ -14,6 +33,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -34,6 +55,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.PrivateKey;
 import global.goldenera.cryptoj.enums.BlockVersion;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
+import global.goldenera.merkletrie.NodeLoader;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
@@ -41,6 +63,7 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotVerifier;
+import global.goldenera.node.core.sync.snapshot.CheckpointStateSupplementVerifier;
 import global.goldenera.node.core.sync.snapshot.SnapshotChunkSource;
 import global.goldenera.node.core.sync.snapshot.SnapshotHeader;
 import global.goldenera.node.core.sync.snapshot.SnapshotHeaderSegment;
@@ -59,15 +82,12 @@ class CoreSnapshotArchiveVerifierTest {
 		SnapshotChunkSource stateSource = ignored -> {
 			throw new AssertionError("mocked state verifier must own state source consumption");
 		};
-		when(stateVerifier.verifyWithFullHistoryAnchor(
-				same(fixture.stateManifest()), same(stateSource), any(VerifiedCoreArchiveHistory.class)))
-				.thenReturn(fixture.stateResult());
-
-		VerifiedCoreSnapshotArchive verified = new CoreSnapshotArchiveVerifier(stateVerifier).verify(
+		VerifiedCoreSnapshotArchive verified = verifier(stateVerifier, fixture.stateResult()).verify(
 				fixture.archiveManifest(), fixture.stateManifest(), stateSource, fixture.chunkSource());
 
 		verify(stateVerifier).verifyWithFullHistoryAnchor(
-				same(fixture.stateManifest()), same(stateSource), any(VerifiedCoreArchiveHistory.class));
+				same(fixture.stateManifest()), same(stateSource), any(VerifiedCoreArchiveHistory.class),
+				any(CheckpointStateSupplementVerifier.class));
 		verify(stateVerifier, never()).verify(same(fixture.stateManifest()), same(stateSource));
 		assertThat(verified.activationEligible()).isTrue();
 		assertThat(verified.blockCount()).isEqualTo(3);
@@ -104,17 +124,15 @@ class CoreSnapshotArchiveVerifierTest {
 	void mintsExactNonGenesisSegmentParentAnchorFromFullHistory() throws Exception {
 		Fixture fixture = withCheckpointOnlyHeaderSegment(fixture(chain(3), List.of(3)), false);
 		CheckpointSnapshotVerifier stateVerifier = mock(CheckpointSnapshotVerifier.class);
-		when(stateVerifier.verifyWithFullHistoryAnchor(
-				same(fixture.stateManifest()), any(SnapshotChunkSource.class), any(VerifiedCoreArchiveHistory.class)))
-				.thenReturn(fixture.stateResult());
 		ArgumentCaptor<VerifiedCoreArchiveHistory> anchorCaptor =
 				ArgumentCaptor.forClass(VerifiedCoreArchiveHistory.class);
 
-		new CoreSnapshotArchiveVerifier(stateVerifier).verify(
+		verifier(stateVerifier, fixture.stateResult()).verify(
 				fixture.archiveManifest(), fixture.stateManifest(), ignored -> null, fixture.chunkSource());
 
 		verify(stateVerifier).verifyWithFullHistoryAnchor(
-				same(fixture.stateManifest()), any(SnapshotChunkSource.class), anchorCaptor.capture());
+				same(fixture.stateManifest()), any(SnapshotChunkSource.class), anchorCaptor.capture(),
+				any(CheckpointStateSupplementVerifier.class));
 		VerifiedCoreArchiveHistory anchor = anchorCaptor.getValue();
 		SnapshotHeaderSegment segment = fixture.stateManifest().headerSegment();
 		assertThat(anchor.findCumulativeDifficulty(1, segment.parentHash()))
@@ -174,11 +192,11 @@ class CoreSnapshotArchiveVerifierTest {
 		Bytes original = base.chunks().get(0);
 		Fixture truncated = withReplacedPayloadAndDescriptor(
 				base, original.slice(0, original.size() - 1));
-		assertFailure(truncated, "Truncated");
+		assertFailure(truncated, "Cannot finish archive block chunk");
 
 		Bytes trailingPayload = Bytes.concatenate(original, Bytes.of(0x7f));
 		Fixture trailing = withReplacedPayloadAndDescriptor(base, trailingPayload);
-		assertFailure(trailing, "trailing bytes");
+		assertFailure(trailing, "Cannot finish archive block chunk");
 	}
 
 	@Test
@@ -188,7 +206,9 @@ class CoreSnapshotArchiveVerifierTest {
 				fixture.archiveManifest().blockChunks());
 		CoreSnapshotBlockChunkDescriptor second = descriptors.get(1);
 		descriptors.set(1, new CoreSnapshotBlockChunkDescriptor(
-				second.index(), 2, 2, second.blockCount(), second.byteCount(), second.contentHash()));
+				second.index(), 2, 2, second.blockCount(), second.compression(),
+				second.compressedByteCount(), second.compressedContentHash(),
+				second.uncompressedByteCount(), second.uncompressedContentHash()));
 		Fixture invalid = fixture.withManifest(new CoreSnapshotArchiveManifest(
 				CoreSnapshotArchiveLimits.FORMAT_VERSION,
 				fixture.archiveManifest().stateManifestSigningHash(), descriptors));
@@ -198,15 +218,29 @@ class CoreSnapshotArchiveVerifierTest {
 
 	private void assertFailure(Fixture fixture, String message) {
 		CheckpointSnapshotVerifier stateVerifier = mock(CheckpointSnapshotVerifier.class);
-		when(stateVerifier.verifyWithFullHistoryAnchor(
-				same(fixture.stateManifest()), any(SnapshotChunkSource.class), any(VerifiedCoreArchiveHistory.class)))
-				.thenReturn(fixture.stateResult());
-		CoreSnapshotArchiveVerifier verifier = new CoreSnapshotArchiveVerifier(stateVerifier);
+		CoreSnapshotArchiveVerifier verifier = verifier(stateVerifier, fixture.stateResult());
 		SnapshotChunkSource unusedStateSource = ignored -> null;
 		assertThatThrownBy(() -> verifier.verify(
 				fixture.archiveManifest(), fixture.stateManifest(), unusedStateSource, fixture.chunkSource()))
 				.isInstanceOf(SnapshotVerificationException.class)
 				.hasMessageContaining(message);
+	}
+
+	private CoreSnapshotArchiveVerifier verifier(
+			CheckpointSnapshotVerifier stateVerifier,
+			CheckpointSnapshotVerifier.VerificationResult stateResult) {
+		CoreSnapshotEntityIndexVerifier entityVerifier = mock(CoreSnapshotEntityIndexVerifier.class);
+		when(entityVerifier.verify(any(), any(), any(), any()))
+				.thenReturn(new CoreSnapshotEntityIndexVerifier.VerificationResult(Map.of(), 0, 0, 0));
+		when(stateVerifier.verifyWithFullHistoryAnchor(
+				any(CheckpointSnapshotManifest.class), any(SnapshotChunkSource.class),
+				any(VerifiedCoreArchiveHistory.class), any(CheckpointStateSupplementVerifier.class)))
+				.thenAnswer(invocation -> {
+					CheckpointStateSupplementVerifier supplement = invocation.getArgument(3);
+					supplement.verify(CHECKPOINT_STATE_ROOT, mock(NodeLoader.class));
+					return stateResult;
+				});
+		return new CoreSnapshotArchiveVerifier(stateVerifier, entityVerifier);
 	}
 
 	private Fixture fixture(List<StoredBlock> blocks, List<Integer> chunkSizes) {
@@ -235,10 +269,14 @@ class CoreSnapshotArchiveVerifierTest {
 		for (int index = 0; index < chunkSizes.size(); index++) {
 			int count = chunkSizes.get(index);
 			List<StoredBlock> chunkBlocks = blocks.subList(blockOffset, blockOffset + count);
-			Bytes encoded = CoreSnapshotBlockChunkCodec.encodeChunk(index, chunkBlocks);
-			chunks.put(index, encoded);
+			Bytes uncompressed = CoreSnapshotBlockChunkCodec.encodeChunk(index, chunkBlocks);
+			Bytes compressed = compress(uncompressed);
+			chunks.put(index, compressed);
 			descriptors.add(new CoreSnapshotBlockChunkDescriptor(
-					index, blockOffset, blockOffset + count - 1L, count, encoded.size(), Hash.hash(encoded)));
+					index, blockOffset, blockOffset + count - 1L, count,
+					CoreSnapshotChunkCompression.ZSTD,
+					compressed.size(), Hash.hash(compressed),
+					uncompressed.size(), Hash.hash(uncompressed)));
 			blockOffset += count;
 		}
 		if (blockOffset != blocks.size()) {
@@ -301,11 +339,23 @@ class CoreSnapshotArchiveVerifierTest {
 		CoreSnapshotBlockChunkDescriptor original = base.archiveManifest().blockChunks().getFirst();
 		CoreSnapshotBlockChunkDescriptor replacement = new CoreSnapshotBlockChunkDescriptor(
 				original.index(), original.firstHeight(), original.lastHeight(), original.blockCount(),
-				payload.size(), Hash.hash(payload));
+				original.compression(), payload.size(), Hash.hash(payload),
+				original.uncompressedByteCount(), original.uncompressedContentHash());
 		CoreSnapshotArchiveManifest manifest = new CoreSnapshotArchiveManifest(
 				base.archiveManifest().formatVersion(), base.archiveManifest().stateManifestSigningHash(),
 				List.of(replacement));
 		return new Fixture(base.stateManifest(), base.stateResult(), manifest, Map.of(0, payload));
+	}
+
+	private Bytes compress(Bytes uncompressed) {
+		try {
+			ByteArrayOutputStream output = new ByteArrayOutputStream();
+			CoreSnapshotCompression.writeZstd(
+					new ByteArrayInputStream(uncompressed.toArrayUnsafe()), output);
+			return Bytes.wrap(output.toByteArray());
+		} catch (IOException e) {
+			throw new IllegalStateException("Cannot compress test archive chunk", e);
+		}
 	}
 
 	private Fixture withCheckpointOnlyHeaderSegment(Fixture base, boolean wrongParentHash) {

@@ -158,6 +158,7 @@ public class Constants {
                         ),
                         // Block checkpoints (height -> hash)
                         Map.of(
+						0L, Hash.fromHexString("0x924fd3c5b501e1ccef10ca08cb6b473382d44618533d32339752988e469a516f"),
                                         100_000L, Hash.fromHexString("0x61c97a01fe7c09baf1d6bc4b7c994825e505bf52c6a282b8171e38c81681a4f2"),
                                         300_000L, Hash.fromHexString("0x1462f92f895ed3a939455f10954b3c4f9874abebde421579024b51dc27ddcea6"),
                                         500_000L, Hash.fromHexString("0xd399f6e1482df71b4a5e22d9ac02a01950d52d58abea53fb40d2babba7852e6c"),
@@ -185,6 +186,7 @@ public class Constants {
                                         ForkName.MINING_ECONOMICS, 716_824L),
                         // Block checkpoints
                         Map.of(
+						0L, Hash.fromHexString("0xf403f287a52b794eba7645d193c53c2dfa084a52db11ad94d70d0c79107c05cc"),
                                         100_000L, Hash.fromHexString("0x6531a7858c0fb1ad1e96c873fef8d3b37715f2296c514cd84215ce34e04d2f36"),
                                         300_000L, Hash.fromHexString("0x58c6458894f68eac3ea3902f5da9367e254fed46996140790871dc7cde5e38ad"),
                                         500_000L, Hash.fromHexString("0x1c11a5108c88519c6b6111d23de3e0d597b17f71b8ccd914ad3e28bfaedbc646"),

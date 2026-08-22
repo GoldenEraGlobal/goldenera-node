@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.archive;
 
@@ -19,6 +38,7 @@ import java.io.BufferedInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
@@ -49,6 +69,8 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.SnapshotExportException;
+import global.goldenera.node.core.sync.snapshot.SnapshotAnchorPolicy;
+import global.goldenera.node.core.sync.snapshot.HardcodedCheckpointSnapshotAnchorPolicy;
 import global.goldenera.node.core.sync.snapshot.transport.CoreSnapshotArchiveTransportManifest;
 
 /**
@@ -60,18 +82,42 @@ public final class CoreSnapshotArchiveExporter {
 
 	private static final String MANIFEST_FILE = "archive-manifest.json";
 
-	private final CheckpointRegistry checkpointRegistry;
+	private final SnapshotAnchorPolicy anchorPolicy;
 	private final ChainQuery chainQuery;
 	private final StoredChainIdentity chainIdentity;
 	private final long maxChunkBytes;
 	private final ObjectMapper objectMapper;
+	private final CoreSnapshotEntityIndexSource entityIndexSource;
+	private final CoreSnapshotEntityIndexExporter entityIndexExporter;
 
 	public CoreSnapshotArchiveExporter(
 			CheckpointRegistry checkpointRegistry,
 			ChainQuery chainQuery,
 			StoredChainIdentity chainIdentity,
 			ObjectMapper objectMapper) {
-		this(checkpointRegistry, chainQuery, chainIdentity, MAX_CHUNK_BYTES, objectMapper);
+		this(checkpointRegistry, chainQuery, chainIdentity, MAX_CHUNK_BYTES, objectMapper,
+				CoreSnapshotEntityIndexSource.empty(), new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	public CoreSnapshotArchiveExporter(
+			CheckpointRegistry checkpointRegistry,
+			ChainQuery chainQuery,
+			StoredChainIdentity chainIdentity,
+			ObjectMapper objectMapper,
+			CoreSnapshotEntityIndexSource entityIndexSource) {
+		this(checkpointRegistry, chainQuery, chainIdentity, MAX_CHUNK_BYTES, objectMapper, entityIndexSource,
+				new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	public CoreSnapshotArchiveExporter(
+			CheckpointRegistry checkpointRegistry,
+			ChainQuery chainQuery,
+			StoredChainIdentity chainIdentity,
+			ObjectMapper objectMapper,
+			CoreSnapshotEntityIndexSource entityIndexSource,
+			SnapshotAnchorPolicy anchorPolicy) {
+		this(checkpointRegistry, chainQuery, chainIdentity, MAX_CHUNK_BYTES, objectMapper, entityIndexSource,
+				anchorPolicy);
 	}
 
 	public CoreSnapshotArchiveExporter(
@@ -80,7 +126,31 @@ public final class CoreSnapshotArchiveExporter {
 			StoredChainIdentity chainIdentity,
 			long maxChunkBytes,
 			ObjectMapper objectMapper) {
-		this.checkpointRegistry = Objects.requireNonNull(checkpointRegistry, "checkpointRegistry");
+		this(checkpointRegistry, chainQuery, chainIdentity, maxChunkBytes, objectMapper,
+				CoreSnapshotEntityIndexSource.empty(), new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	CoreSnapshotArchiveExporter(
+			CheckpointRegistry checkpointRegistry,
+			ChainQuery chainQuery,
+			StoredChainIdentity chainIdentity,
+			long maxChunkBytes,
+			ObjectMapper objectMapper,
+			CoreSnapshotEntityIndexSource entityIndexSource) {
+		this(checkpointRegistry, chainQuery, chainIdentity, maxChunkBytes, objectMapper, entityIndexSource,
+				new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	CoreSnapshotArchiveExporter(
+			CheckpointRegistry checkpointRegistry,
+			ChainQuery chainQuery,
+			StoredChainIdentity chainIdentity,
+			long maxChunkBytes,
+			ObjectMapper objectMapper,
+			CoreSnapshotEntityIndexSource entityIndexSource,
+			SnapshotAnchorPolicy anchorPolicy) {
+		Objects.requireNonNull(checkpointRegistry, "checkpointRegistry");
+		this.anchorPolicy = Objects.requireNonNull(anchorPolicy, "anchorPolicy");
 		this.chainQuery = Objects.requireNonNull(chainQuery, "chainQuery");
 		this.chainIdentity = Objects.requireNonNull(chainIdentity, "chainIdentity");
 		if (maxChunkBytes <= CoreSnapshotBlockChunkCodec.HEADER_BYTES + Integer.BYTES
@@ -89,6 +159,8 @@ public final class CoreSnapshotArchiveExporter {
 		}
 		this.maxChunkBytes = maxChunkBytes;
 		this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
+		this.entityIndexSource = Objects.requireNonNull(entityIndexSource, "entityIndexSource");
+		this.entityIndexExporter = new CoreSnapshotEntityIndexExporter();
 	}
 
 	public ExportResult export(
@@ -100,6 +172,7 @@ public final class CoreSnapshotArchiveExporter {
 		List<Path> createdFiles = new ArrayList<>();
 		try {
 			StoredBlock checkpoint = validateCheckpoint(checkpointHeight, stateManifest);
+			entityIndexSource.assertCheckpoint(checkpointHeight, checkpoint.getHash());
 			List<CoreSnapshotBlockChunkDescriptor> descriptors;
 			List<Path> chunkFiles;
 			try (ChunkWriter writer = new ChunkWriter(output, createdFiles)) {
@@ -108,17 +181,22 @@ public final class CoreSnapshotArchiveExporter {
 				descriptors = writer.descriptors();
 				chunkFiles = writer.chunkFiles();
 			}
+			CoreSnapshotEntityIndexExporter.ExportResult entityExport =
+					entityIndexExporter.export(entityIndexSource, output);
+			createdFiles.addAll(entityExport.chunkFiles());
 
 			assertCanonical(checkpointHeight, checkpoint.getHash());
 			CoreSnapshotArchiveManifest manifest = new CoreSnapshotArchiveManifest(
 					FORMAT_VERSION,
 					CheckpointSnapshotManifestCodec.signingHash(stateManifest),
-					descriptors);
+					descriptors,
+					entityExport.descriptors());
 			Bytes canonical = CoreSnapshotArchiveManifestCodec.canonicalBytes(manifest);
 			Hash signingHash = CoreSnapshotArchiveManifestCodec.signingHash(manifest);
 			byte[] envelope = objectMapper.writeValueAsBytes(CoreSnapshotArchiveTransportManifest.from(manifest));
 			Path manifestFile = writeAtomic(output, MANIFEST_FILE, envelope, createdFiles);
-			return new ExportResult(manifest, canonical, signingHash, manifestFile, chunkFiles);
+			return new ExportResult(
+					manifest, canonical, signingHash, manifestFile, chunkFiles, entityExport.chunkFiles());
 		} catch (SnapshotExportException e) {
 			cleanup(createdFiles);
 			throw e;
@@ -139,10 +217,7 @@ public final class CoreSnapshotArchiveExporter {
 				|| !stateManifest.chainIdentity().equals(chainIdentity)) {
 			throw failure("State manifest identity/checkpoint does not match this archive export");
 		}
-		if (!checkpointRegistry.isCheckpoint(checkpointHeight)
-				|| !checkpointRegistry.verifyCheckpoint(checkpointHeight, stateManifest.checkpointHash())) {
-			throw failure("FULL archive requires an exact hardcoded checkpoint");
-		}
+		anchorPolicy.verify(checkpointHeight, stateManifest.checkpointHash(), chainIdentity);
 		StoredBlock checkpoint = chainQuery.getStoredBlockByHeight(checkpointHeight)
 				.orElseThrow(() -> failure("Canonical checkpoint StoredBlock is missing"));
 		validateFullStoredBlock(checkpoint, checkpointHeight, null, null);
@@ -329,7 +404,8 @@ public final class CoreSnapshotArchiveExporter {
 			Bytes canonicalManifestBytes,
 			Hash manifestSigningHash,
 			Path manifestFile,
-			List<Path> chunkFiles) {
+			List<Path> chunkFiles,
+			List<Path> entityChunkFiles) {
 		public ExportResult {
 			Objects.requireNonNull(manifest, "manifest");
 			canonicalManifestBytes = Bytes.wrap(
@@ -337,6 +413,7 @@ public final class CoreSnapshotArchiveExporter {
 			Objects.requireNonNull(manifestSigningHash, "manifestSigningHash");
 			Objects.requireNonNull(manifestFile, "manifestFile");
 			chunkFiles = List.copyOf(Objects.requireNonNull(chunkFiles, "chunkFiles"));
+			entityChunkFiles = List.copyOf(Objects.requireNonNull(entityChunkFiles, "entityChunkFiles"));
 		}
 	}
 
@@ -353,7 +430,8 @@ public final class CoreSnapshotArchiveExporter {
 		private long firstHeight;
 		private long lastHeight;
 		private long byteCount;
-		private long totalBytes;
+		private long totalCompressedBytes;
+		private long totalUncompressedBytes;
 
 		private ChunkWriter(Path output, List<Path> createdFiles) {
 			this.output = output;
@@ -388,7 +466,7 @@ public final class CoreSnapshotArchiveExporter {
 			if (chunkIndex >= MAX_CHUNK_COUNT) {
 				throw failure("FULL archive exceeds configured chunk count");
 			}
-			partial = output.resolve("archive-chunk-%05d.bin.part".formatted(chunkIndex));
+			partial = output.resolve("archive-chunk-%05d.bin.raw.part".formatted(chunkIndex));
 			createdFiles.add(partial);
 			try {
 				channel = FileChannel.open(partial, CREATE_NEW, WRITE, LinkOption.NOFOLLOW_LINKS);
@@ -420,21 +498,44 @@ public final class CoreSnapshotArchiveExporter {
 				stream.close();
 				stream = null;
 				channel = null;
-				Path target = output.resolve("archive-chunk-%05d.bin".formatted(chunkIndex));
-				Files.move(partial, target, ATOMIC_MOVE);
-				createdFiles.remove(partial);
-				createdFiles.add(target);
-				long actualBytes = Files.size(target);
-				if (actualBytes != byteCount || actualBytes > maxChunkBytes) {
+				long uncompressedBytes = Files.size(partial);
+				if (uncompressedBytes != byteCount || uncompressedBytes > maxChunkBytes) {
 					throw failure("Final archive block chunk size is inconsistent");
 				}
-				totalBytes = Math.addExact(totalBytes, actualBytes);
-				if (totalBytes > MAX_TOTAL_BYTES) {
+				Hash uncompressedHash = hashFile(partial);
+				Path compressedPartial = output.resolve(
+						"archive-chunk-%05d.bin.zst.part".formatted(chunkIndex));
+				createdFiles.add(compressedPartial);
+				try (InputStream input = new BufferedInputStream(Files.newInputStream(partial, READ));
+						OutputStream compressed = Files.newOutputStream(
+								compressedPartial, CREATE_NEW, WRITE, LinkOption.NOFOLLOW_LINKS)) {
+					CoreSnapshotCompression.writeZstd(input, compressed);
+				}
+				try (FileChannel compressedChannel = FileChannel.open(
+						compressedPartial, WRITE, LinkOption.NOFOLLOW_LINKS)) {
+					compressedChannel.force(true);
+				}
+				long compressedBytes = Files.size(compressedPartial);
+				if (compressedBytes <= 0 || compressedBytes > MAX_CHUNK_BYTES) {
+					throw failure("Compressed archive block chunk exceeds byte limits");
+				}
+				Hash compressedHash = hashFile(compressedPartial);
+				Path target = output.resolve("archive-chunk-%05d.bin.zst".formatted(chunkIndex));
+				Files.move(compressedPartial, target, ATOMIC_MOVE);
+				createdFiles.remove(compressedPartial);
+				createdFiles.add(target);
+				Files.delete(partial);
+				createdFiles.remove(partial);
+				totalCompressedBytes = Math.addExact(totalCompressedBytes, compressedBytes);
+				totalUncompressedBytes = Math.addExact(totalUncompressedBytes, uncompressedBytes);
+				if (totalCompressedBytes > MAX_TOTAL_BYTES || totalUncompressedBytes > MAX_TOTAL_BYTES) {
 					throw failure("FULL archive exceeds total byte limit");
 				}
 				chunkFiles.add(target);
 				descriptors.add(new CoreSnapshotBlockChunkDescriptor(
-						chunkIndex, firstHeight, lastHeight, blockCount, actualBytes, hashFile(target)));
+						chunkIndex, firstHeight, lastHeight, blockCount,
+						CoreSnapshotChunkCompression.ZSTD,
+						compressedBytes, compressedHash, uncompressedBytes, uncompressedHash));
 				chunkIndex++;
 				partial = null;
 			} catch (IOException e) {

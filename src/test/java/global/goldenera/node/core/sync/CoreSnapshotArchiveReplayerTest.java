@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync;
 
@@ -11,6 +30,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -53,8 +75,11 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.SnapshotHeaderSegment;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifestCodec;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkCodec;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotChunkCompression;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotCompression;
 import global.goldenera.node.core.sync.snapshot.archive.VerifiedCoreSnapshotArchive;
 import global.goldenera.node.core.sync.snapshot.transport.CoreSnapshotArchiveTransportManifest;
 import global.goldenera.node.core.sync.snapshot.transport.SnapshotTransportManifest;
@@ -74,8 +99,9 @@ class CoreSnapshotArchiveReplayerTest {
 		StoredBlock genesis = chain.getFirst();
 		StoredBlock checkpoint = chain.getLast();
 		Bytes encodedChunk = CoreSnapshotBlockChunkCodec.encodeChunk(0, chain);
-		Path chunkFile = temporaryDirectory.resolve("archive-chunk-00000.bin");
-		Files.write(chunkFile, encodedChunk.toArrayUnsafe());
+		Bytes compressedChunk = compress(encodedChunk);
+		Path chunkFile = temporaryDirectory.resolve("archive-chunk-00000.bin.zst");
+		Files.write(chunkFile, compressedChunk.toArrayUnsafe());
 
 		StoredChainIdentity identity = new StoredChainIdentity(
 				1, Network.TESTNET.getCode(), "testnet", genesis.getHash().toHexString(), null);
@@ -84,9 +110,12 @@ class CoreSnapshotArchiveReplayerTest {
 				checkpoint.getBlock().getHeader().getStateRootHash(), checkpoint.getCumulativeDifficulty(),
 				new SnapshotHeaderSegment(Hash.ZERO, BigInteger.ZERO, List.of()), List.of());
 		CoreSnapshotBlockChunkDescriptor descriptor = new CoreSnapshotBlockChunkDescriptor(
-				0, 0, 1, 2, encodedChunk.size(), Hash.hash(encodedChunk));
+				0, 0, 1, 2, CoreSnapshotChunkCompression.ZSTD,
+				compressedChunk.size(), Hash.hash(compressedChunk),
+				encodedChunk.size(), Hash.hash(encodedChunk));
 		CoreSnapshotArchiveManifest archiveManifest = new CoreSnapshotArchiveManifest(
-				1, CheckpointSnapshotManifestCodec.signingHash(stateManifest), List.of(descriptor));
+				CoreSnapshotArchiveLimits.FORMAT_VERSION,
+				CheckpointSnapshotManifestCodec.signingHash(stateManifest), List.of(descriptor));
 		StagedSnapshotDownload stateDownload = new StagedSnapshotDownload(
 				SnapshotTransportManifest.from(stateManifest), stateManifest, temporaryDirectory,
 				temporaryDirectory.resolve("manifest.json"), List.of());
@@ -223,7 +252,9 @@ class CoreSnapshotArchiveReplayerTest {
 	void corruptTailAfterCommittedBatchLeavesValidCanonicalPrefixForV1Resume() throws Exception {
 		ArchiveFixture fixture = archiveFixture(chain(252), List.of(252));
 		Path chunk = fixture.staged().blockChunkFiles().getFirst();
-		Files.write(chunk, Bytes.concatenate(Bytes.wrap(Files.readAllBytes(chunk)), Bytes.of(0x7f)).toArrayUnsafe());
+		byte[] corrupt = Files.readAllBytes(chunk);
+		corrupt[corrupt.length - 1] ^= 0x7f;
+		Files.write(chunk, corrupt);
 		ReplayHarness harness = replayHarness(fixture.blocks(), 0);
 
 		assertThatThrownBy(() -> harness.replayer().replay(fixture.staged(), fixture.verified()))
@@ -288,16 +319,19 @@ class CoreSnapshotArchiveReplayerTest {
 			int count = chunkSizes.get(index);
 			Bytes encoded = CoreSnapshotBlockChunkCodec.encodeChunk(
 					index, blocks.subList(offset, offset + count));
-			Path file = temporaryDirectory.resolve("archive-chunk-" + index + ".bin");
-			Files.write(file, encoded.toArrayUnsafe());
+			Bytes compressed = compress(encoded);
+			Path file = temporaryDirectory.resolve("archive-chunk-" + index + ".bin.zst");
+			Files.write(file, compressed.toArrayUnsafe());
 			files.add(file);
 			descriptors.add(new CoreSnapshotBlockChunkDescriptor(
-					index, offset, offset + count - 1L, count, encoded.size(), Hash.hash(encoded)));
+					index, offset, offset + count - 1L, count, CoreSnapshotChunkCompression.ZSTD,
+					compressed.size(), Hash.hash(compressed), encoded.size(), Hash.hash(encoded)));
 			encodedBytes += encoded.size();
 			offset += count;
 		}
 		CoreSnapshotArchiveManifest archiveManifest = new CoreSnapshotArchiveManifest(
-				1, CheckpointSnapshotManifestCodec.signingHash(stateManifest), descriptors);
+				CoreSnapshotArchiveLimits.FORMAT_VERSION,
+				CheckpointSnapshotManifestCodec.signingHash(stateManifest), descriptors);
 		StagedSnapshotDownload stateDownload = new StagedSnapshotDownload(
 				SnapshotTransportManifest.from(stateManifest), stateManifest, temporaryDirectory,
 				temporaryDirectory.resolve("manifest.json"), List.of());
@@ -318,6 +352,17 @@ class CoreSnapshotArchiveReplayerTest {
 		long totalEncodedBytes = encodedBytes;
 		when(verified.encodedBytes()).thenReturn(totalEncodedBytes);
 		return new ArchiveFixture(blocks, staged, verified);
+	}
+
+	private Bytes compress(Bytes uncompressed) {
+		try {
+			ByteArrayOutputStream output = new ByteArrayOutputStream();
+			CoreSnapshotCompression.writeZstd(
+					new ByteArrayInputStream(uncompressed.toArrayUnsafe()), output);
+			return Bytes.wrap(output.toByteArray());
+		} catch (IOException e) {
+			throw new IllegalStateException("Cannot compress test archive chunk", e);
+		}
 	}
 
 	private ReplayHarness replayHarness(List<StoredBlock> blocks, int localHeadIndex) throws Exception {

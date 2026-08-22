@@ -1,0 +1,7 @@
+databaseChangeLog:
+  - include:
+      file: db/changelog/changesets/001-initial-schema.yaml
+  - include:
+      file: db/changelog/changesets/005-mining-economics-explorer.yaml
+  - include:
+      file: db/changelog/changesets/006-explorer-chain-identity.yaml

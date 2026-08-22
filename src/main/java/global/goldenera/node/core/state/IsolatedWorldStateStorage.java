@@ -40,6 +40,8 @@ import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.DBOptions;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
+import org.rocksdb.WriteBatch;
+import org.rocksdb.WriteOptions;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 
@@ -186,6 +188,14 @@ public final class IsolatedWorldStateStorage implements AutoCloseable {
 
 	public WorldStateFactory worldStateFactory() {
 		return worldStateFactory;
+	}
+
+	/** Persists one verified replay state atomically inside this isolated database. */
+	public void persist(WorldState worldState) throws RocksDBException {
+		try (WriteBatch batch = new WriteBatch(); WriteOptions options = new WriteOptions()) {
+			worldState.persistToBatch(batch);
+			database.write(options, batch);
+		}
 	}
 
 	@Override

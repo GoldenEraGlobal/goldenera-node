@@ -23,7 +23,6 @@
  */
 package global.goldenera.node.core.sync.snapshot;
 
-import static global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits.FORMAT_VERSION;
 import static global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits.MAX_CHUNK_BYTES;
 import static global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits.MAX_CHUNK_COUNT;
 import static global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits.MAX_HEADER_COUNT;
@@ -79,17 +78,28 @@ public final class CheckpointSnapshotVerifier {
 			WorldStateFactory.KEY_MINING_REWARD_MATURITY,
 			WorldStateFactory.KEY_TOKEN);
 
-	private final CheckpointRegistry checkpointRegistry;
+	private final SnapshotAnchorPolicy anchorPolicy;
 	private final StoredChainIdentity expectedChainIdentity;
 	private final long randomXEpochLength;
 	private final CumulativeWorkAnchorProvider cumulativeWorkAnchorProvider;
+	private final SnapshotDiskSpaceBudget diskSpaceBudget;
 
 	public CheckpointSnapshotVerifier(
 			CheckpointRegistry checkpointRegistry,
 			StoredChainIdentity expectedChainIdentity,
 			long randomXEpochLength) {
 		this(checkpointRegistry, expectedChainIdentity, randomXEpochLength,
-				(height, hash) -> Optional.empty());
+				(height, hash) -> Optional.empty(), SnapshotDiskSpaceBudget.system(),
+				new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	public CheckpointSnapshotVerifier(
+			CheckpointRegistry checkpointRegistry,
+			StoredChainIdentity expectedChainIdentity,
+			long randomXEpochLength,
+			SnapshotAnchorPolicy anchorPolicy) {
+		this(checkpointRegistry, expectedChainIdentity, randomXEpochLength,
+				(height, hash) -> Optional.empty(), SnapshotDiskSpaceBudget.system(), anchorPolicy);
 	}
 
 	public CheckpointSnapshotVerifier(
@@ -97,7 +107,29 @@ public final class CheckpointSnapshotVerifier {
 			StoredChainIdentity expectedChainIdentity,
 			long randomXEpochLength,
 			CumulativeWorkAnchorProvider cumulativeWorkAnchorProvider) {
-		this.checkpointRegistry = Objects.requireNonNull(checkpointRegistry, "checkpointRegistry");
+		this(checkpointRegistry, expectedChainIdentity, randomXEpochLength,
+				cumulativeWorkAnchorProvider, SnapshotDiskSpaceBudget.system(),
+				new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	CheckpointSnapshotVerifier(
+			CheckpointRegistry checkpointRegistry,
+			StoredChainIdentity expectedChainIdentity,
+			long randomXEpochLength,
+			CumulativeWorkAnchorProvider cumulativeWorkAnchorProvider,
+			SnapshotDiskSpaceBudget diskSpaceBudget) {
+		this(checkpointRegistry, expectedChainIdentity, randomXEpochLength, cumulativeWorkAnchorProvider,
+				diskSpaceBudget, new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	CheckpointSnapshotVerifier(
+			CheckpointRegistry checkpointRegistry,
+			StoredChainIdentity expectedChainIdentity,
+			long randomXEpochLength,
+			CumulativeWorkAnchorProvider cumulativeWorkAnchorProvider,
+			SnapshotDiskSpaceBudget diskSpaceBudget,
+			SnapshotAnchorPolicy anchorPolicy) {
+		Objects.requireNonNull(checkpointRegistry, "checkpointRegistry");
 		this.expectedChainIdentity = Objects.requireNonNull(expectedChainIdentity, "expectedChainIdentity");
 		if (randomXEpochLength <= 0) {
 			throw new IllegalArgumentException("RandomX epoch length must be positive");
@@ -105,6 +137,8 @@ public final class CheckpointSnapshotVerifier {
 		this.randomXEpochLength = randomXEpochLength;
 		this.cumulativeWorkAnchorProvider = Objects.requireNonNull(
 				cumulativeWorkAnchorProvider, "cumulativeWorkAnchorProvider");
+		this.diskSpaceBudget = Objects.requireNonNull(diskSpaceBudget, "diskSpaceBudget");
+		this.anchorPolicy = Objects.requireNonNull(anchorPolicy, "anchorPolicy");
 	}
 
 	public VerificationResult verify(CheckpointSnapshotBundle bundle) {
@@ -142,11 +176,12 @@ public final class CheckpointSnapshotVerifier {
 				throw failure("Snapshot is missing declared chunk: " + descriptor.id());
 			}
 			return inMemoryNodeSource(chunk.nodes());
-		});
+		}, cumulativeWorkAnchorProvider, CheckpointStateSupplementVerifier.none());
 	}
 
 	public VerificationResult verify(CheckpointSnapshotManifest manifest, SnapshotChunkSource chunkSource) {
-		return verify(manifest, chunkSource, cumulativeWorkAnchorProvider);
+		return verify(manifest, chunkSource, cumulativeWorkAnchorProvider,
+				CheckpointStateSupplementVerifier.none());
 	}
 
 	/**
@@ -192,21 +227,40 @@ public final class CheckpointSnapshotVerifier {
 						fullHistory.checkpointCumulativeDifficulty())) {
 			throw failure("Full archive history does not match the state checkpoint");
 		}
-		return verify(manifest, chunkSource, fullHistory::findCumulativeDifficulty);
+		return verify(manifest, chunkSource, fullHistory::findCumulativeDifficulty,
+				CheckpointStateSupplementVerifier.none());
+	}
+
+	public VerificationResult verifyWithFullHistoryAnchor(
+			CheckpointSnapshotManifest manifest,
+			SnapshotChunkSource chunkSource,
+			VerifiedCoreArchiveHistory fullHistory,
+			CheckpointStateSupplementVerifier supplementVerifier) {
+		Objects.requireNonNull(supplementVerifier, "supplementVerifier");
+		if (manifest.checkpointHeight() != fullHistory.checkpointHeight()
+				|| !manifest.checkpointHash().equals(fullHistory.checkpointHash())
+				|| !manifest.checkpointCumulativeDifficulty().equals(
+						fullHistory.checkpointCumulativeDifficulty())) {
+			throw failure("Full archive history does not match the state checkpoint");
+		}
+		return verify(manifest, chunkSource, fullHistory::findCumulativeDifficulty, supplementVerifier);
 	}
 
 	private VerificationResult verify(
 			CheckpointSnapshotManifest manifest,
 			SnapshotChunkSource chunkSource,
-			CumulativeWorkAnchorProvider workAnchorProvider) {
+			CumulativeWorkAnchorProvider workAnchorProvider,
+			CheckpointStateSupplementVerifier supplementVerifier) {
 		Objects.requireNonNull(manifest, "manifest");
 		Objects.requireNonNull(chunkSource, "chunkSource");
 		verifyManifestIdentity(manifest);
 		verifyHeaderSegment(manifest, workAnchorProvider);
 		verifyChunkDescriptors(manifest.chunks());
+		diskSpaceBudget.requireVerification(manifest, null);
 		try (TemporarySnapshotNodeStore stagingStore = TemporarySnapshotNodeStore.create()) {
 			stageChunks(manifest.chunks(), chunkSource, stagingStore);
 			verifyWorldState(manifest.checkpointStateRoot(), stagingStore);
+			supplementVerifier.verify(manifest.checkpointStateRoot(), stagingStore);
 			if (stagingStore.hasUnvisitedNodes()) {
 				throw failure("Snapshot contains unreachable trie node(s)");
 			}
@@ -218,7 +272,7 @@ public final class CheckpointSnapshotVerifier {
 	}
 
 	private void verifyManifestIdentity(CheckpointSnapshotManifest manifest) {
-		if (manifest.formatVersion() != FORMAT_VERSION) {
+		if (!SnapshotFormatCompatibility.supportsState(manifest.formatVersion())) {
 			throw failure("Unsupported snapshot format version: " + manifest.formatVersion());
 		}
 		if (manifest.networkCode() != expectedChainIdentity.carrierNetworkCode()
@@ -229,10 +283,7 @@ public final class CheckpointSnapshotVerifier {
 		if (manifest.checkpointHeight() < 0 || manifest.checkpointCumulativeDifficulty().signum() <= 0) {
 			throw failure("Checkpoint height and cumulative difficulty must be positive");
 		}
-		if (!checkpointRegistry.isCheckpoint(manifest.checkpointHeight())
-				|| !checkpointRegistry.verifyCheckpoint(manifest.checkpointHeight(), manifest.checkpointHash())) {
-			throw failure("Snapshot checkpoint is not an exact hardcoded checkpoint");
-		}
+		anchorPolicy.verify(manifest.checkpointHeight(), manifest.checkpointHash(), manifest.chainIdentity());
 	}
 
 	private void verifyHeaderSegment(

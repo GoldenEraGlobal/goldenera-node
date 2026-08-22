@@ -66,7 +66,6 @@ import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import global.goldenera.node.core.sync.BlockSyncManagerService;
-import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotBootstrapCoordinator;
 import global.goldenera.node.explorer.services.indexer.business.ExIndexerSyncService;
 import global.goldenera.node.explorer.services.indexer.business.ExIndexerSyncStartupListener;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
@@ -80,12 +79,11 @@ class CoreBootstrapServiceTest {
 
 		fixture.service.onApplicationReady(mock(ApplicationReadyEvent.class));
 
-		InOrder order = inOrder(fixture.identity, fixture.genesis, fixture.snapshotBootstrap, fixture.headState,
+		InOrder order = inOrder(fixture.identity, fixture.genesis, fixture.headState,
 				fixture.activation, fixture.p2p, fixture.connections, fixture.sync,
 				fixture.directory, fixture.milestones);
 		order.verify(fixture.identity).identity();
 		order.verify(fixture.genesis).checkAndInitGenesisBlock();
-		order.verify(fixture.snapshotBootstrap).tryBootstrapFreshNode();
 		order.verify(fixture.headState).init();
 		order.verify(fixture.activation).assertHeadReady(isNull(), eq(42L));
 		order.verify(fixture.milestones).publish(any(CoreDbReadyEvent.class));
@@ -208,7 +206,6 @@ class CoreBootstrapServiceTest {
 		private final MiningEconomicsActivationService activation = mock(MiningEconomicsActivationService.class);
 		private final AuthoritativeChainIdentityProvider identity = mock(AuthoritativeChainIdentityProvider.class);
 		private final CoreRuntimeReadinessTracker readiness = new CoreRuntimeReadinessTracker();
-		private final CoreSnapshotBootstrapCoordinator snapshotBootstrap = mock(CoreSnapshotBootstrapCoordinator.class);
 		private final CoreBootstrapService service;
 
 		private Fixture() {
@@ -238,8 +235,7 @@ class CoreBootstrapServiceTest {
 					chain,
 					activation,
 					identity,
-					readiness,
-					snapshotBootstrap);
+					readiness);
 		}
 	}
 }

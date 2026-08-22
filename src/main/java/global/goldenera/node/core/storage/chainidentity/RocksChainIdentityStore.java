@@ -38,7 +38,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class RocksChainIdentityStore implements ChainIdentityStore {
 
-	static final byte[] STORAGE_KEY = "CHAIN_IDENTITY_V1".getBytes(UTF_8);
+	public static final byte[] STORAGE_KEY = "CHAIN_IDENTITY_V1".getBytes(UTF_8);
 
 	private final RocksDBRepository repository;
 	private final RocksDbColumnFamilies columnFamilies;

@@ -28,6 +28,7 @@ import java.time.Duration;
 import org.springdoc.core.models.GroupedOpenApi;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -155,6 +156,7 @@ public class SandboxControlConfiguration {
 
 	@Bean
 	@Order(Ordered.HIGHEST_PRECEDENCE)
+	@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 	SecurityFilterChain sandboxControlSecurityFilterChain(
 			HttpSecurity http,
 			SandboxControlTokenAuthenticator authenticator,

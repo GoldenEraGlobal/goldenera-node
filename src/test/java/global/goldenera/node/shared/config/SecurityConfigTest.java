@@ -23,6 +23,7 @@
  */
 package global.goldenera.node.shared.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
@@ -33,10 +34,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.web.FilterChainProxy;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -66,6 +69,17 @@ class SecurityConfigTest {
 			mockMvc.perform(get("/api/bridge/v1/probe"))
 					.andExpect(status().isForbidden());
 		}
+	}
+
+	@Test
+	void nonWebPostgresContextDoesNotCreateServletSecurityGraph() {
+		new ApplicationContextRunner()
+				.withPropertyValues("ge.general.postgresql-enable=true")
+				.withUserConfiguration(SecurityConfig.class)
+				.run(context -> {
+					assertThat(context).doesNotHaveBean(SecurityConfig.class);
+					assertThat(context).doesNotHaveBean(SecurityFilterChain.class);
+				});
 	}
 
 	@Configuration(proxyBeanMethods = false)

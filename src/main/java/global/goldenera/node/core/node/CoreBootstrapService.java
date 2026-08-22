@@ -26,6 +26,7 @@ package global.goldenera.node.core.node;
 import static lombok.AccessLevel.PRIVATE;
 
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
@@ -43,12 +44,13 @@ import global.goldenera.node.core.p2p.services.DirectoryService;
 import global.goldenera.node.core.processing.MiningEconomicsActivationService;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.sync.BlockSyncManagerService;
-import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotBootstrapCoordinator;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
+@ConditionalOnProperty(
+		prefix = "ge.snapshot.operator", name = "suppress-runtime", havingValue = "false", matchIfMissing = true)
 @AllArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
@@ -65,7 +67,6 @@ public class CoreBootstrapService {
 	MiningEconomicsActivationService miningEconomicsActivationService;
 	AuthoritativeChainIdentityProvider chainIdentityProvider;
 	CoreRuntimeReadinessTracker readiness;
-	CoreSnapshotBootstrapCoordinator snapshotBootstrapCoordinator;
 
 	@EventListener
 	public void onApplicationReady(ApplicationReadyEvent event) {
@@ -96,7 +97,6 @@ public class CoreBootstrapService {
 	private void initializationDb() {
 		try {
 			blockGenesisService.checkAndInitGenesisBlock();
-			snapshotBootstrapCoordinator.tryBootstrapFreshNode();
 			chainHeadStateCache.init();
 			miningEconomicsActivationService.assertHeadReady(
 					chainHeadStateCache.getHeadState(), chainQuery.getLatestStoredBlockOrThrow().getHeight());

@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.transport;
 
@@ -8,6 +27,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.math.BigInteger;
@@ -36,7 +58,13 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.SnapshotChunkDescriptor;
 import global.goldenera.node.core.sync.snapshot.SnapshotHeaderSegment;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotChunkCompression;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotCompression;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityChunkCodec;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityType;
 import global.goldenera.node.shared.properties.GeneralProperties;
 
 class HttpCheckpointSnapshotClientTest {
@@ -137,6 +165,17 @@ class HttpCheckpointSnapshotClientTest {
 	}
 
 	@Test
+	void rejectsUnsupportedStateFormatBeforeAnyChunkRequest() throws Exception {
+		serveManifest(manifest(
+				source, null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0, 0));
+
+		assertThatThrownBy(() -> client(properties(true)).stageFullArchiveFromFirstTrustedSource())
+				.isInstanceOf(SnapshotTransportException.class)
+				.hasMessageContaining("All trusted full core snapshot manifests failed");
+		assertThat(chunkRequests).hasValue(0);
+	}
+
+	@Test
 	void plainHttpRequiresExplicitTestOnlyOptIn() {
 		SnapshotDistributionProperties properties = properties(false);
 
@@ -167,18 +206,28 @@ class HttpCheckpointSnapshotClientTest {
 		SnapshotTransportManifest stateEnvelope = manifest(
 				null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
 		serveManifest(stateEnvelope);
-		byte[] archiveChunk = new byte[] { 1, 2, 3, 4 };
+		byte[] archiveChunk = archiveChunk(1, CoreSnapshotArchiveLimits.FORMAT_VERSION);
+		byte[] entityChunk = entityChunk(CoreSnapshotEntityType.TOKEN, 0, 0, 1);
 		CoreSnapshotArchiveManifest archiveManifest = new CoreSnapshotArchiveManifest(
-				1,
+				CoreSnapshotArchiveLimits.FORMAT_VERSION,
 				CheckpointSnapshotManifestCodec.signingHash(stateEnvelope.decodeAndVerify()),
 				List.of(new CoreSnapshotBlockChunkDescriptor(
-						0, 0, 0, 1, archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk)))));
-		serveArchive(archiveManifest, archiveChunk);
+						0, 0, 0, 1, CoreSnapshotChunkCompression.ZSTD,
+						archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk)),
+						archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk)))),
+				List.of(new CoreSnapshotEntityChunkDescriptor(
+						0, CoreSnapshotEntityType.TOKEN, 0,
+						entityChunk.length, Hash.hash(Bytes.wrap(entityChunk)),
+						CoreSnapshotEntityChunkCodec.HEADER_BYTES, Hash.ZERO)));
+		serveArchive(archiveManifest, archiveChunk, entityChunk);
 
 		try (StagedCoreSnapshotArchiveDownload staged = client(properties(true))
 				.stageFullArchive(source, temporaryDirectory.resolve("full"));
 				var input = staged.blockChunkSource().open(archiveManifest.blockChunks().getFirst())) {
 			assertThat(input.readAllBytes()).isEqualTo(archiveChunk);
+			try (var entityInput = staged.entityChunkSource().open(archiveManifest.entityChunks().getFirst())) {
+				assertThat(entityInput.readAllBytes()).isEqualTo(entityChunk);
+			}
 			assertThat(staged.archiveManifest().stateManifestSigningHash())
 					.isEqualTo(CheckpointSnapshotManifestCodec.signingHash(staged.stateSnapshot().domainManifest()));
 		}
@@ -200,12 +249,14 @@ class HttpCheckpointSnapshotClientTest {
 		SnapshotTransportManifest stateEnvelope = manifest(
 				null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
 		serveManifest(stateEnvelope);
-		byte[] archiveChunk = new byte[] { 7, 8, 9 };
+		byte[] archiveChunk = archiveChunk(1, CoreSnapshotArchiveLimits.FORMAT_VERSION);
 		serveArchive(new CoreSnapshotArchiveManifest(
-				1,
+				CoreSnapshotArchiveLimits.FORMAT_VERSION,
 				CheckpointSnapshotManifestCodec.signingHash(stateEnvelope.decodeAndVerify()),
 				List.of(new CoreSnapshotBlockChunkDescriptor(
-						0, 0, 0, 1, archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk))))),
+						0, 0, 0, 1, CoreSnapshotChunkCompression.ZSTD,
+						archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk)),
+						archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk))))),
 				archiveChunk);
 		SnapshotDistributionProperties properties = properties(true);
 		properties.setTrustedSources(Map.of(Network.TESTNET, List.of(
@@ -221,6 +272,88 @@ class HttpCheckpointSnapshotClientTest {
 		}
 	}
 
+	@Test
+	void resumesVerifiedChunksFromDeterministicCacheAcrossClientRestart() throws Exception {
+		SnapshotTransportManifest stateEnvelope = manifest(
+				null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
+		serveManifest(stateEnvelope);
+		byte[] archiveChunk = archiveChunk(1, CoreSnapshotArchiveLimits.FORMAT_VERSION);
+		CoreSnapshotArchiveManifest archiveManifest = archiveManifest(stateEnvelope, 0, archiveChunk);
+		byte[] archiveJson = objectMapper.writeValueAsBytes(
+				CoreSnapshotArchiveTransportManifest.from(archiveManifest));
+		server.createContext(HttpCheckpointSnapshotClient.ARCHIVE_MANIFEST_PATH,
+				exchange -> respond(exchange, 200, archiveJson));
+		AtomicInteger archiveRequests = new AtomicInteger();
+		server.createContext(HttpCheckpointSnapshotClient.ARCHIVE_CHUNKS_PATH + "0", exchange -> {
+			if (archiveRequests.incrementAndGet() == 1) {
+				respond(exchange, 503, new byte[0]);
+			} else {
+				respond(exchange, 200, archiveChunk);
+			}
+		});
+		SnapshotDistributionProperties properties = properties(true);
+		Path cacheBase = temporaryDirectory.resolve("resume-cache");
+		properties.setStagingDirectory(cacheBase);
+
+		assertThatThrownBy(() -> client(properties).stageFullArchiveFromFirstTrustedSource())
+				.isInstanceOf(SnapshotTransportException.class)
+				.hasMessageContaining("checkpoint 0");
+		assertThat(chunkRequests).hasValue(1);
+		assertThat(archiveRequests).hasValue(1);
+
+		try (StagedCoreSnapshotArchiveDownload resumed =
+				client(properties).stageFullArchiveFromFirstTrustedSource()) {
+			assertThat(resumed.stateSnapshot().domainManifest().checkpointHeight()).isZero();
+			assertThat(chunkRequests).hasValue(1);
+			assertThat(archiveRequests).hasValue(2);
+		}
+		try (var children = Files.list(cacheBase)) {
+			assertThat(children).isEmpty();
+		}
+	}
+
+	@Test
+	void retriesCompatibleTrustedSourceWhenFirstHasUnsupportedBlockChunkFormat() throws Exception {
+		SnapshotTransportManifest lowState = manifest(
+				null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
+		serveManifest(lowState);
+		byte[] lowArchiveChunk = archiveChunk(1, 1);
+		serveArchive(archiveManifest(lowState, 0, lowArchiveChunk), lowArchiveChunk);
+
+		HttpServer higherServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		URI higherSource = URI.create("http://127.0.0.1:" + higherServer.getAddress().getPort() + "/");
+		AtomicInteger higherStateRequests = new AtomicInteger();
+		try {
+			SnapshotTransportManifest highState = manifest(
+					higherSource, null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0, 0);
+			byte[] highArchiveChunk = archiveChunk(1, CoreSnapshotArchiveLimits.FORMAT_VERSION);
+			CoreSnapshotArchiveManifest highArchive = archiveManifest(highState, 0, highArchiveChunk);
+			higherServer.createContext(HttpCheckpointSnapshotClient.MANIFEST_PATH,
+					exchange -> respond(exchange, 200, objectMapper.writeValueAsBytes(highState)));
+			higherServer.createContext(HttpCheckpointSnapshotClient.ARCHIVE_MANIFEST_PATH,
+					exchange -> respond(exchange, 200, objectMapper.writeValueAsBytes(
+						CoreSnapshotArchiveTransportManifest.from(highArchive))));
+			higherServer.createContext(HttpCheckpointSnapshotClient.CHUNKS_PATH + "0", exchange -> {
+				higherStateRequests.incrementAndGet();
+				respond(exchange, 200, chunk);
+			});
+			higherServer.createContext(HttpCheckpointSnapshotClient.ARCHIVE_CHUNKS_PATH + "0",
+					exchange -> respond(exchange, 200, highArchiveChunk));
+			higherServer.start();
+
+			SnapshotDistributionProperties properties = properties(true);
+			properties.setTrustedSources(Map.of(Network.TESTNET, List.of(source, higherSource)));
+			try (StagedCoreSnapshotArchiveDownload staged =
+					client(properties).stageFullArchiveFromFirstTrustedSource()) {
+				assertThat(staged.stateSnapshot().domainManifest().checkpointHeight()).isZero();
+				assertThat(chunkRequests).hasValue(1);
+				assertThat(higherStateRequests).hasValue(1);
+			}
+		} finally {
+			higherServer.stop(0);
+		}
+	}
+
 	private void serveManifest(SnapshotTransportManifest manifest) throws Exception {
 		byte[] json = objectMapper.writeValueAsBytes(manifest);
 		server.createContext(HttpCheckpointSnapshotClient.MANIFEST_PATH,
@@ -232,9 +365,20 @@ class HttpCheckpointSnapshotClientTest {
 	}
 
 	private SnapshotTransportManifest manifest(String url, String hash, long byteCount, long checkpointHeight) {
-		String chunkUrl = url == null ? source.resolve(HttpCheckpointSnapshotClient.CHUNKS_PATH + "0").toString() : url;
+		return manifest(source, url, hash, byteCount, checkpointHeight);
+	}
+
+	private SnapshotTransportManifest manifest(
+			URI publicSource, String url, String hash, long byteCount, long checkpointHeight) {
+		return manifest(publicSource, url, hash, byteCount, checkpointHeight, 1);
+	}
+
+	private SnapshotTransportManifest manifest(
+			URI publicSource, String url, String hash, long byteCount, long checkpointHeight, int formatVersion) {
+		String chunkUrl = url == null
+				? publicSource.resolve(HttpCheckpointSnapshotClient.CHUNKS_PATH + "0").toString() : url;
 		CheckpointSnapshotManifest manifest = new CheckpointSnapshotManifest(
-				1,
+				formatVersion,
 				Network.TESTNET.getCode(),
 				new StoredChainIdentity(1, Network.TESTNET.getCode(), "testnet", Hash.ZERO.toHexString(), null),
 				checkpointHeight,
@@ -247,12 +391,64 @@ class HttpCheckpointSnapshotClientTest {
 		return SnapshotTransportManifest.from(manifest);
 	}
 
+	private CoreSnapshotArchiveManifest archiveManifest(
+			SnapshotTransportManifest stateEnvelope,
+			long checkpointHeight,
+			byte[] archiveChunk) {
+		return new CoreSnapshotArchiveManifest(
+				CoreSnapshotArchiveLimits.FORMAT_VERSION,
+				CheckpointSnapshotManifestCodec.signingHash(stateEnvelope.decodeAndVerify()),
+				List.of(new CoreSnapshotBlockChunkDescriptor(
+						0, 0, checkpointHeight, Math.toIntExact(checkpointHeight + 1),
+						CoreSnapshotChunkCompression.ZSTD,
+						archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk)),
+						archiveChunk.length, Hash.hash(Bytes.wrap(archiveChunk)))));
+	}
+
 	private void serveArchive(CoreSnapshotArchiveManifest manifest, byte[] archiveChunk) throws Exception {
+		serveArchive(manifest, archiveChunk, null);
+	}
+
+	private void serveArchive(
+			CoreSnapshotArchiveManifest manifest, byte[] archiveChunk, byte[] entityChunk) throws Exception {
 		byte[] json = objectMapper.writeValueAsBytes(CoreSnapshotArchiveTransportManifest.from(manifest));
 		server.createContext(HttpCheckpointSnapshotClient.ARCHIVE_MANIFEST_PATH,
 				exchange -> respond(exchange, 200, json));
 		server.createContext(HttpCheckpointSnapshotClient.ARCHIVE_CHUNKS_PATH + "0",
 				exchange -> respond(exchange, 200, archiveChunk));
+		if (entityChunk != null) {
+			server.createContext(HttpCheckpointSnapshotClient.ARCHIVE_ENTITY_CHUNKS_PATH + "0",
+					exchange -> respond(exchange, 200, entityChunk));
+		}
+	}
+
+	private byte[] archiveChunk(int blockCount, int version) throws IOException {
+		ByteArrayOutputStream uncompressed = new ByteArrayOutputStream();
+		try (DataOutputStream output = new DataOutputStream(uncompressed)) {
+			output.writeInt(0x47454341);
+			output.writeInt(version);
+			output.writeInt(0);
+			output.writeInt(blockCount);
+		}
+		return compress(uncompressed.toByteArray());
+	}
+
+	private byte[] entityChunk(
+			CoreSnapshotEntityType type, int index, int entryCount, int version) throws IOException {
+		ByteArrayOutputStream uncompressed = new ByteArrayOutputStream();
+		try (DataOutputStream output = new DataOutputStream(uncompressed)) {
+			output.writeInt(0x47454549);
+			output.writeInt(version);
+			output.writeInt(index);
+			output.writeInt((type.code() << 24) | entryCount);
+		}
+		return compress(uncompressed.toByteArray());
+	}
+
+	private byte[] compress(byte[] uncompressed) throws IOException {
+		ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+		CoreSnapshotCompression.writeZstd(new ByteArrayInputStream(uncompressed), compressed);
+		return compressed.toByteArray();
 	}
 
 	private SnapshotDistributionProperties properties(boolean allowHttp) {

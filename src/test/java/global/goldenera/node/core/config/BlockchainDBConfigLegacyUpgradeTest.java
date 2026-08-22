@@ -42,9 +42,8 @@ import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 
 import global.goldenera.node.core.properties.BlockchainDbProperties;
-import global.goldenera.node.core.storage.chainidentity.ChainIdentityBootstrapCoordinator;
-import global.goldenera.node.core.storage.chainidentity.ChainIdentityPathPreflight;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
+import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotPreOpenInitializer;
 
 class BlockchainDBConfigLegacyUpgradeTest {
 
@@ -111,9 +110,8 @@ class BlockchainDBConfigLegacyUpgradeTest {
 		BlockchainDBConfig config = new BlockchainDBConfig(properties);
 		RocksDbColumnFamilies families = config.rocksDbColumnFamilies();
 
-		ChainIdentityPathPreflight completedPreflight =
-				new ChainIdentityPathPreflight(mock(ChainIdentityBootstrapCoordinator.class));
-		try (RocksDB database = config.blockchainDB(families, completedPreflight)) {
+		CoreSnapshotPreOpenInitializer completedPreOpen = mock(CoreSnapshotPreOpenInitializer.class);
+		try (RocksDB database = config.blockchainDB(families, completedPreOpen)) {
 			assertThat(database.get(families.metadata(), LEGACY_KEY)).isEqualTo(LEGACY_VALUE);
 			assertThat(database.get(families.equivocations(), LEGACY_KEY)).isNull();
 		} finally {

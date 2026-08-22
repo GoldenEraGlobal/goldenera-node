@@ -28,9 +28,20 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.Constants.ForkName;
 
 class ConstantsMiningEconomicsTest {
+
+	@Test
+	void productionGenesisHashesAreExplicitSnapshotCheckpoints() {
+		assertThat(Constants.getConsensusSettings(Network.MAINNET, "prod").blockCheckpoints())
+				.containsEntry(0L, Hash.fromHexString(
+						"0x924fd3c5b501e1ccef10ca08cb6b473382d44618533d32339752988e469a516f"));
+		assertThat(Constants.getConsensusSettings(Network.TESTNET, "prod").blockCheckpoints())
+				.containsEntry(0L, Hash.fromHexString(
+						"0xf403f287a52b794eba7645d193c53c2dfa084a52db11ad94d70d0c79107c05cc"));
+	}
 
 	@Test
 	void mainnetActivatesFiveDaysAfterReferenceBlock() {

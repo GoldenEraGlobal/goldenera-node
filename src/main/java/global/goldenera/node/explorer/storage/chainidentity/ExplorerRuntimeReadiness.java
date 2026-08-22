@@ -40,11 +40,16 @@ public final class ExplorerRuntimeReadiness {
 		return status().ready();
 	}
 
-	void ready() {
-		update(ExplorerReadinessState.READY, "Explorer database identity matches authoritative core storage");
+	public void ready() {
+		update(ExplorerReadinessState.READY,
+				"Explorer database identity and checkpoint state match authoritative core storage");
 	}
 
-	void failed(ExplorerReadinessState state, String detail) {
+	public void rebuilding(String detail) {
+		update(ExplorerReadinessState.REBUILDING, detail);
+	}
+
+	public void failed(ExplorerReadinessState state, String detail) {
 		if (state == ExplorerReadinessState.READY || state == ExplorerReadinessState.STARTING) {
 			throw new IllegalArgumentException("Failure state must be terminal and not ready");
 		}

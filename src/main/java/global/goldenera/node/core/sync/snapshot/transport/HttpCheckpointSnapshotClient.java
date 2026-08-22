@@ -2,6 +2,24 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.transport;
 
@@ -20,6 +38,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -43,10 +62,19 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotLimits;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotVerifier;
 import global.goldenera.node.core.sync.snapshot.SnapshotChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifest;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveManifestCodec;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkCodec;
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotBlockChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotChunkCompression;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotCompression;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityChunkCodec;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityChunkDescriptor;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityLimits;
+import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityType;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import okhttp3.OkHttpClient;
 import okhttp3.Call;
@@ -63,6 +91,9 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 			"/api/core/v1/sync/snapshots/checkpoint/archive/manifest";
 	public static final String ARCHIVE_CHUNKS_PATH =
 			"/api/core/v1/sync/snapshots/checkpoint/archive/chunks/";
+	public static final String ARCHIVE_ENTITY_CHUNKS_PATH =
+			"/api/core/v1/sync/snapshots/checkpoint/archive/entities/";
+	public static final String VERSIONS_PATH = "/api/core/v1/sync/snapshots/checkpoint/versions/";
 
 	private final ObjectMapper objectMapper;
 	private final SnapshotDistributionProperties properties;
@@ -171,21 +202,95 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 			throw failure("No trusted snapshot source configured for " + network);
 		}
 		SnapshotTransportException lastFailure = null;
+		List<FullArchiveCandidate> candidates = new ArrayList<>();
 		for (URI source : sources) {
-			Path directory = null;
 			try {
-				directory = properties.getStagingDirectory() == null
-						? Files.createTempDirectory("goldenera-full-core-snapshot-")
-						: Files.createTempDirectory(prepareDirectory(properties.getStagingDirectory()), "full-core-");
-				return stageFullArchive(source, directory);
+				candidates.add(inspectFullArchiveCandidate(source));
+			} catch (SnapshotTransportException e) {
+				lastFailure = e;
+			}
+		}
+		if (candidates.isEmpty()) {
+			throw failure("All trusted full core snapshot manifests failed for " + network, lastFailure);
+		}
+
+		List<TrustedSnapshotCandidate> selectedAnchors = selectHighestTrustedGroup(candidates.stream()
+				.map(candidate -> new TrustedSnapshotCandidate(
+						candidate.source(), candidate.stateManifest().checkpointHeight(),
+						candidate.stateManifest().checkpointHash()))
+				.toList());
+		long highestCheckpoint = selectedAnchors.getFirst().height();
+		Hash highestCheckpointHash = selectedAnchors.getFirst().hash();
+		List<FullArchiveCandidate> selected = candidates.stream()
+				.filter(candidate -> candidate.stateManifest().checkpointHeight() == highestCheckpoint
+						&& candidate.stateManifest().checkpointHash().equals(highestCheckpointHash))
+				.toList();
+
+		for (FullArchiveCandidate candidate : selected) {
+			Path directory = null;
+			boolean persistentCache = properties.getStagingDirectory() != null;
+			try {
+				directory = persistentCache
+						? prepareResumeCacheDirectory(network, candidate)
+						: Files.createTempDirectory("goldenera-full-core-snapshot-");
+				StagedCoreSnapshotArchiveDownload staged = stageFullArchive(candidate, directory);
+				verifyStagedFormatHeaders(staged);
+				return staged;
 			} catch (IOException | SnapshotTransportException e) {
 				lastFailure = e instanceof SnapshotTransportException transportException
 						? transportException
-						: failure("Could not stage full core snapshot from " + source, e);
-				deleteOwnedStaging(directory);
+						: failure("Could not stage full core snapshot from " + candidate.source(), e);
+				if (!persistentCache) {
+					deleteOwnedStaging(directory);
+				}
 			}
 		}
-		throw failure("All trusted full core snapshot sources failed for " + network, lastFailure);
+		throw failure("All trusted sources for checkpoint " + highestCheckpoint + " failed", lastFailure);
+	}
+
+	private void verifyStagedFormatHeaders(StagedCoreSnapshotArchiveDownload staged) {
+		try {
+			int archiveFormat = staged.archiveManifest().formatVersion();
+			for (CoreSnapshotBlockChunkDescriptor descriptor : staged.archiveManifest().blockChunks()) {
+				try (InputStream input = staged.blockChunkSource().open(descriptor);
+						CoreSnapshotBlockChunkCodec.Reader ignored = CoreSnapshotBlockChunkCodec.openCompressed(
+								input, descriptor, archiveFormat)) {
+					// The constructor validates the signed descriptor binding and format header.
+				}
+			}
+			for (CoreSnapshotEntityChunkDescriptor descriptor : staged.archiveManifest().entityChunks()) {
+				try (InputStream input = staged.entityChunkSource().open(descriptor);
+						InputStream verified = CoreSnapshotCompression.openVerifiedZstd(
+								input, descriptor.compressedByteCount(), descriptor.compressedContentHash(),
+								descriptor.uncompressedByteCount(), descriptor.uncompressedContentHash());
+						CoreSnapshotEntityChunkCodec.Reader ignored = CoreSnapshotEntityChunkCodec.open(
+								verified, descriptor, archiveFormat)) {
+					// The constructor validates the signed descriptor binding and format header.
+				}
+			}
+		} catch (Exception e) {
+			try {
+				staged.close();
+			} catch (IOException closeFailure) {
+				e.addSuppressed(closeFailure);
+			}
+			throw failure("Staged core snapshot chunk format is incompatible", e);
+		}
+	}
+
+	static List<TrustedSnapshotCandidate> selectHighestTrustedGroup(List<TrustedSnapshotCandidate> candidates) {
+		if (candidates == null || candidates.isEmpty()) {
+			throw new IllegalArgumentException("Trusted snapshot candidates cannot be empty");
+		}
+		long highest = candidates.stream().mapToLong(TrustedSnapshotCandidate::height).max().orElseThrow();
+		Hash selectedHash = candidates.stream()
+				.filter(candidate -> candidate.height() == highest)
+				.map(TrustedSnapshotCandidate::hash)
+				.findFirst()
+				.orElseThrow();
+		return candidates.stream()
+				.filter(candidate -> candidate.height() == highest && candidate.hash().equals(selectedHash))
+				.toList();
 	}
 
 	StagedCoreSnapshotArchiveDownload stageFullArchive(URI trustedSource, Path stagingDirectory) {
@@ -193,10 +298,12 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 		if (!properties.isBootstrapEnabled()) {
 			throw failure("Snapshot bootstrap is disabled");
 		}
+		return stageFullArchive(inspectFullArchiveCandidate(trustedSource), stagingDirectory);
+	}
+
+	private FullArchiveCandidate inspectFullArchiveCandidate(URI trustedSource) {
 		URI source = validateAllowedSource(trustedSource);
 		try {
-			Path staging = prepareDirectory(stagingDirectory);
-			Path stateManifestFile = staging.resolve("manifest.json");
 			byte[] stateManifestBytes = downloadManifest(source, MANIFEST_PATH, "Snapshot manifest");
 			SnapshotTransportManifest stateEnvelope = objectMapper.readValue(
 					stateManifestBytes, SnapshotTransportManifest.class);
@@ -204,28 +311,129 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 			manifestPreflight.verify(stateManifest);
 			List<ResolvedChunk> stateChunks = validateManifest(source, stateManifest);
 
-			Path manifestFile = staging.resolve("archive-manifest.json");
-			byte[] manifestBytes = downloadManifest(source, ARCHIVE_MANIFEST_PATH, "Archive manifest");
+			String versionBase = VERSIONS_PATH + snapshotVersion(stateManifest) + "/";
+			byte[] manifestBytes;
+			boolean versioned;
+			try {
+				manifestBytes = downloadManifest(
+						source, versionBase + "archive/manifest", "Versioned archive manifest");
+				versioned = true;
+			} catch (SnapshotTransportException unavailableVersionedEndpoint) {
+				// Backward-compatible fallback for trusted nodes which have not enabled
+				// immutable version endpoints yet.
+				manifestBytes = downloadManifest(source, ARCHIVE_MANIFEST_PATH, "Archive manifest");
+				versioned = false;
+			}
 			CoreSnapshotArchiveTransportManifest envelope = objectMapper.readValue(
 					manifestBytes, CoreSnapshotArchiveTransportManifest.class);
 			CoreSnapshotArchiveManifest archiveManifest = envelope.decodeAndVerify();
-			List<ResolvedChunk> chunks = validateArchiveManifest(source, stateManifest, archiveManifest);
-			List<ResolvedChunk> allChunks = new ArrayList<>(stateChunks.size() + chunks.size());
-			allChunks.addAll(stateChunks);
-			allChunks.addAll(chunks);
+			List<ResolvedChunk> chunks = validateArchiveManifest(
+					source, stateManifest, archiveManifest,
+					versioned ? versionBase + "archive/chunks/" : ARCHIVE_CHUNKS_PATH);
+			List<ResolvedChunk> entityChunks = validateEntityManifest(
+					source, archiveManifest,
+					versioned ? versionBase + "archive/entities/" : ARCHIVE_ENTITY_CHUNKS_PATH);
+			return new FullArchiveCandidate(
+					source, stateManifestBytes, stateEnvelope, stateManifest, stateChunks,
+					manifestBytes, envelope, archiveManifest, chunks, entityChunks);
+		} catch (SnapshotTransportException e) {
+			throw e;
+		} catch (Exception e) {
+			throw failure("Full core snapshot manifest inspection failed for " + source + ": "
+					+ e.getMessage(), e);
+		}
+	}
+
+	private String snapshotVersion(CheckpointSnapshotManifest manifest) {
+		return SnapshotFormatCompatibility.currentVersionName(
+				manifest.checkpointHeight(), manifest.checkpointHash());
+	}
+
+	private StagedCoreSnapshotArchiveDownload stageFullArchive(
+			FullArchiveCandidate candidate, Path stagingDirectory) {
+		try {
+			Path staging = prepareDirectory(stagingDirectory);
+			Path stateManifestFile = staging.resolve("manifest.json");
+			Path manifestFile = staging.resolve("archive-manifest.json");
+			long archiveDownloadBytes = 0;
+			for (ResolvedChunk chunk : candidate.blockChunks()) {
+				archiveDownloadBytes = Math.addExact(archiveDownloadBytes, chunk.encodedByteCount());
+			}
+			for (ResolvedChunk chunk : candidate.entityChunks()) {
+				archiveDownloadBytes = Math.addExact(archiveDownloadBytes, chunk.encodedByteCount());
+			}
+			if (archiveDownloadBytes > properties.getMaxArchiveTotalBytes()) {
+				throw failure("Archive block and entity chunks exceed the combined download limit");
+			}
+			List<ResolvedChunk> allChunks = new ArrayList<>(
+					candidate.stateChunks().size() + candidate.blockChunks().size() + candidate.entityChunks().size());
+			allChunks.addAll(candidate.stateChunks());
+			allChunks.addAll(candidate.blockChunks());
+			allChunks.addAll(candidate.entityChunks());
 			ensureUsableSpace(staging, allChunks);
-			writeManifest(staging, stateManifestFile, "manifest.json.part", stateManifestBytes);
-			writeManifest(staging, manifestFile, "archive-manifest.json.part", manifestBytes);
-			List<Path> stateChunkFiles = downloadChunks(staging, stateChunks, "chunk-");
-			List<Path> chunkFiles = downloadChunks(staging, chunks, "archive-chunk-");
+			writeManifest(staging, stateManifestFile, "manifest.json.part", candidate.stateManifestBytes());
+			writeManifest(staging, manifestFile, "archive-manifest.json.part", candidate.archiveManifestBytes());
+			List<Path> stateChunkFiles = downloadChunks(staging, candidate.stateChunks(), "chunk-");
+			List<Path> chunkFiles = downloadChunks(staging, candidate.blockChunks(), "archive-chunk-");
+			List<Path> entityChunkFiles = downloadChunks(staging, candidate.entityChunks(), "archive-entity-");
 			StagedSnapshotDownload state = new StagedSnapshotDownload(
-					stateEnvelope, stateManifest, staging, stateManifestFile, stateChunkFiles);
+					candidate.stateEnvelope(), candidate.stateManifest(), staging, stateManifestFile, stateChunkFiles);
 			return new StagedCoreSnapshotArchiveDownload(
-					state, envelope, archiveManifest, manifestFile, chunkFiles);
+					state, candidate.archiveEnvelope(), candidate.archiveManifest(), manifestFile,
+					chunkFiles, entityChunkFiles);
 		} catch (SnapshotTransportException e) {
 			throw e;
 		} catch (Exception e) {
 			throw failure("Full core snapshot staging failed: " + e.getMessage(), e);
+		}
+	}
+
+	private Path prepareResumeCacheDirectory(Network network, FullArchiveCandidate candidate) throws IOException {
+		Path base = prepareDirectory(properties.getStagingDirectory());
+		String cacheName = resumeCacheName(network, candidate);
+		pruneResumeCaches(base, cacheName);
+		Path cache = safeTarget(base, cacheName);
+		Files.createDirectories(cache);
+		return prepareDirectory(cache);
+	}
+
+	private String resumeCacheName(Network network, FullArchiveCandidate candidate) {
+		return "full-core-cache-" + network.name().toLowerCase(Locale.ROOT)
+				+ "-" + candidate.stateManifest().checkpointHeight()
+				+ "-" + hex(candidate.stateManifest().checkpointHash())
+				+ "-" + hex(CheckpointSnapshotManifestCodec.signingHash(candidate.stateManifest()))
+				+ "-" + hex(CoreSnapshotArchiveManifestCodec.signingHash(candidate.archiveManifest()));
+	}
+
+	private String hex(Hash hash) {
+		String value = hash.toHexString();
+		return value.startsWith("0x") ? value.substring(2) : value;
+	}
+
+	private void pruneResumeCaches(Path base, String preservedName) throws IOException {
+		List<Path> caches;
+		try (var entries = Files.list(base)) {
+			caches = entries
+					.filter(path -> path.getFileName().toString().startsWith("full-core-cache-"))
+					.filter(path -> Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(path))
+					.sorted(Comparator.comparingLong(this::lastModified).reversed())
+					.toList();
+		}
+		int retained = 1;
+		for (Path cache : caches) {
+			if (cache.getFileName().toString().equals(preservedName)
+					|| retained++ < properties.getResumeCacheMaxEntries()) {
+				continue;
+			}
+			deleteOwnedStaging(cache);
+		}
+	}
+
+	private long lastModified(Path path) {
+		try {
+			return Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toMillis();
+		} catch (IOException e) {
+			return Long.MIN_VALUE;
 		}
 	}
 
@@ -274,8 +482,9 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 	private List<ResolvedChunk> validateArchiveManifest(
 			URI source,
 			CheckpointSnapshotManifest stateManifest,
-			CoreSnapshotArchiveManifest manifest) {
-		if (manifest == null || manifest.formatVersion() != CoreSnapshotArchiveLimits.FORMAT_VERSION
+			CoreSnapshotArchiveManifest manifest,
+			String chunksPath) {
+		if (manifest == null || !SnapshotFormatCompatibility.supportsArchive(manifest.formatVersion())
 				|| !manifest.stateManifestSigningHash().equals(
 						CheckpointSnapshotManifestCodec.signingHash(stateManifest))) {
 			throw failure("Archive manifest is not bound to the staged state manifest");
@@ -286,7 +495,8 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 			throw failure("Archive manifest exceeds configured chunk count");
 		}
 		long nextHeight = 0;
-		long totalBytes = 0;
+		long totalCompressedBytes = 0;
+		long totalUncompressedBytes = 0;
 		long totalBlocks = 0;
 		List<ResolvedChunk> result = new ArrayList<>(descriptors.size());
 		for (int index = 0; index < descriptors.size(); index++) {
@@ -295,29 +505,37 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 			try {
 				expectedLast = Math.addExact(chunk.firstHeight(), chunk.blockCount() - 1L);
 				totalBlocks = Math.addExact(totalBlocks, chunk.blockCount());
-				totalBytes = Math.addExact(totalBytes, chunk.byteCount());
+				totalCompressedBytes = Math.addExact(
+						totalCompressedBytes, chunk.compressedByteCount());
+				totalUncompressedBytes = Math.addExact(
+						totalUncompressedBytes, chunk.uncompressedByteCount());
 			} catch (ArithmeticException e) {
 				throw failure("Archive chunk descriptor overflow", e);
 			}
 			if (chunk.index() != index || chunk.blockCount() <= 0
 					|| chunk.blockCount() > CoreSnapshotArchiveLimits.MAX_BLOCKS_PER_CHUNK
 					|| chunk.firstHeight() != nextHeight || chunk.lastHeight() != expectedLast
-					|| chunk.byteCount() <= 0
-					|| chunk.byteCount() > Math.min(
-							properties.getMaxArchiveChunkBytes(), CoreSnapshotArchiveLimits.MAX_CHUNK_BYTES)) {
+					|| chunk.compression() != CoreSnapshotChunkCompression.ZSTD
+					|| chunk.compressedByteCount() <= 0
+					|| chunk.compressedByteCount() > Math.min(
+							properties.getMaxArchiveChunkBytes(), CoreSnapshotArchiveLimits.MAX_CHUNK_BYTES)
+					|| chunk.uncompressedByteCount() <= 0
+					|| chunk.uncompressedByteCount() > CoreSnapshotArchiveLimits.MAX_CHUNK_BYTES) {
 				throw failure("Archive chunk descriptor is invalid at index " + index);
 			}
 			nextHeight = Math.addExact(expectedLast, 1L);
 			if (totalBlocks > CoreSnapshotArchiveLimits.MAX_TOTAL_BLOCKS
-					|| totalBytes > Math.min(
-							properties.getMaxArchiveTotalBytes(), CoreSnapshotArchiveLimits.MAX_TOTAL_BYTES)) {
+					|| totalCompressedBytes > Math.min(
+							properties.getMaxArchiveTotalBytes(), CoreSnapshotArchiveLimits.MAX_TOTAL_BYTES)
+					|| totalUncompressedBytes > CoreSnapshotArchiveLimits.MAX_TOTAL_BYTES) {
 				throw failure("Archive manifest exceeds configured total limits");
 			}
-			URI uri = source.resolve(ARCHIVE_CHUNKS_PATH + index);
+			URI uri = source.resolve(chunksPath + index);
 			if (!sameOrigin(source, uri)) {
 				throw failure("Archive chunk URL must use the trusted manifest origin");
 			}
-			result.add(new ResolvedChunk(index, uri, chunk.byteCount(), chunk.contentHash()));
+			result.add(new ResolvedChunk(
+					index, uri, chunk.compressedByteCount(), chunk.compressedContentHash()));
 		}
 		long expectedBlocks;
 		try {
@@ -331,8 +549,55 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 		return List.copyOf(result);
 	}
 
+	private List<ResolvedChunk> validateEntityManifest(
+			URI source, CoreSnapshotArchiveManifest manifest, String chunksPath) {
+		List<CoreSnapshotEntityChunkDescriptor> descriptors = manifest.entityChunks();
+		if (descriptors.size() > CoreSnapshotEntityLimits.MAX_CHUNK_COUNT) {
+			throw failure("Entity sidecar exceeds its chunk count limit");
+		}
+		CoreSnapshotEntityType previousType = null;
+		long totalEntries = 0;
+		long totalCompressedBytes = 0;
+		long totalUncompressedBytes = 0;
+		List<ResolvedChunk> result = new ArrayList<>(descriptors.size());
+		for (int index = 0; index < descriptors.size(); index++) {
+			CoreSnapshotEntityChunkDescriptor chunk = descriptors.get(index);
+			if (chunk.index() != index || chunk.entryCount() < 0
+					|| chunk.entryCount() > CoreSnapshotEntityLimits.MAX_ENTRIES_PER_CHUNK
+					|| chunk.compressedByteCount() <= 0
+					|| chunk.compressedByteCount() > Math.min(
+							properties.getMaxArchiveChunkBytes(),
+							CoreSnapshotEntityLimits.MAX_COMPRESSED_CHUNK_BYTES)
+					|| chunk.uncompressedByteCount() < CoreSnapshotEntityChunkCodec.HEADER_BYTES
+					|| chunk.uncompressedByteCount() > CoreSnapshotEntityLimits.MAX_UNCOMPRESSED_CHUNK_BYTES
+					|| previousType != null && chunk.entityType().ordinal() < previousType.ordinal()) {
+				throw failure("Entity chunk descriptor is invalid at index " + index);
+			}
+			try {
+				totalEntries = Math.addExact(totalEntries, chunk.entryCount());
+				totalCompressedBytes = Math.addExact(totalCompressedBytes, chunk.compressedByteCount());
+				totalUncompressedBytes = Math.addExact(totalUncompressedBytes, chunk.uncompressedByteCount());
+			} catch (ArithmeticException e) {
+				throw failure("Entity chunk descriptor overflow", e);
+			}
+			if (totalEntries > CoreSnapshotEntityLimits.MAX_TOTAL_ENTRIES
+					|| totalCompressedBytes > properties.getMaxArchiveTotalBytes()
+					|| totalUncompressedBytes > CoreSnapshotEntityLimits.MAX_TOTAL_UNCOMPRESSED_BYTES) {
+				throw failure("Entity sidecar exceeds configured total limits");
+			}
+			URI uri = source.resolve(chunksPath + index);
+			if (!sameOrigin(source, uri)) {
+				throw failure("Entity chunk URL must use the trusted manifest origin");
+			}
+			result.add(new ResolvedChunk(
+					index, uri, chunk.compressedByteCount(), chunk.compressedContentHash()));
+			previousType = chunk.entityType();
+		}
+		return List.copyOf(result);
+	}
+
 	private List<ResolvedChunk> validateManifest(URI source, CheckpointSnapshotManifest manifest) {
-		if (manifest == null || manifest.formatVersion() != CheckpointSnapshotLimits.FORMAT_VERSION
+		if (manifest == null || !SnapshotFormatCompatibility.supportsState(manifest.formatVersion())
 				|| manifest.networkCode() != generalProperties.getNetwork().getCode()
 				|| manifest.checkpointHeight() < 0 || manifest.checkpointHash() == null
 				|| manifest.checkpointStateRoot() == null || manifest.chainIdentity() == null
@@ -687,6 +952,27 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 	}
 
 	private record ResolvedChunk(int index, URI uri, long encodedByteCount, Hash contentHash) {
+	}
+
+	private record FullArchiveCandidate(
+			URI source,
+			byte[] stateManifestBytes,
+			SnapshotTransportManifest stateEnvelope,
+			CheckpointSnapshotManifest stateManifest,
+			List<ResolvedChunk> stateChunks,
+			byte[] archiveManifestBytes,
+			CoreSnapshotArchiveTransportManifest archiveEnvelope,
+			CoreSnapshotArchiveManifest archiveManifest,
+			List<ResolvedChunk> blockChunks,
+			List<ResolvedChunk> entityChunks) {
+	}
+
+	record TrustedSnapshotCandidate(URI source, long height, Hash hash) {
+		TrustedSnapshotCandidate {
+			if (source == null || height < 0 || hash == null) {
+				throw new IllegalArgumentException("Trusted snapshot candidate is invalid");
+			}
+		}
 	}
 
 	@FunctionalInterface

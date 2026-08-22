@@ -1,12 +1,30 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync;
 
 import static global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource.SYNC;
 
-import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -17,7 +35,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.bouncycastle.jcajce.provider.digest.Keccak;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
@@ -91,9 +108,9 @@ public class CoreSnapshotArchiveReplayer {
 		for (int chunkIndex = 0; chunkIndex < staged.archiveManifest().blockChunks().size(); chunkIndex++) {
 			CoreSnapshotBlockChunkDescriptor descriptor = staged.archiveManifest().blockChunks().get(chunkIndex);
 			Path chunkFile = staged.blockChunkFiles().get(chunkIndex);
-			CountingDigestInputStream counted = openCounted(chunkFile, descriptor.byteCount(), "archive block chunk");
-			try (counted;
-					CoreSnapshotBlockChunkCodec.Reader reader = CoreSnapshotBlockChunkCodec.open(counted, descriptor)) {
+			try (InputStream opened = openArchiveChunk(chunkFile, descriptor);
+					CoreSnapshotBlockChunkCodec.Reader reader =
+							CoreSnapshotBlockChunkCodec.openCompressed(opened, descriptor)) {
 				while (reader.hasNext()) {
 					StoredBlock archived = reader.next();
 					if (archived.getHeight() <= localHead.getHeight()) {
@@ -112,10 +129,16 @@ public class CoreSnapshotArchiveReplayer {
 					}
 					pending.add(archived);
 					pendingBytes = Math.addExact(pendingBytes, blockBytes);
+					if (pending.size() >= MAX_REPLAY_BATCH_BLOCKS
+							|| pendingBytes >= MAX_REPLAY_BATCH_BYTES) {
+						localHead = persistReplayBatch(localHead, pending);
+						replayedBlocks += pending.size();
+						pending.clear();
+						pendingBytes = 0;
+					}
 				}
 				reader.finish();
 			}
-			assertDigest(counted, descriptor.byteCount(), descriptor.contentHash(), "archive block chunk");
 		}
 		if (!pending.isEmpty()) {
 			localHead = persistReplayBatch(localHead, pending);
@@ -189,19 +212,13 @@ public class CoreSnapshotArchiveReplayer {
 		}
 	}
 
-	private CountingDigestInputStream openCounted(Path file, long expectedBytes, String kind) throws IOException {
-		if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-			throw new GEFailedException("Staged " + kind + " size changed after verification");
+	private InputStream openArchiveChunk(
+			Path file, CoreSnapshotBlockChunkDescriptor descriptor) throws IOException {
+		if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+				|| Files.size(file) != descriptor.compressedByteCount()) {
+			throw new GEFailedException("Staged archive block chunk size changed after verification");
 		}
-		return new CountingDigestInputStream(
-				Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS), expectedBytes);
-	}
-
-	private void assertDigest(
-			CountingDigestInputStream counted, long expectedBytes, Hash expectedHash, String kind) {
-		if (counted.count() != expectedBytes || !counted.hash().equals(expectedHash)) {
-			throw new GEFailedException("Staged " + kind + " hash/size changed after verification");
-		}
+		return Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS);
 	}
 
 	private long archiveBlockCount(StagedCoreSnapshotArchiveDownload staged) {
@@ -215,7 +232,7 @@ public class CoreSnapshotArchiveReplayer {
 	private long archiveEncodedBytes(StagedCoreSnapshotArchiveDownload staged) {
 		long total = 0;
 		for (CoreSnapshotBlockChunkDescriptor descriptor : staged.archiveManifest().blockChunks()) {
-			total = Math.addExact(total, descriptor.byteCount());
+			total = Math.addExact(total, descriptor.uncompressedByteCount());
 		}
 		return total;
 	}
@@ -223,57 +240,4 @@ public class CoreSnapshotArchiveReplayer {
 	public record ReplayResult(long replayedBlocks, long preloadedNodes, long headHeight, Hash headHash) {
 	}
 
-	private static final class CountingDigestInputStream extends FilterInputStream {
-
-		private final Keccak.Digest256 digest = new Keccak.Digest256();
-		private final long maxBytes;
-		private long count;
-		private Hash hash;
-
-		private CountingDigestInputStream(InputStream input, long maxBytes) {
-			super(input);
-			this.maxBytes = maxBytes;
-		}
-
-		@Override
-		public int read() throws IOException {
-			int value = super.read();
-			if (value >= 0) {
-				accept(new byte[] { (byte) value }, 0, 1);
-			}
-			return value;
-		}
-
-		@Override
-		public int read(byte[] bytes, int offset, int length) throws IOException {
-			int read = super.read(bytes, offset, length);
-			if (read > 0) {
-				accept(bytes, offset, read);
-			}
-			return read;
-		}
-
-		private void accept(byte[] bytes, int offset, int length) throws IOException {
-			try {
-				count = Math.addExact(count, length);
-			} catch (ArithmeticException e) {
-				throw new IOException("Staged chunk byte count overflow", e);
-			}
-			if (count > maxBytes) {
-				throw new IOException("Staged chunk exceeds its verified size");
-			}
-			digest.update(bytes, offset, length);
-		}
-
-		private long count() {
-			return count;
-		}
-
-		private Hash hash() {
-			if (hash == null) {
-				hash = Hash.wrap(digest.digest());
-			}
-			return hash;
-		}
-	}
 }

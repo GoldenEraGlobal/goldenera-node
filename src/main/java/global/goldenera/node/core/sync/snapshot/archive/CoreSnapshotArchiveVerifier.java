@@ -1,24 +1,39 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot.archive;
 
-import static global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits.FORMAT_VERSION;
 import static global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits.MAX_BLOCKS_PER_CHUNK;
 import static global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits.MAX_CHUNK_BYTES;
 import static global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits.MAX_CHUNK_COUNT;
 import static global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits.MAX_TOTAL_BLOCKS;
 import static global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotArchiveLimits.MAX_TOTAL_BYTES;
 
-import java.io.FilterInputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
-
-import org.bouncycastle.jcajce.provider.digest.Keccak.Digest256;
+import java.util.concurrent.atomic.AtomicReference;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
@@ -30,7 +45,9 @@ import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifest;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotManifestCodec;
 import global.goldenera.node.core.sync.snapshot.CheckpointSnapshotVerifier;
 import global.goldenera.node.core.sync.snapshot.SnapshotChunkSource;
+import global.goldenera.node.core.sync.snapshot.SnapshotDiskSpaceBudget;
 import global.goldenera.node.core.sync.snapshot.SnapshotVerificationException;
+import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
 
 /**
  * Offline FULL CORE verifier. It first streams every canonical StoredBlock from
@@ -41,9 +58,26 @@ import global.goldenera.node.core.sync.snapshot.SnapshotVerificationException;
 public final class CoreSnapshotArchiveVerifier {
 
 	private final CheckpointSnapshotVerifier stateVerifier;
+	private final CoreSnapshotEntityIndexVerifier entityIndexVerifier;
+	private final SnapshotDiskSpaceBudget diskSpaceBudget;
 
 	public CoreSnapshotArchiveVerifier(CheckpointSnapshotVerifier stateVerifier) {
+		this(stateVerifier, new CoreSnapshotEntityIndexVerifier(), SnapshotDiskSpaceBudget.system());
+	}
+
+	CoreSnapshotArchiveVerifier(
+			CheckpointSnapshotVerifier stateVerifier,
+			CoreSnapshotEntityIndexVerifier entityIndexVerifier) {
+		this(stateVerifier, entityIndexVerifier, SnapshotDiskSpaceBudget.system());
+	}
+
+	CoreSnapshotArchiveVerifier(
+			CheckpointSnapshotVerifier stateVerifier,
+			CoreSnapshotEntityIndexVerifier entityIndexVerifier,
+			SnapshotDiskSpaceBudget diskSpaceBudget) {
 		this.stateVerifier = Objects.requireNonNull(stateVerifier, "stateVerifier");
+		this.entityIndexVerifier = Objects.requireNonNull(entityIndexVerifier, "entityIndexVerifier");
+		this.diskSpaceBudget = Objects.requireNonNull(diskSpaceBudget, "diskSpaceBudget");
 	}
 
 	public VerifiedCoreSnapshotArchive verify(
@@ -51,25 +85,48 @@ public final class CoreSnapshotArchiveVerifier {
 			CheckpointSnapshotManifest stateManifest,
 			SnapshotChunkSource stateChunkSource,
 			CoreSnapshotArchiveChunkSource blockChunkSource) {
+		return verify(
+				archiveManifest, stateManifest, stateChunkSource, blockChunkSource,
+				descriptor -> {
+					throw failure("Entity sidecar chunk source is unavailable: " + descriptor.index());
+				});
+	}
+
+	public VerifiedCoreSnapshotArchive verify(
+			CoreSnapshotArchiveManifest archiveManifest,
+			CheckpointSnapshotManifest stateManifest,
+			SnapshotChunkSource stateChunkSource,
+			CoreSnapshotArchiveChunkSource blockChunkSource,
+			CoreSnapshotEntityChunkSource entityChunkSource) {
 		Objects.requireNonNull(stateManifest, "stateManifest");
 		Objects.requireNonNull(stateChunkSource, "stateChunkSource");
 		Objects.requireNonNull(archiveManifest, "archiveManifest");
 		Objects.requireNonNull(blockChunkSource, "blockChunkSource");
+		Objects.requireNonNull(entityChunkSource, "entityChunkSource");
 
 		Hash expectedStateSigningHash = CheckpointSnapshotManifestCodec.signingHash(stateManifest);
 		verifyArchiveManifestBinding(archiveManifest, expectedStateSigningHash);
+		diskSpaceBudget.requireVerification(stateManifest, archiveManifest);
 		DescriptorTotals totals = verifyDescriptors(archiveManifest.blockChunks(), stateManifest.checkpointHeight());
 		HistoryVerification history = verifyHistory(
 				archiveManifest, stateManifest, blockChunkSource, totals);
+		AtomicReference<CoreSnapshotEntityIndexVerifier.VerificationResult> entityResult = new AtomicReference<>();
 		CheckpointSnapshotVerifier.VerificationResult stateResult = stateVerifier.verifyWithFullHistoryAnchor(
-				stateManifest, stateChunkSource, history.fullHistory());
+				stateManifest, stateChunkSource, history.fullHistory(),
+				(checkpointStateRoot, nodeLoader) -> entityResult.set(entityIndexVerifier.verify(
+						checkpointStateRoot, nodeLoader, archiveManifest.entityChunks(), entityChunkSource)));
 		verifyStateResultBinding(stateManifest, stateResult, expectedStateSigningHash);
+		CoreSnapshotEntityIndexVerifier.VerificationResult verifiedEntities = Objects.requireNonNull(
+				entityResult.get(), "Entity index verification did not produce a result");
 
 		return new VerifiedCoreSnapshotArchive(
 				stateManifest.checkpointHeight(), stateManifest.checkpointHash(),
 				stateManifest.checkpointStateRoot(), stateManifest.checkpointCumulativeDifficulty(),
 				expectedStateSigningHash, CoreSnapshotArchiveManifestCodec.signingHash(archiveManifest),
-				history.blockCount(), archiveManifest.blockChunks().size(), history.encodedBytes());
+				history.blockCount(), archiveManifest.blockChunks().size(), history.encodedBytes(),
+				stateResult.nodeCount(),
+				archiveManifest.entityChunks().size(), verifiedEntities.totalEntries(),
+				verifiedEntities.uncompressedBytes());
 	}
 
 	private HistoryVerification verifyHistory(
@@ -88,16 +145,13 @@ public final class CoreSnapshotArchiveVerifier {
 		long expectedHeight = 0;
 		Hash previousHash = null;
 		BigInteger cumulativeDifficulty = BigInteger.ZERO;
-		long streamedBytes = 0;
+		long streamedUncompressedBytes = 0;
 		for (CoreSnapshotBlockChunkDescriptor descriptor : archiveManifest.blockChunks()) {
-			Digest256 digest = new Digest256();
-			long chunkBytes;
 			try (InputStream opened = Objects.requireNonNull(
-					blockChunkSource.open(descriptor), "Archive chunk source returned null")) {
-				CountingDigestInputStream counted = new CountingDigestInputStream(
-						opened, digest, descriptor.byteCount());
-				try (counted; CoreSnapshotBlockChunkCodec.Reader reader =
-						CoreSnapshotBlockChunkCodec.open(counted, descriptor)) {
+					blockChunkSource.open(descriptor), "Archive chunk source returned null");
+					CoreSnapshotBlockChunkCodec.Reader reader =
+							CoreSnapshotBlockChunkCodec.openCompressed(
+									opened, descriptor, archiveManifest.formatVersion())) {
 					while (reader.hasNext()) {
 						StoredBlock storedBlock = reader.next();
 						BlockVerification verified = verifyBlock(
@@ -111,18 +165,14 @@ public final class CoreSnapshotArchiveVerifier {
 						}
 					}
 					reader.finish();
-				}
-				chunkBytes = counted.count();
 			} catch (SnapshotVerificationException e) {
 				throw e;
 			} catch (Exception e) {
 				throw failure("Cannot read archive block chunk " + descriptor.index(), e);
 			}
-			if (chunkBytes != descriptor.byteCount()
-					|| !Hash.wrap(digest.digest()).equals(descriptor.contentHash())) {
-				throw failure("Archive block chunk integrity mismatch: " + descriptor.index());
-			}
-			streamedBytes = addExact(streamedBytes, chunkBytes, "Archive byte count overflow");
+			streamedUncompressedBytes = addExact(
+					streamedUncompressedBytes, descriptor.uncompressedByteCount(),
+					"Archive byte count overflow");
 		}
 
 		if (expectedHeight != totals.blockCount()
@@ -133,7 +183,7 @@ public final class CoreSnapshotArchiveVerifier {
 				|| !cumulativeDifficulty.equals(stateManifest.checkpointCumulativeDifficulty())) {
 			throw failure("Archive final checkpoint hash/cumulative difficulty mismatch");
 		}
-		if (streamedBytes != totals.byteCount()) {
+		if (streamedUncompressedBytes != totals.uncompressedByteCount()) {
 			throw failure("Archive total byte count mismatch");
 		}
 		if (anchorHash == null || anchorDifficulty == null
@@ -144,12 +194,12 @@ public final class CoreSnapshotArchiveVerifier {
 		VerifiedCoreArchiveHistory fullHistory = new VerifiedCoreArchiveHistory(
 				stateManifest.checkpointHeight(), stateManifest.checkpointHash(),
 				stateManifest.checkpointCumulativeDifficulty(), anchorHeight, anchorHash, anchorDifficulty);
-		return new HistoryVerification(fullHistory, expectedHeight, streamedBytes);
+		return new HistoryVerification(fullHistory, expectedHeight, streamedUncompressedBytes);
 	}
 
 	private void verifyArchiveManifestBinding(
 			CoreSnapshotArchiveManifest archiveManifest, Hash expectedStateSigningHash) {
-		if (archiveManifest.formatVersion() != FORMAT_VERSION) {
+		if (!SnapshotFormatCompatibility.supportsArchive(archiveManifest.formatVersion())) {
 			throw failure("Unsupported core snapshot archive format: " + archiveManifest.formatVersion());
 		}
 		if (!archiveManifest.stateManifestSigningHash().equals(expectedStateSigningHash)) {
@@ -182,12 +232,17 @@ public final class CoreSnapshotArchiveVerifier {
 		}
 		long nextHeight = 0;
 		long totalBlocks = 0;
-		long totalBytes = 0;
+		long totalCompressedBytes = 0;
+		long totalUncompressedBytes = 0;
 		for (int index = 0; index < descriptors.size(); index++) {
 			CoreSnapshotBlockChunkDescriptor descriptor = descriptors.get(index);
 			if (descriptor.index() != index || descriptor.blockCount() <= 0
 					|| descriptor.blockCount() > MAX_BLOCKS_PER_CHUNK
-					|| descriptor.byteCount() <= 0 || descriptor.byteCount() > MAX_CHUNK_BYTES) {
+					|| descriptor.compression() != CoreSnapshotChunkCompression.ZSTD
+					|| descriptor.compressedByteCount() <= 0
+					|| descriptor.compressedByteCount() > MAX_CHUNK_BYTES
+					|| descriptor.uncompressedByteCount() <= 0
+					|| descriptor.uncompressedByteCount() > MAX_CHUNK_BYTES) {
 				throw failure("Invalid archive block chunk descriptor: " + descriptor.index());
 			}
 			long expectedLast;
@@ -201,15 +256,21 @@ public final class CoreSnapshotArchiveVerifier {
 			}
 			nextHeight = addExact(expectedLast, 1, "Archive height overflow");
 			totalBlocks = addExact(totalBlocks, descriptor.blockCount(), "Archive block count overflow");
-			totalBytes = addExact(totalBytes, descriptor.byteCount(), "Archive byte count overflow");
-			if (totalBlocks > MAX_TOTAL_BLOCKS || totalBytes > MAX_TOTAL_BYTES) {
+			totalCompressedBytes = addExact(
+					totalCompressedBytes, descriptor.compressedByteCount(),
+					"Archive compressed byte count overflow");
+			totalUncompressedBytes = addExact(
+					totalUncompressedBytes, descriptor.uncompressedByteCount(),
+					"Archive uncompressed byte count overflow");
+			if (totalBlocks > MAX_TOTAL_BLOCKS || totalCompressedBytes > MAX_TOTAL_BYTES
+					|| totalUncompressedBytes > MAX_TOTAL_BYTES) {
 				throw failure("Full archive exceeds total block/byte limits");
 			}
 		}
 		if (totalBlocks != checkpointHeight + 1 || nextHeight != checkpointHeight + 1) {
 			throw failure("Archive descriptors do not cover genesis through the checkpoint");
 		}
-		return new DescriptorTotals(totalBlocks, totalBytes);
+		return new DescriptorTotals(totalBlocks, totalCompressedBytes, totalUncompressedBytes);
 	}
 
 	private BlockVerification verifyBlock(
@@ -269,6 +330,8 @@ public final class CoreSnapshotArchiveVerifier {
 
 	private void verifyStoredMetadata(
 			StoredBlock storedBlock, Block block, List<Tx> transactions, long height) {
+		// StoredBlock events are deliberately excluded: the archive manifest binds
+		// their bytes, but they are derived operational data and never grant activation.
 		if (storedBlock.getBlockSize() != block.getSize()
 				|| storedBlock.getTxCount() != transactions.size()
 				|| !Objects.equals(storedBlock.getIdentity(), block.getHeader().getIdentity())) {
@@ -308,7 +371,8 @@ public final class CoreSnapshotArchiveVerifier {
 		return new SnapshotVerificationException(message, cause);
 	}
 
-	private record DescriptorTotals(long blockCount, long byteCount) {
+	private record DescriptorTotals(
+			long blockCount, long compressedByteCount, long uncompressedByteCount) {
 	}
 
 	private record BlockVerification(long height, Hash hash, BigInteger cumulativeDifficulty) {
@@ -318,48 +382,4 @@ public final class CoreSnapshotArchiveVerifier {
 			VerifiedCoreArchiveHistory fullHistory, long blockCount, long encodedBytes) {
 	}
 
-	private static final class CountingDigestInputStream extends FilterInputStream {
-
-		private final Digest256 digest;
-		private final long maxBytes;
-		private long count;
-
-		private CountingDigestInputStream(InputStream input, Digest256 digest, long maxBytes) {
-			super(input);
-			this.digest = digest;
-			this.maxBytes = maxBytes;
-		}
-
-		@Override
-		public int read() throws IOException {
-			if (count > maxBytes) {
-				throw new IOException("Archive chunk exceeds its declared byte limit");
-			}
-			int value = super.read();
-			if (value >= 0) {
-				digest.update((byte) value);
-				count++;
-			}
-			return value;
-		}
-
-		@Override
-		public int read(byte[] bytes, int offset, int length) throws IOException {
-			if (count > maxBytes) {
-				throw new IOException("Archive chunk exceeds its declared byte limit");
-			}
-			long remainingWithTrailingProbe = maxBytes - count + 1;
-			int boundedLength = (int) Math.min(length, remainingWithTrailingProbe);
-			int read = super.read(bytes, offset, boundedLength);
-			if (read > 0) {
-				digest.update(bytes, offset, read);
-				count += read;
-			}
-			return read;
-		}
-
-		private long count() {
-			return count;
-		}
-	}
 }

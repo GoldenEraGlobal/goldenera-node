@@ -57,6 +57,7 @@ import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
@@ -85,6 +86,7 @@ public class ChainSwitchService {
     ReentrantLock masterChainLock;
     EntityIndexRepository entityIndexRepository;
     BlockEventExtractor blockEventExtractor;
+    CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy;
 
     public ChainSwitchService(
             ChainQuery chainQueryService,
@@ -95,7 +97,8 @@ public class ChainSwitchService {
             ApplicationEventPublisher applicationEventPublisher,
             @Qualifier("masterChainLock") ReentrantLock masterChainLock,
             EntityIndexRepository entityIndexRepository,
-            BlockEventExtractor blockEventExtractor) {
+            BlockEventExtractor blockEventExtractor,
+            CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy) {
         this.chainQueryService = chainQueryService;
         this.blockRepository = blockRepository;
         this.worldStateFactory = worldStateFactory;
@@ -105,6 +108,7 @@ public class ChainSwitchService {
         this.masterChainLock = masterChainLock;
         this.entityIndexRepository = entityIndexRepository;
         this.blockEventExtractor = blockEventExtractor;
+        this.checkpointFloorPolicy = checkpointFloorPolicy;
     }
 
     void executeAtomicSyncSwap(
@@ -128,6 +132,7 @@ public class ChainSwitchService {
             StoredBlock currentBestBlock = chainQueryService.getLatestStoredBlockOrThrow();
             StoredBlock canonicalAncestor = validateCandidateWork(
                     commonAncestor, newChainHeaders, currentBestBlock);
+            checkpointFloorPolicy.assertCommonAncestorAllowed(canonicalAncestor);
             // findChainFrom returns List<StoredBlock> - use StoredBlock.getHash() for
             // comparison
             List<StoredBlock> oldChainStored = chainQueryService.findChainFrom(

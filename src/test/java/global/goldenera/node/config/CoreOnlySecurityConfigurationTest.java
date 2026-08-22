@@ -37,12 +37,14 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.web.FilterChainProxy;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -101,6 +103,17 @@ class CoreOnlySecurityConfigurationTest {
 
 			assertThat(fixture.controllerCalls.get()).isZero();
 		}
+	}
+
+	@Test
+	void nonWebCoreOnlyContextDoesNotCreateServletSecurityGraph() {
+		new ApplicationContextRunner()
+				.withPropertyValues("ge.general.postgresql-enable=false")
+				.withUserConfiguration(CoreOnlySecurityConfiguration.class)
+				.run(context -> {
+					assertThat(context).doesNotHaveBean(CoreOnlySecurityConfiguration.class);
+					assertThat(context).doesNotHaveBean(SecurityFilterChain.class);
+				});
 	}
 
 	private Fixture fixture(boolean coreApiSecurityEnabled) {

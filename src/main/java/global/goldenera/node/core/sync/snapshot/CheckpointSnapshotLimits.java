@@ -25,7 +25,7 @@ package global.goldenera.node.core.sync.snapshot;
 
 public final class CheckpointSnapshotLimits {
 
-	public static final int FORMAT_VERSION = 1;
+	public static final int FORMAT_VERSION = SnapshotFormatCompatibility.CURRENT_STATE_FORMAT;
 	public static final int MAX_HEADER_COUNT = 20_000;
 	public static final int MAX_CHUNK_COUNT = 4_096;
 	public static final int MAX_NODES_PER_CHUNK = 50_000;

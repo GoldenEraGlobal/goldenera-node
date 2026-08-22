@@ -1,6 +1,25 @@
 /*
  * The MIT License (MIT)
+ *
  * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package global.goldenera.node.core.sync.snapshot;
 
@@ -59,9 +78,9 @@ import global.goldenera.node.core.sync.snapshot.transport.SnapshotTransportManif
 public final class CheckpointStateSnapshotExporter {
 
 	private static final String MANIFEST_FILE = "manifest.json";
-	private static final String CHUNK_URL_PATH = "/api/core/v1/sync/snapshots/checkpoint/chunks/";
+	private static final String VERSION_URL_PATH = "/api/core/v1/sync/snapshots/checkpoint/versions/";
 
-	private final CheckpointRegistry checkpointRegistry;
+	private final SnapshotAnchorPolicy anchorPolicy;
 	private final ChainQuery chainQuery;
 	private final WorldStateFactory worldStateFactory;
 	private final StoredChainIdentity chainIdentity;
@@ -77,7 +96,21 @@ public final class CheckpointStateSnapshotExporter {
 			long randomXEpochLength,
 			URI publicOrigin,
 			ObjectMapper objectMapper) {
-		this.checkpointRegistry = Objects.requireNonNull(checkpointRegistry, "checkpointRegistry");
+		this(checkpointRegistry, chainQuery, worldStateFactory, chainIdentity, randomXEpochLength,
+				publicOrigin, objectMapper, new HardcodedCheckpointSnapshotAnchorPolicy(checkpointRegistry));
+	}
+
+	public CheckpointStateSnapshotExporter(
+			CheckpointRegistry checkpointRegistry,
+			ChainQuery chainQuery,
+			WorldStateFactory worldStateFactory,
+			StoredChainIdentity chainIdentity,
+			long randomXEpochLength,
+			URI publicOrigin,
+			ObjectMapper objectMapper,
+			SnapshotAnchorPolicy anchorPolicy) {
+		Objects.requireNonNull(checkpointRegistry, "checkpointRegistry");
+		this.anchorPolicy = Objects.requireNonNull(anchorPolicy, "anchorPolicy");
 		this.chainQuery = Objects.requireNonNull(chainQuery, "chainQuery");
 		this.worldStateFactory = Objects.requireNonNull(worldStateFactory, "worldStateFactory");
 		this.chainIdentity = Objects.requireNonNull(chainIdentity, "chainIdentity");
@@ -106,7 +139,9 @@ public final class CheckpointStateSnapshotExporter {
 
 			List<SnapshotChunkDescriptor> descriptors;
 			List<Path> chunkFiles;
-			try (DiskSeenSet seen = DiskSeenSet.create(); ChunkEmitter emitter = new ChunkEmitter(output, createdFiles)) {
+			try (DiskSeenSet seen = DiskSeenSet.create();
+					ChunkEmitter emitter = new ChunkEmitter(
+							output, createdFiles, checkpointHeight, checkpoint.hash())) {
 				emitWorldState(worldState, seen, emitter);
 				emitter.finish();
 				descriptors = emitter.descriptors();
@@ -142,8 +177,8 @@ public final class CheckpointStateSnapshotExporter {
 	}
 
 	private ExportCheckpoint loadCheckpoint(long height) {
-		if (height < 0 || !checkpointRegistry.isCheckpoint(height)) {
-			throw failure("Snapshot height is not a hardcoded checkpoint: " + height);
+		if (height < 0) {
+			throw failure("Snapshot height cannot be negative: " + height);
 		}
 		StoredBlock stored = chainQuery.getStoredBlockByHeight(height)
 				.orElseThrow(() -> failure("Canonical checkpoint block is not stored at height " + height));
@@ -157,9 +192,7 @@ public final class CheckpointStateSnapshotExporter {
 			throw failure("Stored checkpoint block metadata is inconsistent");
 		}
 		assertCanonical(height, stored.getHash());
-		if (!checkpointRegistry.verifyCheckpoint(height, stored.getHash())) {
-			throw failure("Stored canonical block does not match the hardcoded checkpoint");
-		}
+		anchorPolicy.verify(height, stored.getHash(), chainIdentity);
 		return new ExportCheckpoint(stored.getHash(), header.getStateRootHash(), stored.getCumulativeDifficulty());
 	}
 
@@ -382,6 +415,7 @@ public final class CheckpointStateSnapshotExporter {
 	private final class ChunkEmitter implements AutoCloseable {
 		private final Path output;
 		private final List<Path> createdFiles;
+		private final String chunkUrlPrefix;
 		private final List<SnapshotChunkDescriptor> descriptors = new ArrayList<>();
 		private final List<Path> chunkFiles = new ArrayList<>();
 		private DataOutputStream stream;
@@ -394,9 +428,13 @@ public final class CheckpointStateSnapshotExporter {
 		private long totalNodes;
 		private long totalBytes;
 
-		private ChunkEmitter(Path output, List<Path> createdFiles) {
+		private ChunkEmitter(
+				Path output, List<Path> createdFiles, long checkpointHeight, Hash checkpointHash) {
 			this.output = output;
 			this.createdFiles = createdFiles;
+			String version = SnapshotFormatCompatibility.currentVersionName(
+					checkpointHeight, checkpointHash);
+			this.chunkUrlPrefix = VERSION_URL_PATH + version + "/chunks/";
 		}
 
 		private void write(Hash key, Bytes content) {
@@ -469,7 +507,7 @@ public final class CheckpointStateSnapshotExporter {
 				descriptors.add(new SnapshotChunkDescriptor(
 						chunkIndex,
 						"state-%05d".formatted(chunkIndex),
-						publicOrigin.resolve(CHUNK_URL_PATH + chunkIndex).toString(),
+						publicOrigin.resolve(chunkUrlPrefix + chunkIndex).toString(),
 						nodeCount,
 						contentBytes,
 						Hash.wrap(digest.digest())));

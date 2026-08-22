@@ -33,10 +33,15 @@ import static org.mockito.Mockito.when;
 import java.sql.SQLException;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.storage.chainidentity.ChainStorageGuardException;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBootstrapService;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotException;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.shared.properties.GeneralProperties;
 
 class ExplorerChainIdentityInitializerTest {
 
@@ -89,6 +94,80 @@ class ExplorerChainIdentityInitializerTest {
 
 		assertThat(readiness.status().state()).isEqualTo(ExplorerReadinessState.READY);
 		verify(migrator).migrate();
+		verify(guard).verifyAndBind(EXPECTED);
+	}
+
+	@Test
+	void disabledExplorerDoesNotTouchSchemaIdentitySnapshotOrReadiness() {
+		AuthoritativeChainIdentityProvider identityProvider = identityProvider();
+		ExplorerSchemaMigrator migrator = mock(ExplorerSchemaMigrator.class);
+		ExplorerChainIdentityGuard guard = mock(ExplorerChainIdentityGuard.class);
+		ExplorerSnapshotBootstrapService snapshotBootstrap = mock(ExplorerSnapshotBootstrapService.class);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(false);
+
+		new ExplorerChainIdentityInitializer(
+				identityProvider, migrator, guard, readiness, properties, snapshotBootstrap)
+				.afterPropertiesSet();
+
+		verify(migrator, never()).migrate();
+		verify(identityProvider, never()).identity();
+		verify(guard, never()).verifyAndBind(EXPECTED);
+		verify(snapshotBootstrap, never()).prepareForIndexing(EXPECTED);
+		assertThat(readiness.status().state()).isEqualTo(ExplorerReadinessState.STARTING);
+	}
+
+	@Test
+	void disabledExplorerDoesNotCreateAnySnapshotOrDatabaseLifecycleBeans() {
+		new ApplicationContextRunner()
+				.withPropertyValues("ge.general.explorer-enable=false")
+				.withUserConfiguration(ExplorerChainIdentityConfiguration.class)
+				.run(context -> {
+					assertThat(context).hasNotFailed();
+					assertThat(context).doesNotHaveBean(ExplorerChainIdentityInitializer.class);
+					assertThat(context).doesNotHaveBean(ExplorerSnapshotBootstrapService.class);
+				});
+	}
+
+	@Test
+	void snapshotFailureKeepsExplorerUnreadyWithoutFailingCore() {
+		AuthoritativeChainIdentityProvider identityProvider = identityProvider();
+		ExplorerSchemaMigrator migrator = mock(ExplorerSchemaMigrator.class);
+		ExplorerChainIdentityGuard guard = mock(ExplorerChainIdentityGuard.class);
+		ExplorerSnapshotBootstrapService snapshotBootstrap = mock(ExplorerSnapshotBootstrapService.class);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		when(snapshotBootstrap.prepareForIndexing(EXPECTED))
+				.thenThrow(new ExplorerSnapshotException("trusted sources unavailable"));
+
+		new ExplorerChainIdentityInitializer(
+				identityProvider, migrator, guard, readiness, properties, snapshotBootstrap)
+				.afterPropertiesSet();
+
+		assertThat(readiness.status().state()).isEqualTo(ExplorerReadinessState.SNAPSHOT_UNAVAILABLE);
+		assertThat(readiness.isReady()).isFalse();
+	}
+
+	@Test
+	void snapshotFailureStartsLocalArchiveFallbackWithoutFailingCoreBoundary() {
+		AuthoritativeChainIdentityProvider identityProvider = identityProvider();
+		ExplorerSchemaMigrator migrator = mock(ExplorerSchemaMigrator.class);
+		ExplorerChainIdentityGuard guard = mock(ExplorerChainIdentityGuard.class);
+		ExplorerSnapshotBootstrapService snapshotBootstrap = mock(ExplorerSnapshotBootstrapService.class);
+		ExplorerArchiveRebuildService archiveRebuild = mock(ExplorerArchiveRebuildService.class);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		when(snapshotBootstrap.prepareForIndexing(EXPECTED))
+				.thenThrow(new ExplorerSnapshotException("snapshot absent"));
+
+		new ExplorerChainIdentityInitializer(
+				identityProvider, migrator, guard, readiness, properties, snapshotBootstrap, archiveRebuild)
+				.afterPropertiesSet();
+
+		verify(archiveRebuild).start();
 		verify(guard).verifyAndBind(EXPECTED);
 	}
 

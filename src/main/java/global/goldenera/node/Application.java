@@ -34,6 +34,7 @@ import org.springframework.context.annotation.FilterType;
 
 import global.goldenera.node.core.sandbox.authoring.SandboxManifestAuthoringCli;
 import global.goldenera.node.core.storage.chainidentity.DevelopmentGenesisAuthoringCli;
+import global.goldenera.node.core.sync.snapshot.operator.OfflineSnapshotOperatorCli;
 
 @SpringBootApplication
 @ComponentScan(excludeFilters = @ComponentScan.Filter(
@@ -66,6 +67,14 @@ public class Application {
         if (args.length > 0 && SandboxManifestAuthoringCli.COMMAND.equals(args[0])) {
             String[] authoringArguments = Arrays.copyOfRange(args, 1, args.length);
             int exitCode = SandboxManifestAuthoringCli.execute(authoringArguments, System.out, System.err);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
+        if (args.length > 0 && OfflineSnapshotOperatorCli.COMMAND.equals(args[0])) {
+            String[] operatorArguments = Arrays.copyOfRange(args, 1, args.length);
+            int exitCode = OfflineSnapshotOperatorCli.execute(operatorArguments, System.out, System.err);
             if (exitCode != 0) {
                 System.exit(exitCode);
             }
