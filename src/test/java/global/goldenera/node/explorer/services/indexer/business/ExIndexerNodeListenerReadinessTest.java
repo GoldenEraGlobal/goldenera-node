@@ -36,7 +36,7 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
-import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.shared.properties.GeneralProperties;
 
 class ExIndexerNodeListenerReadinessTest {
@@ -47,7 +47,7 @@ class ExIndexerNodeListenerReadinessTest {
 		properties.setExplorerEnable(true);
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
-		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
+		ExplorerArchiveRebuildTrigger rebuild = mock(ExplorerArchiveRebuildTrigger.class);
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
 		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue, rebuild);
 		when(readiness.isReady()).thenReturn(false);
@@ -67,7 +67,7 @@ class ExIndexerNodeListenerReadinessTest {
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		when(readiness.isReady()).thenReturn(true);
 		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
-		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
+		ExplorerArchiveRebuildTrigger rebuild = mock(ExplorerArchiveRebuildTrigger.class);
 		BlockConnectedEvent first = mock(BlockConnectedEvent.class);
 		BlockConnectedEvent tip = mock(BlockConnectedEvent.class);
 		when(first.getConnectedSource()).thenReturn(ConnectedSource.SYNC);
@@ -95,7 +95,7 @@ class ExIndexerNodeListenerReadinessTest {
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		when(readiness.isReady()).thenReturn(true);
 		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
-		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
+		ExplorerArchiveRebuildTrigger rebuild = mock(ExplorerArchiveRebuildTrigger.class);
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
 		List<BlockConnectedEvent> events = List.of(event);
 		when(queue.pushConnectBatch(events))
@@ -105,7 +105,7 @@ class ExIndexerNodeListenerReadinessTest {
 		listener.onBlockConnectionBatchCompleted(new BlockConnectionBatchCompletedEvent(
 				this, ConnectedSource.SYNC, events));
 
-		verify(rebuild).start();
+		verify(rebuild).request();
 	}
 
 	@Test
@@ -114,7 +114,7 @@ class ExIndexerNodeListenerReadinessTest {
 		properties.setExplorerEnable(false);
 		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
 		ExIndexerQueueService queue = mock(ExIndexerQueueService.class);
-		ExplorerArchiveRebuildService rebuild = mock(ExplorerArchiveRebuildService.class);
+		ExplorerArchiveRebuildTrigger rebuild = mock(ExplorerArchiveRebuildTrigger.class);
 		ExIndexerNodeListener listener = new ExIndexerNodeListener(properties, readiness, queue, rebuild);
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
 
@@ -124,6 +124,6 @@ class ExIndexerNodeListenerReadinessTest {
 
 		verify(queue, never()).pushConnect(event);
 		verify(queue, never()).pushConnectBatch(List.of(event));
-		verify(rebuild, never()).start();
+		verify(rebuild, never()).request();
 	}
 }

@@ -40,7 +40,8 @@ import global.goldenera.node.core.storage.chainidentity.ChainStorageGuardExcepti
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBootstrapService;
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotException;
-import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildLauncher;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.shared.properties.GeneralProperties;
 
 class ExplorerChainIdentityInitializerTest {
@@ -127,6 +128,8 @@ class ExplorerChainIdentityInitializerTest {
 					assertThat(context).hasNotFailed();
 					assertThat(context).doesNotHaveBean(ExplorerChainIdentityInitializer.class);
 					assertThat(context).doesNotHaveBean(ExplorerSnapshotBootstrapService.class);
+					assertThat(context).doesNotHaveBean(ExplorerArchiveRebuildLauncher.class);
+					assertThat(context).doesNotHaveBean(ExplorerArchiveRebuildTrigger.class);
 				});
 	}
 
@@ -156,7 +159,7 @@ class ExplorerChainIdentityInitializerTest {
 		ExplorerSchemaMigrator migrator = mock(ExplorerSchemaMigrator.class);
 		ExplorerChainIdentityGuard guard = mock(ExplorerChainIdentityGuard.class);
 		ExplorerSnapshotBootstrapService snapshotBootstrap = mock(ExplorerSnapshotBootstrapService.class);
-		ExplorerArchiveRebuildService archiveRebuild = mock(ExplorerArchiveRebuildService.class);
+		ExplorerArchiveRebuildTrigger archiveRebuildTrigger = mock(ExplorerArchiveRebuildTrigger.class);
 		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
 		GeneralProperties properties = new GeneralProperties();
 		properties.setExplorerEnable(true);
@@ -164,11 +167,34 @@ class ExplorerChainIdentityInitializerTest {
 				.thenThrow(new ExplorerSnapshotException("snapshot absent"));
 
 		new ExplorerChainIdentityInitializer(
-				identityProvider, migrator, guard, readiness, properties, snapshotBootstrap, archiveRebuild)
+				identityProvider, migrator, guard, readiness, properties, snapshotBootstrap,
+				archiveRebuildTrigger)
 				.afterPropertiesSet();
 
-		verify(archiveRebuild).start();
+		verify(archiveRebuildTrigger).request();
 		verify(guard).verifyAndBind(EXPECTED);
+	}
+
+	@Test
+	void successfulSnapshotImportDoesNotRequestArchiveRebuild() {
+		AuthoritativeChainIdentityProvider identityProvider = identityProvider();
+		ExplorerSchemaMigrator migrator = mock(ExplorerSchemaMigrator.class);
+		ExplorerChainIdentityGuard guard = mock(ExplorerChainIdentityGuard.class);
+		ExplorerSnapshotBootstrapService snapshotBootstrap = mock(ExplorerSnapshotBootstrapService.class);
+		ExplorerArchiveRebuildTrigger archiveRebuildTrigger = mock(ExplorerArchiveRebuildTrigger.class);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		GeneralProperties properties = new GeneralProperties();
+		properties.setExplorerEnable(true);
+		when(snapshotBootstrap.prepareForIndexing(EXPECTED))
+				.thenReturn(ExplorerSnapshotBootstrapService.Outcome.IMPORTED);
+
+		new ExplorerChainIdentityInitializer(
+				identityProvider, migrator, guard, readiness, properties, snapshotBootstrap,
+				archiveRebuildTrigger)
+				.afterPropertiesSet();
+
+		verify(archiveRebuildTrigger, never()).request();
+		assertThat(readiness.status().state()).isEqualTo(ExplorerReadinessState.READY);
 	}
 
 	private AuthoritativeChainIdentityProvider identityProvider() {

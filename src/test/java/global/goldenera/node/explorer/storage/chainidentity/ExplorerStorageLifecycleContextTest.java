@@ -28,20 +28,38 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.Optional;
 
 import javax.sql.DataSource;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.processing.StateProcessor;
+import global.goldenera.node.core.properties.SnapshotDistributionProperties;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.storage.chainidentity.ChainIdentityBindingInitializer;
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
+import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
+import global.goldenera.node.explorer.services.indexer.business.ExIndexerQueueService;
+import global.goldenera.node.explorer.services.indexer.business.ExIndexerService;
+import global.goldenera.node.explorer.services.indexer.business.ExplorerIndexingExecutionGate;
+import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildLauncher;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveReplayEngine;
+import global.goldenera.node.explorer.snapshot.ExplorerSnapshotRemoteSource;
+import global.goldenera.node.shared.properties.GeneralProperties;
+import liquibase.integration.spring.SpringLiquibase;
 
 class ExplorerStorageLifecycleContextTest {
 
@@ -56,6 +74,34 @@ class ExplorerStorageLifecycleContextTest {
 					assertThat(readiness.status().state())
 							.isEqualTo(ExplorerReadinessState.DATABASE_UNAVAILABLE);
 					assertThat(context.getBean(GuardedWorker.class).ran()).isFalse();
+				});
+	}
+
+	@Test
+	void productionExplorerLifecycleStartsWithCircularReferencesProhibited() {
+		new ApplicationContextRunner()
+				.withPropertyValues(
+						"spring.main.allow-circular-references=false",
+						"ge.general.explorer-enable=true",
+						"ge.database.postgresql-enable=true")
+				.withUserConfiguration(
+						ExplorerChainIdentityConfiguration.class,
+						EnabledExplorerDependencies.class)
+				.run(context -> {
+					assertThat(context).hasNotFailed();
+					DefaultListableBeanFactory beanFactory =
+							(DefaultListableBeanFactory) context.getBeanFactory();
+					assertThat(beanFactory.isAllowCircularReferences()).isFalse();
+					assertThat(beanFactory.getBeanDefinition("explorerArchiveRebuildLauncher").isLazyInit())
+							.isFalse();
+					assertThat(beanFactory.getBeanDefinition(ExplorerChainIdentityInitializer.BEAN_NAME)
+							.isLazyInit()).isFalse();
+					assertThat(context).hasSingleBean(ExplorerArchiveRebuildLauncher.class);
+					assertThat(context.getBean(ExplorerRuntimeReadiness.class).status().state())
+							.isEqualTo(ExplorerReadinessState.READY);
+					assertThat(context.getBean(ExplorerArchiveRebuildLauncher.class))
+							.extracting("rebuildService")
+							.isNull();
 				});
 	}
 
@@ -130,6 +176,108 @@ class ExplorerStorageLifecycleContextTest {
 		@Bean(name = "exIndexerCoordinateService")
 		GuardedWorker guardedWorker(ExplorerRuntimeReadiness readiness) {
 			return new GuardedWorker(readiness);
+		}
+	}
+
+	@Configuration(proxyBeanMethods = false)
+	static class EnabledExplorerDependencies {
+
+		private static final StoredChainIdentity IDENTITY = new StoredChainIdentity(
+				1, 0, "mainnet", "0x" + "a".repeat(64), null);
+
+		@Bean(name = ChainIdentityBindingInitializer.BEAN_NAME)
+		CoreMarker chainIdentityBindingInitializer() {
+			return new CoreMarker();
+		}
+
+		@Bean
+		DataSource dataSource() {
+			return new DriverManagerDataSource(
+					"jdbc:h2:mem:explorer-cycle;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "");
+		}
+
+		@Bean(name = "liquibase")
+		SpringLiquibase liquibase() {
+			return mock(SpringLiquibase.class);
+		}
+
+		@Bean
+		PostgresChainIdentityRepository postgresChainIdentityRepository() {
+			PostgresChainIdentityRepository repository = mock(PostgresChainIdentityRepository.class);
+			when(repository.find()).thenReturn(Optional.of(IDENTITY));
+			return repository;
+		}
+
+		@Bean
+		AuthoritativeChainIdentityProvider authoritativeChainIdentityProvider() {
+			AuthoritativeChainIdentityProvider provider = mock(AuthoritativeChainIdentityProvider.class);
+			when(provider.identity()).thenReturn(IDENTITY);
+			return provider;
+		}
+
+		@Bean
+		GeneralProperties generalProperties() {
+			GeneralProperties properties = new GeneralProperties();
+			properties.setExplorerEnable(true);
+			return properties;
+		}
+
+		@Bean
+		SnapshotDistributionProperties snapshotDistributionProperties() {
+			return new SnapshotDistributionProperties();
+		}
+
+		@Bean
+		CoreSnapshotCheckpointFloorPolicy coreSnapshotCheckpointFloorPolicy() {
+			CoreSnapshotCheckpointFloorPolicy policy = mock(CoreSnapshotCheckpointFloorPolicy.class);
+			when(policy.floor()).thenReturn(Optional.empty());
+			return policy;
+		}
+
+		@Bean
+		ChainQuery chainQuery() {
+			return mock(ChainQuery.class);
+		}
+
+		@Bean
+		ExplorerSnapshotRemoteSource explorerSnapshotRemoteSource() {
+			return mock(ExplorerSnapshotRemoteSource.class);
+		}
+
+		@Bean
+		ObjectMapper objectMapper() {
+			return new ObjectMapper();
+		}
+
+		@Bean
+		StateProcessor stateProcessor() {
+			return mock(StateProcessor.class);
+		}
+
+		@Bean
+		BlockEventExtractor blockEventExtractor() {
+			return mock(BlockEventExtractor.class);
+		}
+
+		@Bean
+		ExIndexerService exIndexerService() {
+			return mock(ExIndexerService.class);
+		}
+
+		@Bean
+		ExIndexerStatusCoreService exIndexerStatusCoreService() {
+			return mock(ExIndexerStatusCoreService.class);
+		}
+
+		@Bean
+		ExplorerIndexingExecutionGate explorerIndexingExecutionGate() {
+			return new ExplorerIndexingExecutionGate();
+		}
+
+		@Bean(name = "exIndexerQueueService")
+		ExIndexerQueueService exIndexerQueueService(
+				ExplorerChainIdentityInitializer explorerChainIdentityInitializer) {
+			return mock(ExIndexerQueueService.class);
 		}
 	}
 

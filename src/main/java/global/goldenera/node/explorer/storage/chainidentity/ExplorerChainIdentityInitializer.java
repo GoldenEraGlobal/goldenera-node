@@ -31,7 +31,7 @@ import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdenti
 import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBootstrapService;
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotException;
-import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.extern.slf4j.Slf4j;
 
@@ -47,7 +47,7 @@ public final class ExplorerChainIdentityInitializer implements InitializingBean 
 	private final ExplorerRuntimeReadiness readiness;
 	private final GeneralProperties generalProperties;
 	private final ExplorerSnapshotBootstrapService snapshotBootstrap;
-	private final ExplorerArchiveRebuildService archiveRebuild;
+	private final ExplorerArchiveRebuildTrigger archiveRebuildTrigger;
 
 	public ExplorerChainIdentityInitializer(
 			AuthoritativeChainIdentityProvider authoritativeIdentityProvider,
@@ -75,14 +75,14 @@ public final class ExplorerChainIdentityInitializer implements InitializingBean 
 			ExplorerRuntimeReadiness readiness,
 			GeneralProperties generalProperties,
 			ExplorerSnapshotBootstrapService snapshotBootstrap,
-			ExplorerArchiveRebuildService archiveRebuild) {
+			ExplorerArchiveRebuildTrigger archiveRebuildTrigger) {
 		this.authoritativeIdentityProvider = authoritativeIdentityProvider;
 		this.schemaMigrator = schemaMigrator;
 		this.guard = guard;
 		this.readiness = readiness;
 		this.generalProperties = generalProperties;
 		this.snapshotBootstrap = snapshotBootstrap;
-		this.archiveRebuild = archiveRebuild;
+		this.archiveRebuildTrigger = archiveRebuildTrigger;
 	}
 
 	@Override
@@ -99,8 +99,8 @@ public final class ExplorerChainIdentityInitializer implements InitializingBean 
 			}
 			readiness.ready();
 		} catch (ExplorerSnapshotException e) {
-			if (archiveRebuild != null) {
-				archiveRebuild.start();
+			if (archiveRebuildTrigger != null) {
+				archiveRebuildTrigger.request();
 			} else {
 				readiness.failed(ExplorerReadinessState.SNAPSHOT_UNAVAILABLE, e.getMessage());
 			}

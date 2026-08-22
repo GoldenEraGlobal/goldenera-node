@@ -35,7 +35,7 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.Connecte
 import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
-import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -50,7 +50,7 @@ public class ExIndexerNodeListener {
 	GeneralProperties generalProperties;
 	ExplorerRuntimeReadiness explorerReadiness;
 	ExIndexerQueueService queueService;
-	ExplorerArchiveRebuildService archiveRebuildService;
+	ExplorerArchiveRebuildTrigger archiveRebuildTrigger;
 
 	@EventListener
 	public void onBlockConnected(BlockConnectedEvent event) {
@@ -79,7 +79,7 @@ public class ExIndexerNodeListener {
 			}
 			if (queueService.pushConnectBatch(event.getBlockEvents())
 					== ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED) {
-				archiveRebuildService.start();
+				archiveRebuildTrigger.request();
 			}
 		}
 	}

@@ -41,7 +41,8 @@ import global.goldenera.node.core.properties.SnapshotDistributionProperties;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
 import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
 import global.goldenera.node.explorer.snapshot.DelayedExplorerSnapshotPublicationGenerator;
-import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildLauncher;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.explorer.snapshot.ExplorerArchiveReplayEngine;
 import global.goldenera.node.explorer.snapshot.ExplorerCheckpointSnapshotImporter;
 import global.goldenera.node.explorer.snapshot.ExplorerSnapshotBootstrapService;
@@ -141,14 +142,14 @@ public class ExplorerChainIdentityConfiguration {
 	}
 
 	@Bean
-	ExplorerArchiveRebuildService explorerArchiveRebuildService(
+	ExplorerArchiveRebuildLauncher explorerArchiveRebuildLauncher(
 			GeneralProperties generalProperties,
 			ExplorerRuntimeReadiness readiness,
-			ExplorerArchiveReplayEngine replayEngine,
-			ExplorerIndexingExecutionGate executionGate,
-			ExIndexerQueueService queueService) {
-		return new ExplorerArchiveRebuildService(
-				generalProperties, readiness, replayEngine, executionGate, queueService);
+			ObjectProvider<ExplorerArchiveReplayEngine> replayEngineProvider,
+			ObjectProvider<ExplorerIndexingExecutionGate> executionGateProvider,
+			ObjectProvider<ExIndexerQueueService> queueServiceProvider) {
+		return new ExplorerArchiveRebuildLauncher(
+				generalProperties, readiness, replayEngineProvider, executionGateProvider, queueServiceProvider);
 	}
 
 	@Bean(name = ExplorerChainIdentityInitializer.BEAN_NAME)
@@ -159,9 +160,9 @@ public class ExplorerChainIdentityConfiguration {
 			ExplorerRuntimeReadiness readiness,
 			GeneralProperties generalProperties,
 			ExplorerSnapshotBootstrapService snapshotBootstrap,
-			ExplorerArchiveRebuildService archiveRebuild) {
+			ExplorerArchiveRebuildTrigger archiveRebuildTrigger) {
 		return new ExplorerChainIdentityInitializer(
 				authoritativeIdentityProvider, schemaMigrator, guard, readiness,
-				generalProperties, snapshotBootstrap, archiveRebuild);
+				generalProperties, snapshotBootstrap, archiveRebuildTrigger);
 	}
 }
