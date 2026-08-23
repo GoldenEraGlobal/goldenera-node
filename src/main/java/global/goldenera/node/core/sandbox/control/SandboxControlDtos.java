@@ -178,7 +178,19 @@ final class SandboxControlDtos {
 			int peakActiveBodyPeers,
 			long persistenceBatchByteLimit,
 			long persistenceBatchCurrentBytes,
-			long persistenceBatchPeakBytes) {
+			long persistenceBatchPeakBytes,
+			int maxHeaderPageRequested,
+			long legacyHeaderPageRequests,
+			long v2HeaderPageRequests,
+			int headerPrefetchDepthLimit,
+			int bufferedHeaderWindows,
+			int bufferedHeaderCount,
+			long bufferedHeaderBytes,
+			int peakBufferedHeaderWindows,
+			int peakBufferedHeaderCount,
+			long peakBufferedHeaderBytes,
+			int validatedAheadHeaders,
+			long discardedPrefetchHeaders) {
 	}
 
 	record PowRuntimeAudit(

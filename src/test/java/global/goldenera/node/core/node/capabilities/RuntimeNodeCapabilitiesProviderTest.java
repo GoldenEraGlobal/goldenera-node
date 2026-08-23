@@ -38,6 +38,7 @@ import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.pow.RandomXProofOfWorkProvider;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
@@ -55,7 +56,10 @@ class RuntimeNodeCapabilitiesProviderTest {
 				.snapshot();
 
 		assertThat(snapshot.proofOfWorkMode()).isEqualTo(ProofOfWorkRuntimeMode.RANDOMX_FULL);
-		assertThat(snapshot.capabilityIds()).contains("pow-randomx-full", "mining-economics-v1");
+		assertThat(snapshot.capabilityIds()).contains(
+				"pow-randomx-full",
+				"mining-economics-v1",
+				P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY);
 		assertThat(snapshot.capabilityIds()).noneMatch(id -> id.startsWith("sandbox-")
 				|| id.startsWith("clock-") || id.startsWith("legacy-peer-"));
 	}

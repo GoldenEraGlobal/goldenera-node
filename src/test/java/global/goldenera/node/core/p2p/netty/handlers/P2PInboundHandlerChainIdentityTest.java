@@ -73,6 +73,7 @@ import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
 import global.goldenera.node.core.p2p.messages.dtos.sync.P2PBlockBodiesDto;
 import global.goldenera.node.core.p2p.messages.validation.P2PValidation;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import global.goldenera.node.core.p2p.netty.P2PChannelAttributes;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.p2p.services.P2PStatusProvider;
@@ -101,33 +102,40 @@ class P2PInboundHandlerChainIdentityTest {
 	@Test
 	void validStatusCompletesHandshakeOnceAndRepeatedStatusIsRejected() {
 		Fixture fixture = fixture(Runnable::run);
-		P2PStatusDto status = status(REMOTE_IDENTITY, BigInteger.ONE);
+		P2PStatusDto status = status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.ONE,
+				List.of(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY));
 
 		fixture.channel.writeInbound(new P2PEnvelope(7, P2PMessageType.STATUS, status));
 
 		assertThat(fixture.channel.isActive()).isTrue();
 		verify(fixture.publisher).publishEvent(any(P2PHandshakeCompletedEvent.class));
 		assertThat(fixture.peer.getIdentity()).isEqualTo(REMOTE_IDENTITY);
+		assertThat(fixture.peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
 
 		fixture.channel.writeInbound(new P2PEnvelope(8, P2PMessageType.STATUS, status));
 
 		assertThat(fixture.channel.isActive()).isFalse();
 		verify(fixture.publisher, times(1)).publishEvent(any(P2PHandshakeCompletedEvent.class));
+		assertThat(fixture.peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
 	}
 
 	@Test
 	void successfulHandshakeCommitsAnImmutableDeduplicatedCapabilitySnapshot() {
 		Fixture fixture = fixture(Runnable::run);
 		P2PStatusDto status = status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.ONE,
-				List.of("chain-identity-v1", "state-sync-v1", "state-sync-v1"));
+				List.of("chain-identity-v1", P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY,
+						"state-sync-v1", "state-sync-v1"));
 
 		fixture.channel.writeInbound(new P2PEnvelope(7, P2PMessageType.STATUS, status));
 
 		assertThat(fixture.channel.isActive()).isTrue();
 		assertThat(fixture.peer.getCapabilitiesSnapshot())
-				.containsExactlyInAnyOrder("chain-identity-v1", "state-sync-v1");
+				.containsExactlyInAnyOrder(
+						"chain-identity-v1",
+						P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY,
+						"state-sync-v1");
 		assertThat(fixture.peer.supportsCapability("state-sync-v1")).isTrue();
-		assertThat(fixture.peer.supportsCapability("sync-v2")).isFalse();
+		assertThat(fixture.peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
 		assertThatThrownBy(() -> fixture.peer.getCapabilities().add("mutated"))
 				.isInstanceOf(UnsupportedOperationException.class);
 	}
@@ -167,11 +175,12 @@ class P2PInboundHandlerChainIdentityTest {
 				status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.ONE, List.of("state-sync-v1"))));
 
 		fixture.channel.writeInbound(new P2PEnvelope(2, P2PMessageType.PONG,
-				status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.TEN, List.of("sync-v2"))));
+				status(Network.TESTNET, REMOTE_IDENTITY, BigInteger.TEN,
+						List.of(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY))));
 
 		assertThat(fixture.channel.isActive()).isTrue();
 		assertThat(fixture.peer.getCapabilitiesSnapshot()).containsExactly("state-sync-v1");
-		assertThat(fixture.peer.supportsCapability("sync-v2")).isFalse();
+		assertThat(fixture.peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT);
 	}
 
 	@Test

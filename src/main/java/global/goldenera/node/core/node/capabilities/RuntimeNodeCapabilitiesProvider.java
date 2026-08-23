@@ -33,6 +33,7 @@ import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.pow.RandomXProofOfWorkProvider;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.storage.chainidentity.AuthoritativeChainIdentityProvider;
@@ -73,6 +74,7 @@ public final class RuntimeNodeCapabilitiesProvider implements NodeCapabilitiesPr
 		capabilities.add("chain-identity-v1");
 		capabilities.add("core-readiness-v1");
 		capabilities.add(MINING_ECONOMICS_V1);
+		capabilities.add(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY);
 		capabilities.add(switch (proofOfWorkMode) {
 			case RANDOMX_FULL -> "pow-randomx-full";
 			case RANDOMX_LIGHT -> "pow-randomx-light";

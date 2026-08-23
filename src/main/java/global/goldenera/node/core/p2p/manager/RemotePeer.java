@@ -53,6 +53,7 @@ import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolHashesDto;
 import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsDto;
 import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsReqDto;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.netty.channel.Channel;
 import lombok.Getter;
@@ -73,6 +74,7 @@ public class RemotePeer {
 	@Getter(lombok.AccessLevel.NONE)
 	@Setter(lombok.AccessLevel.NONE)
 	volatile Set<String> capabilities = Set.of();
+	volatile boolean capabilityNegotiationCompleted;
 
 	volatile BigInteger totalDifficulty;
 	volatile Hash headHash;
@@ -99,12 +101,18 @@ public class RemotePeer {
 	 * Commits the capabilities negotiated by a successful STATUS handshake.
 	 * PONG status updates intentionally cannot renegotiate this snapshot.
 	 */
-	public void completeCapabilityNegotiation(List<String> negotiatedCapabilities) {
-		if (negotiatedCapabilities == null || negotiatedCapabilities.isEmpty()) {
-			capabilities = Set.of();
-			return;
+	public synchronized void completeCapabilityNegotiation(List<String> negotiatedCapabilities) {
+		Set<String> negotiated = negotiatedCapabilities == null || negotiatedCapabilities.isEmpty()
+				? Set.of()
+				: Collections.unmodifiableSet(new LinkedHashSet<>(negotiatedCapabilities));
+		if (capabilityNegotiationCompleted) {
+			if (capabilities.equals(negotiated)) {
+				return;
+			}
+			throw new IllegalStateException("P2P capabilities were already negotiated");
 		}
-		capabilities = Collections.unmodifiableSet(new LinkedHashSet<>(negotiatedCapabilities));
+		capabilities = negotiated;
+		capabilityNegotiationCompleted = true;
 	}
 
 	/** Returns the immutable capability snapshot negotiated at handshake time. */
@@ -119,6 +127,13 @@ public class RemotePeer {
 
 	public boolean supportsCapability(String capability) {
 		return capability != null && capabilities.contains(capability);
+	}
+
+	/** Returns the header page bound fixed by the immutable STATUS snapshot. */
+	public int negotiatedHeaderPageLimit() {
+		return supportsCapability(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)
+				? P2PSyncProtocol.V2_HEADER_PAGE_LIMIT
+				: P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT;
 	}
 
 	/**
