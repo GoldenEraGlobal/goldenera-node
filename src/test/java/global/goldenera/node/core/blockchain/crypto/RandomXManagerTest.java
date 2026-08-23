@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -35,10 +36,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -46,15 +54,22 @@ import org.mockito.ArgumentCaptor;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.NetworkSettings;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationContext;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationMode;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationSession;
+import global.goldenera.node.core.blockchain.pow.RandomXProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.properties.MiningProperties;
 import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
+import global.goldenera.node.core.properties.RandomXVerificationProperties;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
+import global.goldenera.node.core.sync.SyncVerificationAccelerationPolicy;
 import global.goldenera.randomx.RandomXCache;
 import global.goldenera.randomx.RandomXDataset;
 import global.goldenera.randomx.RandomXFlag;
 import global.goldenera.randomx.RandomXVM;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class RandomXManagerTest {
 
@@ -195,23 +210,470 @@ class RandomXManagerTest {
 	}
 
 	@Test
-	void fullMiningStillAllocatesDatasetAndVerificationRemainsCacheOnly() {
+	void verificationReusesAnAlreadyAllocatedFullDataset() {
 		RecordingFactory factory = new RecordingFactory();
 		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
 		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
 
 		RandomXVmLease miningLease = manager.createMiningVM();
-		RandomXVmLease verificationLease = manager.getLightVMForVerification(1L, ignored -> Optional.empty());
+		ProofOfWorkVerificationContext context = manager.verificationContext(
+				1L, ignored -> Optional.empty());
+		RandomXVerificationVmLease verificationLease = manager.acquireVerificationVM(context);
 
 		assertThat(factory.datasets).hasSize(1);
 		assertThat(factory.vmRequests).hasSize(2);
 		assertThat(factory.vmRequests.get(0).flags()).contains(RandomXFlag.FULL_MEM);
 		assertThat(factory.vmRequests.get(0).dataset()).isSameAs(factory.datasets.getFirst());
-		assertThat(factory.vmRequests.get(1).flags()).doesNotContain(RandomXFlag.FULL_MEM, RandomXFlag.LARGE_PAGES);
-		assertThat(factory.vmRequests.get(1).dataset()).isNull();
+		assertThat(factory.vmRequests.get(1).flags()).contains(RandomXFlag.FULL_MEM);
+		assertThat(factory.vmRequests.get(1).dataset()).isSameAs(factory.datasets.getFirst());
+		assertThat(verificationLease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
 
 		miningLease.close();
 		verificationLease.close();
+		manager.close();
+	}
+
+	@Test
+	void verificationFallsBackToLightWhenNoDatasetExists() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		manager.ensureInitializedForHeight(1L);
+
+		ProofOfWorkVerificationContext context = manager.verificationContext(
+				1L, ignored -> Optional.empty());
+		RandomXVerificationVmLease verificationLease = manager.acquireVerificationVM(context);
+
+		assertThat(factory.datasets).isEmpty();
+		assertThat(factory.vmRequests).singleElement().satisfies(request -> {
+			assertThat(request.flags()).doesNotContain(RandomXFlag.FULL_MEM, RandomXFlag.LARGE_PAGES);
+			assertThat(request.dataset()).isNull();
+		});
+		assertThat(verificationLease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+
+		verificationLease.close();
+		manager.close();
+	}
+
+	@Test
+	void autoBulkSyncBuildsOneParityCheckedDatasetAndRetiresAfterLastLeaseAtTail() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+
+		RandomXVerificationVmLease first = manager.acquireVerificationVM(context);
+		RandomXVerificationVmLease second = manager.acquireVerificationVM(context);
+
+		assertThat(first.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+		assertThat(second.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+		assertThat(factory.datasets).hasSize(1);
+		RandomXDataset dataset = factory.datasets.getFirst();
+		manager.syncCaughtUp();
+		verify(dataset, never()).close();
+		first.close();
+		verify(dataset, never()).close();
+		second.close();
+		verify(dataset, times(1)).close();
+		manager.close();
+	}
+
+	@Test
+	void failedSyncRetiresNativeDatasetAfterLeaseDrainAndKeepsOnlyCooldownMetadata() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+		RandomXVerificationVmLease lease = manager.acquireVerificationVM(context);
+		RandomXDataset dataset = factory.datasets.getFirst();
+
+		manager.syncFailed();
+		verify(dataset, never()).close();
+		lease.close();
+		verify(dataset, times(1)).close();
+
+		manager.syncBulkCatchUpStarted(2L, 10_000L);
+		ProofOfWorkVerificationContext reconnect = manager.verificationContext(3L, ignored -> Optional.empty());
+		try (RandomXVerificationVmLease fallback = manager.acquireVerificationVM(reconnect)) {
+			assertThat(fallback.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+		assertThat(factory.datasets).hasSize(1);
+		manager.close();
+	}
+
+	@Test
+	void smallGapAndImmediatePostCatchupReconnectStayLightWithoutRebuild() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 100L);
+		ProofOfWorkVerificationContext smallGap = manager.verificationContext(2L, ignored -> Optional.empty());
+
+		try (RandomXVerificationVmLease lease = manager.acquireVerificationVM(smallGap)) {
+			assertThat(lease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+		assertThat(factory.datasets).isEmpty();
+
+		manager.syncCaughtUp();
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext bulk = manager.verificationContext(2L, ignored -> Optional.empty());
+		manager.acquireVerificationVM(bulk).close();
+		assertThat(factory.datasets).hasSize(1);
+		manager.syncCaughtUp();
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext cooldown = manager.verificationContext(3L, ignored -> Optional.empty());
+		try (RandomXVerificationVmLease lease = manager.acquireVerificationVM(cooldown)) {
+			assertThat(lease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+		assertThat(factory.datasets).hasSize(1);
+		manager.close();
+	}
+
+	@Test
+	void lateMainnetEpochDefersDatasetUntilNextFullEpochCanAmortizeIt() {
+		RecordingFactory factory = new RecordingFactory();
+		ChainQuery chainQuery = mock(ChainQuery.class);
+		NetworkSettings settings = mock(NetworkSettings.class);
+		when(settings.randomXEpochLength()).thenReturn(8192L);
+		when(settings.randomXGenesisKey()).thenReturn("controlled-genesis-key");
+		RandomXManager manager = new RandomXManager(
+				properties(false, RandomXMiningMemoryMode.FULL), chainQuery, productionContext(), factory,
+				() -> settings);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(0L);
+		manager.syncBulkCatchUpStarted(0L, 20_000L);
+
+		ProofOfWorkVerificationContext lateEpoch = manager.verificationContext(
+				3000L, ignored -> Optional.empty());
+		try (RandomXVerificationVmLease lease = manager.acquireVerificationVM(lateEpoch)) {
+			assertThat(lease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+		assertThat(factory.datasets).isEmpty();
+
+		byte[] nextSeed = new byte[] { 9, 8, 7 };
+		ProofOfWorkVerificationContext nextEpoch = manager.verificationContext(
+				8192L, ignored -> Optional.of(nextSeed));
+		try (RandomXVerificationVmLease lease = manager.acquireVerificationVM(nextEpoch)) {
+			assertThat(lease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+		}
+		assertThat(factory.datasets).hasSize(1);
+		manager.close();
+	}
+
+	@Test
+	void parityFailureCircuitsSeedAndFallsBackToLightWithoutRebuilding() {
+		RecordingFactory factory = new RecordingFactory();
+		factory.parityMismatch = true;
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+
+		try (RandomXVerificationVmLease first = manager.acquireVerificationVM(context);
+				RandomXVerificationVmLease second = manager.acquireVerificationVM(context)) {
+			assertThat(first.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+			assertThat(second.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+
+		assertThat(factory.datasets).hasSize(1);
+		verify(factory.datasets.getFirst(), times(1)).close();
+		manager.close();
+	}
+
+	@Test
+	void datasetInitializationFailureCircuitsSeedAndFallsBackToLight() {
+		RecordingFactory factory = new RecordingFactory();
+		factory.failDatasetInitialization = true;
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+
+		try (RandomXVerificationVmLease first = manager.acquireVerificationVM(context);
+				RandomXVerificationVmLease second = manager.acquireVerificationVM(context)) {
+			assertThat(first.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+			assertThat(second.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+
+		assertThat(factory.datasets).hasSize(1);
+		verify(factory.datasets.getFirst(), times(1)).close();
+		manager.close();
+	}
+
+	@Test
+	void seedAdvanceRetiresOldSyncDatasetBeforePublishingReplacement() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext firstContext = manager.verificationContext(2L, ignored -> Optional.empty());
+		manager.acquireVerificationVM(firstContext).close();
+		RandomXDataset firstDataset = factory.datasets.getFirst();
+
+		ProofOfWorkVerificationContext secondContext = manager.verificationContext(3L, ignored -> Optional.empty());
+		try (RandomXVerificationVmLease lease = manager.acquireVerificationVM(secondContext)) {
+			assertThat(lease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+		}
+
+		assertThat(factory.datasets).hasSize(2);
+		verify(firstDataset, times(1)).close();
+		manager.syncFailed();
+		verify(factory.datasets.get(1), times(1)).close();
+		manager.close();
+	}
+
+	@Test
+	void concurrentSameSeedAcquisitionSingleFlightsDatasetBuild() throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		factory.blockDatasetInitialization = true;
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			Future<RandomXVerificationVmLease> first = executor.submit(() -> manager.acquireVerificationVM(context));
+			assertThat(factory.datasetInitStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			Future<RandomXVerificationVmLease> second = executor.submit(() -> manager.acquireVerificationVM(context));
+			Thread.sleep(50);
+			assertThat(factory.datasets).hasSize(1);
+			factory.releaseDatasetInit.countDown();
+			try (RandomXVerificationVmLease firstLease = first.get(1, TimeUnit.SECONDS);
+					RandomXVerificationVmLease secondLease = second.get(1, TimeUnit.SECONDS)) {
+				assertThat(firstLease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+				assertThat(secondLease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+			}
+		}
+		assertThat(factory.datasets).hasSize(1);
+		manager.close();
+	}
+
+	@Test
+	void shutdownDuringDatasetBuildClosesCandidateWithoutPublishingIt() throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		factory.blockDatasetInitialization = true;
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			Future<RandomXVerificationVmLease> acquisition =
+					executor.submit(() -> manager.acquireVerificationVM(context));
+			assertThat(factory.datasetInitStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			Future<?> shutdown = executor.submit(manager::close);
+			Thread.sleep(50);
+			factory.releaseDatasetInit.countDown();
+			try {
+				RandomXVerificationVmLease fallback = acquisition.get(1, TimeUnit.SECONDS);
+				fallback.close();
+			} catch (ExecutionException ignored) {
+				// Shutdown may win before the mandatory LIGHT fallback acquires its cache.
+			}
+			shutdown.get(1, TimeUnit.SECONDS);
+		}
+
+		assertThat(factory.datasets).hasSize(1);
+		verify(factory.datasets.getFirst(), times(1)).close();
+	}
+
+	@Test
+	void acceleratorPublishesLifecycleAndBuildMetrics() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		manager.configureSyncVerificationAcceleration(
+				highMemoryProperties(), false, registry, this::highMemory);
+		manager.ensureInitializedForHeight(1L);
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(2L, ignored -> Optional.empty());
+		manager.acquireVerificationVM(context).close();
+
+		assertThat(registry.get("blockchain.randomx.sync_dataset.builds")
+				.tag("outcome", "success").counter().count()).isEqualTo(1);
+		assertThat(registry.get("blockchain.randomx.sync_dataset.active").gauge().value()).isEqualTo(1);
+		assertThat(registry.get("blockchain.randomx.sync_dataset.bulk_active").gauge().value()).isEqualTo(1);
+
+		manager.syncCaughtUp();
+		assertThat(registry.get("blockchain.randomx.sync_dataset.active").gauge().value()).isZero();
+		assertThat(registry.get("blockchain.randomx.sync_dataset.bulk_active").gauge().value()).isZero();
+		manager.close();
+	}
+
+	@Test
+	void matchingMiningDatasetIsReusedInBulkAndNeverRetiredBySync() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset miningDataset = factory.datasets.getFirst();
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(1L, ignored -> Optional.empty());
+
+		try (RandomXVerificationVmLease lease = manager.acquireVerificationVM(context)) {
+			assertThat(lease.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+		}
+		assertThat(factory.datasets).containsExactly(miningDataset);
+		manager.syncFailed();
+		verify(miningDataset, never()).close();
+		try (RandomXVerificationVmLease nearHead = manager.acquireVerificationVM(context)) {
+			assertThat(nearHead.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		}
+		verify(miningDataset, never()).close();
+		manager.close();
+		verify(miningDataset, times(1)).close();
+	}
+
+	@Test
+	void concurrentEpochSwitchCannotRetireCurrentDatasetBeforeVerificationLeaseIsAcquired() throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset firstDataset = factory.datasets.getFirst();
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(1L, ignored -> Optional.empty());
+		factory.blockVerificationVmCreation = true;
+
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			Future<RandomXVerificationVmLease> acquisition =
+					executor.submit(() -> manager.acquireVerificationVM(context));
+			assertThat(factory.verificationVmCreationStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			Future<?> epochSwitch = executor.submit(() -> manager.ensureInitializedForHeight(2L));
+			Thread.sleep(50);
+			assertThat(epochSwitch.isDone()).isFalse();
+
+			factory.releaseVerificationVmCreation.countDown();
+			RandomXVerificationVmLease lease = acquisition.get(1, TimeUnit.SECONDS);
+			epochSwitch.get(1, TimeUnit.SECONDS);
+			verify(firstDataset, never()).close();
+			lease.close();
+			verify(firstDataset, times(1)).close();
+		}
+		manager.close();
+	}
+
+	@Test
+	void borrowedMiningDatasetRemainsUsableThroughEverySyncTerminalCallback() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset miningDataset = factory.datasets.getFirst();
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(1L, ignored -> Optional.empty());
+		RandomXVerificationVmLease borrowed = manager.acquireVerificationVM(context);
+
+		manager.syncCaughtUp();
+		assertThat(borrowed.vm().calculateHash(new byte[] { 1 })).hasSize(32);
+		verify(miningDataset, never()).close();
+		manager.syncFailed();
+		assertThat(borrowed.vm().calculateHash(new byte[] { 2 })).hasSize(32);
+		verify(miningDataset, never()).close();
+		manager.syncStopped();
+		assertThat(borrowed.vm().calculateHash(new byte[] { 3 })).hasSize(32);
+		verify(miningDataset, never()).close();
+
+		borrowed.close();
+		verify(miningDataset, never()).close();
+		manager.close();
+		verify(miningDataset, times(1)).close();
+	}
+
+	@Test
+	void concurrentShutdownDefersMiningDatasetUntilMiningAndVerificationLeasesCloseInEitherOrder()
+			throws Exception {
+		assertConcurrentShutdownLeaseOrder(true);
+		assertConcurrentShutdownLeaseOrder(false);
+	}
+
+	@Test
+	void oldSeedBorrowRacingFailedAndStoppedIsReleasedOnlyByCurrentEpochRetirement() throws Exception {
+		for (boolean stopped : List.of(false, true)) {
+			RecordingFactory factory = new RecordingFactory();
+			RandomXManager manager = manager(
+					properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+			configureAcceleration(manager, highMemoryProperties(), highMemory());
+			manager.ensureInitializedForHeight(1L);
+			RandomXDataset oldDataset = factory.datasets.getFirst();
+			manager.syncBulkCatchUpStarted(1L, 10_000L);
+			ProofOfWorkVerificationContext context = manager.verificationContext(1L, ignored -> Optional.empty());
+			RandomXVerificationVmLease borrowed = manager.acquireVerificationVM(context);
+			CountDownLatch start = new CountDownLatch(1);
+
+			try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+				Future<?> epochSwitch = executor.submit(() -> {
+					await(start);
+					manager.ensureInitializedForHeight(2L);
+				});
+				Future<?> terminal = executor.submit(() -> {
+					await(start);
+					if (stopped) {
+						manager.syncStopped();
+					} else {
+						manager.syncFailed();
+					}
+				});
+				start.countDown();
+				epochSwitch.get(1, TimeUnit.SECONDS);
+				terminal.get(1, TimeUnit.SECONDS);
+			}
+
+			verify(oldDataset, never()).close();
+			assertThat(borrowed.vm().calculateHash(new byte[] { 4 })).hasSize(32);
+			borrowed.close();
+			verify(oldDataset, times(1)).close();
+			manager.close();
+		}
+	}
+
+	@Test
+	void syncBorrowWaitsForNonInterruptibleMiningInitializationAfterPauseTimeoutSeamWithoutDeadlock()
+			throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXVerificationProperties verificationProperties = highMemoryProperties();
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		manager.configureSyncVerificationAcceleration(
+				verificationProperties, false, registry, this::highMemory);
+		manager.ensureInitializedForHeight(1L);
+		factory.blockDatasetInitialization = true;
+		RandomXProofOfWorkProvider provider = new RandomXProofOfWorkProvider(
+				manager, verificationProperties, registry);
+
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			Future<?> miningInitialization = executor.submit(() -> manager.prepareMiningResourcesForHeight(2L));
+			assertThat(factory.datasetInitStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			assertThat(manager.isInitializationInProgress()).isTrue();
+			provider.bulkCatchUpStarted(1L, 10_000L);
+			ProofOfWorkVerificationContext context = provider.verificationContext(2L, ignored -> Optional.empty());
+			CountDownLatch acquisitionStarted = new CountDownLatch(1);
+			Future<ProofOfWorkVerificationSession> syncBorrow = executor.submit(() -> {
+				acquisitionStarted.countDown();
+				return provider.openVerificationSession(context);
+			});
+			assertThat(acquisitionStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			assertThat(syncBorrow.isDone()).isFalse();
+
+			factory.releaseDatasetInit.countDown();
+			miningInitialization.get(1, TimeUnit.SECONDS);
+			try (ProofOfWorkVerificationSession session = syncBorrow.get(1, TimeUnit.SECONDS)) {
+				assertThat(session.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_FULL);
+				assertThat(session.hash(new byte[] { 5 })).hasSize(32);
+			}
+		}
+		provider.syncEnded(SyncVerificationAccelerationPolicy.EndReason.CAUGHT_UP);
 		manager.close();
 	}
 
@@ -332,6 +794,64 @@ class RandomXManagerTest {
 		return properties;
 	}
 
+	private void configureAcceleration(
+			RandomXManager manager,
+			RandomXVerificationProperties properties,
+			RandomXSyncMemoryPolicy.MemorySnapshot memory) {
+		manager.configureSyncVerificationAcceleration(
+				properties, false, new SimpleMeterRegistry(), () -> memory);
+	}
+
+	private RandomXVerificationProperties highMemoryProperties() {
+		RandomXVerificationProperties properties = new RandomXVerificationProperties();
+		properties.setRebuildCooldown(Duration.ofMinutes(10));
+		return properties;
+	}
+
+	private void assertConcurrentShutdownLeaseOrder(boolean miningFirst) throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		configureAcceleration(manager, highMemoryProperties(), highMemory());
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset dataset = factory.datasets.getFirst();
+		RandomXVmLease mining = manager.createMiningVM();
+		manager.syncBulkCatchUpStarted(1L, 10_000L);
+		ProofOfWorkVerificationContext context = manager.verificationContext(1L, ignored -> Optional.empty());
+		RandomXVerificationVmLease verification = manager.acquireVerificationVM(context);
+
+		try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+			executor.submit(manager::close).get(1, TimeUnit.SECONDS);
+		}
+		verify(dataset, never()).close();
+		if (miningFirst) {
+			mining.close();
+			verify(dataset, never()).close();
+			verification.close();
+		} else {
+			verification.close();
+			verify(dataset, never()).close();
+			mining.close();
+		}
+		verify(dataset, times(1)).close();
+		manager.close();
+		verify(dataset, times(1)).close();
+	}
+
+	private static void await(CountDownLatch latch) {
+		try {
+			if (!latch.await(1, TimeUnit.SECONDS)) {
+				throw new IllegalStateException("test start latch timed out");
+			}
+		} catch (InterruptedException failure) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("test start latch interrupted", failure);
+		}
+	}
+
+	private RandomXSyncMemoryPolicy.MemorySnapshot highMemory() {
+		return new RandomXSyncMemoryPolicy.MemorySnapshot(32768, 24000, 4096, true);
+	}
+
 	private SandboxRuntimeContext productionContext() {
 		return new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.MAINNET, Optional.empty());
 	}
@@ -348,6 +868,14 @@ class RandomXManagerTest {
 		private final List<RandomXDataset> datasets = new ArrayList<>();
 		private final List<RandomXVM> vms = new ArrayList<>();
 		private final List<VmRequest> vmRequests = new ArrayList<>();
+		private boolean parityMismatch;
+		private boolean failDatasetInitialization;
+		private boolean blockDatasetInitialization;
+		private boolean blockVerificationVmCreation;
+		private final CountDownLatch datasetInitStarted = new CountDownLatch(1);
+		private final CountDownLatch releaseDatasetInit = new CountDownLatch(1);
+		private final CountDownLatch verificationVmCreationStarted = new CountDownLatch(1);
+		private final CountDownLatch releaseVerificationVmCreation = new CountDownLatch(1);
 
 		@Override
 		public RandomXCache createCache(Set<RandomXFlag> flags) {
@@ -360,14 +888,40 @@ class RandomXManagerTest {
 		@Override
 		public RandomXDataset createDataset(Set<RandomXFlag> flags) {
 			RandomXDataset dataset = mock(RandomXDataset.class);
+			if (failDatasetInitialization) {
+				doThrow(new IllegalStateException("dataset init failed")).when(dataset).init(any());
+			} else if (blockDatasetInitialization) {
+				doAnswer(ignored -> {
+					datasetInitStarted.countDown();
+					if (!releaseDatasetInit.await(1, TimeUnit.SECONDS)) {
+						throw new IllegalStateException("dataset init release timed out");
+					}
+					return null;
+				}).when(dataset).init(any());
+			}
 			datasets.add(dataset);
 			return dataset;
 		}
 
 		@Override
 		public RandomXVM createVM(Set<RandomXFlag> flags, RandomXCache cache, RandomXDataset dataset) {
+			if (blockVerificationVmCreation) {
+				verificationVmCreationStarted.countDown();
+				try {
+					if (!releaseVerificationVmCreation.await(1, TimeUnit.SECONDS)) {
+						throw new IllegalStateException("verification VM creation release timed out");
+					}
+				} catch (InterruptedException failure) {
+					Thread.currentThread().interrupt();
+					throw new IllegalStateException("verification VM creation interrupted", failure);
+				}
+			}
 			RandomXVM vm = mock(RandomXVM.class);
-			when(vm.calculateHash(any())).thenReturn(new byte[32]);
+			byte[] hash = new byte[32];
+			if (parityMismatch && dataset != null) {
+				hash[0] = 1;
+			}
+			when(vm.calculateHash(any())).thenReturn(hash);
 			vms.add(vm);
 			vmRequests.add(new VmRequest(Set.copyOf(flags), cache, dataset));
 			return vm;

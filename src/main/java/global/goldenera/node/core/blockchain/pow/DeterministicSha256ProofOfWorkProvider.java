@@ -92,10 +92,20 @@ public final class DeterministicSha256ProofOfWorkProvider implements ProofOfWork
 	}
 
 	@Override
-	public ProofOfWorkHasher openVerificationHasher(long height,
+	public ProofOfWorkVerificationContext verificationContext(long height,
 			Function<Long, Optional<byte[]>> seedBlockProvider) {
 		Objects.requireNonNull(seedBlockProvider, "seedBlockProvider");
-		return hasher();
+		return ProofOfWorkProvider.super.verificationContext(height, seedBlockProvider);
+	}
+
+	@Override
+	public ProofOfWorkVerificationSession openVerificationSession(ProofOfWorkVerificationContext context) {
+		MessageDigest digest = sha256();
+		return new ProofOfWorkVerificationSession(
+				context,
+				ProofOfWorkVerificationMode.DETERMINISTIC_SHA256_V1,
+				input -> hash(digest, input),
+				() -> { });
 	}
 
 	@Override

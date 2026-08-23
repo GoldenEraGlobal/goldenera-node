@@ -258,7 +258,8 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 		BlockSyncManagerService service = new BlockSyncManagerService(
 				registry, new ReentrantLock(), directExecutor,
 				mock(MiningService.class), mock(IdentityService.class), validator,
-				chainQuery, blockReorgs, peers, reputation, mock(BlockIngestionService.class));
+				chainQuery, blockReorgs, peers, reputation, mock(BlockIngestionService.class),
+				mock(SyncVerificationAccelerationPolicy.class));
 
 		Address firstIdentity = address(1);
 		Address secondIdentity = address(2);

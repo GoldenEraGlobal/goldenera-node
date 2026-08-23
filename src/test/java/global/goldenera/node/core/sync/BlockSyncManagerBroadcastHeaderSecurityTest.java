@@ -189,7 +189,8 @@ class BlockSyncManagerBroadcastHeaderSecurityTest {
 				mock(BlockReorgs.class),
 				peerRegistry,
 				mock(PeerReputationService.class),
-				ingestion);
+				ingestion,
+				mock(SyncVerificationAccelerationPolicy.class));
 		return new Fixture(service, validator, ingestion, peerRegistry, peer, header, parentBlock, localBest);
 	}
 

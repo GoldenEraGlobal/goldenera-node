@@ -40,6 +40,7 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.properties.MiningProperties;
+import global.goldenera.node.core.properties.RandomXVerificationProperties;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Deterministic;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Pow;
@@ -47,6 +48,7 @@ import global.goldenera.node.core.sandbox.manifest.SandboxManifest.PowAlgorithm;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class ProofOfWorkConfigurationTest {
 
@@ -59,7 +61,7 @@ class ProofOfWorkConfigurationTest {
 		SandboxRuntimeContext production = new SandboxRuntimeContext(
 				ExecutionDomain.PRODUCTION, Network.MAINNET, Optional.empty());
 
-		ProofOfWorkProvider selected = configuration.proofOfWorkProvider(production, provider);
+		ProofOfWorkProvider selected = select(production, provider);
 
 		assertThat(selected).isInstanceOf(RandomXProofOfWorkProvider.class);
 		verify(provider).getObject();
@@ -70,7 +72,7 @@ class ProofOfWorkConfigurationTest {
 		RandomXManager manager = mock(RandomXManager.class);
 		ObjectProvider<RandomXManager> provider = provider(manager);
 
-		ProofOfWorkProvider selected = configuration.proofOfWorkProvider(
+		ProofOfWorkProvider selected = select(
 				sandbox(PowAlgorithm.RANDOMX, DeterministicSha256ProofOfWorkProvider.DOMAIN_V1), provider);
 
 		assertThat(selected).isInstanceOf(RandomXProofOfWorkProvider.class);
@@ -81,7 +83,7 @@ class ProofOfWorkConfigurationTest {
 	void deterministicSandboxSelectsSha256WithoutCreatingRandomXManager() {
 		ObjectProvider<RandomXManager> provider = provider(mock(RandomXManager.class));
 
-		ProofOfWorkProvider selected = configuration.proofOfWorkProvider(
+		ProofOfWorkProvider selected = select(
 				sandbox(PowAlgorithm.DETERMINISTIC_SHA256_V1,
 						DeterministicSha256ProofOfWorkProvider.DOMAIN_V1), provider);
 
@@ -98,6 +100,8 @@ class ProofOfWorkConfigurationTest {
 		new ApplicationContextRunner()
 				.withBean(SandboxRuntimeContext.class, () -> runtimeContext)
 				.withBean(MiningProperties.class, () -> mock(MiningProperties.class))
+				.withBean(RandomXVerificationProperties.class, RandomXVerificationProperties::new)
+				.withBean(SimpleMeterRegistry.class, SimpleMeterRegistry::new)
 				.withBean(ChainQuery.class, () -> mock(ChainQuery.class))
 				.withUserConfiguration(ProofOfWorkConfiguration.class)
 				.run(context -> {
@@ -121,16 +125,23 @@ class ProofOfWorkConfigurationTest {
 		when(sandboxWithoutManifest.isSandbox()).thenReturn(true);
 		when(sandboxWithoutManifest.manifestContext()).thenReturn(Optional.empty());
 
-		assertThatThrownBy(() -> configuration.proofOfWorkProvider(productionWithManifest, provider))
+		assertThatThrownBy(() -> select(productionWithManifest, provider))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("Production proof-of-work");
-		assertThatThrownBy(() -> configuration.proofOfWorkProvider(sandboxWithoutManifest, provider))
+		assertThatThrownBy(() -> select(sandboxWithoutManifest, provider))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("requires a manifest");
-		assertThatThrownBy(() -> configuration.proofOfWorkProvider(
+		assertThatThrownBy(() -> select(
 				sandbox(PowAlgorithm.DETERMINISTIC_SHA256_V1, "goldenera-sandbox-pow-v2"), provider))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("Unsupported deterministic PoW domain");
+	}
+
+	private ProofOfWorkProvider select(
+			SandboxRuntimeContext runtimeContext,
+			ObjectProvider<RandomXManager> provider) {
+		return configuration.proofOfWorkProvider(
+				runtimeContext, provider, new RandomXVerificationProperties(), new SimpleMeterRegistry());
 	}
 
 	@SuppressWarnings("unchecked")

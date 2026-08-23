@@ -23,12 +23,22 @@
  */
 package global.goldenera.node.core.blockchain.pow;
 
+import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 import global.goldenera.node.core.blockchain.crypto.RandomXManager;
 import global.goldenera.node.core.blockchain.crypto.RandomXVmLease;
+import global.goldenera.node.core.blockchain.crypto.RandomXVerificationVmLease;
 import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
+import global.goldenera.node.core.properties.RandomXVerificationProperties;
+import global.goldenera.node.core.sync.SyncVerificationAccelerationPolicy.EndReason;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 /**
  * Production proof-of-work provider preserving the existing RandomX modes:
@@ -37,9 +47,41 @@ import global.goldenera.node.core.properties.RandomXMiningMemoryMode;
 public class RandomXProofOfWorkProvider implements ProofOfWorkProvider {
 
 	private final RandomXManager randomXManager;
+	private final MeterRegistry registry;
+	private final Semaphore verificationPermits;
+	private final Semaphore fullDatasetVerificationPermits;
+	private final int verificationParallelism;
+	private final int fullDatasetVerificationParallelism;
+	private final AtomicInteger activeVerificationWorkers = new AtomicInteger();
 
 	public RandomXProofOfWorkProvider(RandomXManager randomXManager) {
-		this.randomXManager = randomXManager;
+		this(randomXManager, new RandomXVerificationProperties(), new SimpleMeterRegistry(),
+				Runtime.getRuntime().availableProcessors());
+	}
+
+	public RandomXProofOfWorkProvider(RandomXManager randomXManager,
+			RandomXVerificationProperties verificationProperties,
+			MeterRegistry registry) {
+		this(randomXManager, verificationProperties, registry, Runtime.getRuntime().availableProcessors());
+	}
+
+	RandomXProofOfWorkProvider(RandomXManager randomXManager,
+			RandomXVerificationProperties verificationProperties,
+			MeterRegistry registry,
+			int availableProcessors) {
+		this.randomXManager = Objects.requireNonNull(randomXManager, "randomXManager");
+		this.registry = Objects.requireNonNull(registry, "registry");
+		this.verificationParallelism = Objects.requireNonNull(
+				verificationProperties, "verificationProperties").resolveParallelism(availableProcessors);
+		this.fullDatasetVerificationParallelism =
+				verificationProperties.resolveFullDatasetParallelism(availableProcessors);
+		this.verificationPermits = new Semaphore(verificationParallelism, true);
+		this.fullDatasetVerificationPermits = new Semaphore(fullDatasetVerificationParallelism, true);
+		registry.gauge("blockchain.randomx.verification.active_workers", activeVerificationWorkers,
+				AtomicInteger::get);
+		registry.gauge("blockchain.randomx.verification.worker_limit", verificationParallelism);
+		registry.gauge("blockchain.randomx.verification.full_dataset_worker_limit",
+				fullDatasetVerificationParallelism);
 	}
 
 	@Override
@@ -62,10 +104,67 @@ public class RandomXProofOfWorkProvider implements ProofOfWorkProvider {
 	}
 
 	@Override
-	public ProofOfWorkHasher openVerificationHasher(long height,
+	public ProofOfWorkVerificationContext verificationContext(long height,
 			Function<Long, Optional<byte[]>> seedBlockProvider) {
-		RandomXVmLease lease = randomXManager.getLightVMForVerification(height, seedBlockProvider);
-		return new ProofOfWorkHasher(lease::calculateHash, lease::close);
+		return randomXManager.verificationContext(height, seedBlockProvider);
+	}
+
+	@Override
+	public ProofOfWorkVerificationSession openVerificationSession(ProofOfWorkVerificationContext context) {
+		acquireVerificationPermit();
+		RandomXVerificationVmLease lease;
+		try {
+			lease = randomXManager.acquireVerificationVM(context);
+		} catch (RuntimeException | Error failure) {
+			verificationPermits.release();
+			throw failure;
+		}
+		boolean fullDatasetPermit = false;
+		try {
+			if (lease.mode() == ProofOfWorkVerificationMode.RANDOMX_FULL) {
+				acquirePermit(fullDatasetVerificationPermits);
+				fullDatasetPermit = true;
+			}
+		} catch (RuntimeException | Error failure) {
+			lease.close();
+			verificationPermits.release();
+			throw failure;
+		}
+		boolean releaseFullDatasetPermit = fullDatasetPermit;
+		String mode = lease.mode().name().toLowerCase();
+		activeVerificationWorkers.incrementAndGet();
+		registry.counter("blockchain.randomx.verification.vm.created", "mode", mode).increment();
+		AtomicLong hashes = new AtomicLong();
+		return new ProofOfWorkVerificationSession(
+				context,
+				lease.mode(),
+				input -> {
+					long started = System.nanoTime();
+					try {
+						long index = hashes.getAndIncrement();
+						if (index > 0) {
+							registry.counter("blockchain.randomx.verification.vm.reused", "mode", mode)
+									.increment();
+						}
+						registry.counter("blockchain.randomx.verification.hashes", "mode", mode).increment();
+						return lease.vm().calculateHash(input);
+					} finally {
+						registry.timer("blockchain.randomx.verification.hash.duration", "mode", mode)
+								.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
+					}
+				},
+				() -> {
+					try {
+						lease.close();
+					} finally {
+						if (releaseFullDatasetPermit) {
+							fullDatasetVerificationPermits.release();
+						}
+						registry.counter("blockchain.randomx.verification.vm.closed", "mode", mode).increment();
+						activeVerificationWorkers.decrementAndGet();
+						verificationPermits.release();
+					}
+				});
 	}
 
 	@Override
@@ -75,7 +174,7 @@ public class RandomXProofOfWorkProvider implements ProofOfWorkProvider {
 
 	@Override
 	public int verificationConcurrencyLimit(int availableProcessors) {
-		return randomXManager.verificationConcurrencyLimit(availableProcessors);
+		return Math.max(1, Math.min(verificationParallelism, availableProcessors));
 	}
 
 	public boolean isDatasetAllocated() {
@@ -88,6 +187,35 @@ public class RandomXProofOfWorkProvider implements ProofOfWorkProvider {
 
 	public RandomXMiningMemoryMode getMiningMemoryMode() {
 		return randomXManager.getMiningMemoryMode();
+	}
+
+	public void bulkCatchUpStarted(long localHeight, long targetHeight) {
+		randomXManager.syncBulkCatchUpStarted(localHeight, targetHeight);
+	}
+
+	public void progress(long localHeight, long targetHeight) {
+		randomXManager.syncProgress(localHeight, targetHeight);
+	}
+
+	public void syncEnded(EndReason reason) {
+		switch (reason) {
+			case CAUGHT_UP, NEAR_HEAD -> randomXManager.syncCaughtUp();
+			case FAILED -> randomXManager.syncFailed();
+			case STOPPED -> randomXManager.syncStopped();
+		}
+	}
+
+	private void acquireVerificationPermit() {
+		acquirePermit(verificationPermits);
+	}
+
+	private void acquirePermit(Semaphore permits) {
+		try {
+			permits.acquire();
+		} catch (InterruptedException failure) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("Interrupted while waiting for a RandomX verification lease", failure);
+		}
 	}
 
 }

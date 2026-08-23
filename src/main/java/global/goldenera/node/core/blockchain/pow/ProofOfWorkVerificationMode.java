@@ -23,40 +23,8 @@
  */
 package global.goldenera.node.core.blockchain.pow;
 
-import java.util.Objects;
-import java.util.Optional;
-import java.util.function.Function;
-
-import org.apache.tuweni.bytes.Bytes;
-
-/**
- * Consensus proof-of-work provider shared by mining and validation.
- */
-public interface ProofOfWorkProvider {
-
-	void prepareForMining(long height);
-
-	ProofOfWorkHasher openMiningHasher();
-
-	default ProofOfWorkVerificationContext verificationContext(long height,
-			Function<Long, Optional<byte[]>> seedBlockProvider) {
-		Objects.requireNonNull(seedBlockProvider, "seedBlockProvider");
-		return new ProofOfWorkVerificationContext(Bytes.EMPTY);
-	}
-
-	ProofOfWorkVerificationSession openVerificationSession(ProofOfWorkVerificationContext context);
-
-	default ProofOfWorkHasher openVerificationHasher(long height,
-			Function<Long, Optional<byte[]>> seedBlockProvider) {
-		ProofOfWorkVerificationSession session = openVerificationSession(
-				verificationContext(height, seedBlockProvider));
-		return new ProofOfWorkHasher(session::hash, session::close);
-	}
-
-	boolean isInitializationInProgress();
-
-	/** Maximum useful verifier concurrency for this provider and runtime. */
-	default int verificationConcurrencyLimit(int availableProcessors) {
-		return Math.max(1, availableProcessors);
-	}
+public enum ProofOfWorkVerificationMode {
+	RANDOMX_LIGHT,
+	RANDOMX_FULL,
+	DETERMINISTIC_SHA256_V1
 }

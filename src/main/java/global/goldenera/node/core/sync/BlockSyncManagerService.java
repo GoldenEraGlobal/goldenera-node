@@ -51,10 +51,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
@@ -70,8 +74,11 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.Connecte
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
+import global.goldenera.node.core.blockchain.validation.BlockValidator.PreparedHeaderValidation;
 import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
 import global.goldenera.node.core.blockchain.validation.StatelessValidatedHeader;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationContext;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationSession;
 import global.goldenera.node.core.mining.MiningService;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
@@ -103,6 +110,7 @@ public class BlockSyncManagerService {
 	static final int SYNC_CHUNK_SIZE_HEADERS = 1000; // Headers per sync batch
 	static final long TIMEOUT_SECONDS = 20; // Timeout per request (reduced for faster failover)
 	static final long SYNC_POLL_DELAY_MS = 100;
+	static final long HEADER_VALIDATION_DRAIN_TIMEOUT_SECONDS = 30;
 	static final long MAX_IN_FLIGHT_BODY_BYTES = 2L * P2PChannelInitializer.MAX_FRAME_SIZE;
 	static final long MAX_PERSIST_BATCH_BYTES = 128L * 1024 * 1024;
 	static final int EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD = 3;
@@ -156,9 +164,11 @@ public class BlockSyncManagerService {
 	final PeerRegistry peerRegistry;
 	final PeerReputationService peerReputationService;
 	final BlockIngestionService blockIngestionService;
+	final SyncVerificationAccelerationPolicy verificationAccelerationPolicy;
 	final ThreadPoolExecutor headerValidationExecutor;
 	final int headerValidationParallelism;
 
+	@Autowired
 	public BlockSyncManagerService(
 			MeterRegistry registry,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
@@ -170,7 +180,28 @@ public class BlockSyncManagerService {
 			BlockReorgs blockReorgService,
 			PeerRegistry peerRegistry,
 			PeerReputationService peerReputationService,
-			BlockIngestionService blockIngestionService) {
+			BlockIngestionService blockIngestionService,
+			SyncVerificationAccelerationPolicy verificationAccelerationPolicy) {
+		this(registry, masterChainLock, coreTaskExecutor, miningService, identityService,
+				blockValidationService, chainQueryService, blockReorgService, peerRegistry,
+				peerReputationService, blockIngestionService, verificationAccelerationPolicy,
+				Runtime.getRuntime().availableProcessors());
+	}
+
+	BlockSyncManagerService(
+			MeterRegistry registry,
+			ReentrantLock masterChainLock,
+			Executor coreTaskExecutor,
+			MiningService miningService,
+			IdentityService identityService,
+			BlockValidator blockValidationService,
+			ChainQuery chainQueryService,
+			BlockReorgs blockReorgService,
+			PeerRegistry peerRegistry,
+			PeerReputationService peerReputationService,
+			BlockIngestionService blockIngestionService,
+			SyncVerificationAccelerationPolicy verificationAccelerationPolicy,
+			int availableProcessors) {
 		this.registry = registry;
 		this.masterChainLock = masterChainLock;
 		this.coreTaskExecutor = coreTaskExecutor;
@@ -182,7 +213,7 @@ public class BlockSyncManagerService {
 		this.peerRegistry = peerRegistry;
 		this.peerReputationService = peerReputationService;
 		this.blockIngestionService = blockIngestionService;
-		int availableProcessors = Runtime.getRuntime().availableProcessors();
+		this.verificationAccelerationPolicy = verificationAccelerationPolicy;
 		this.headerValidationParallelism = calculateHeaderValidationParallelism(
 				availableProcessors,
 				blockValidationService.headerValidationConcurrencyLimit(availableProcessors));
@@ -207,6 +238,7 @@ public class BlockSyncManagerService {
 	final ExecutorService syncExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sync-Manager"));
 	final AtomicBoolean isRunning = new AtomicBoolean(false);
 	private final AtomicBoolean activeSyncCycle = new AtomicBoolean(false);
+	private final AtomicBoolean acceleratedCatchUpActive = new AtomicBoolean(false);
 
 	@Getter
 	volatile boolean synced = false;
@@ -224,8 +256,21 @@ public class BlockSyncManagerService {
 	private final BodyPipelineTelemetry bodyPipelineTelemetry = new BodyPipelineTelemetry();
 	private final SyncProgressEstimator syncProgressEstimator = new SyncProgressEstimator();
 	private LongSupplier nanoTicker = System::nanoTime;
+	private volatile int lastHeaderValidationWorkers;
+	private volatile int lastHeaderValidationChunks;
+	private volatile int lastHeaderValidationEpochGroups;
 	private volatile long currentPersistBatchBytes;
 	private volatile long peakPersistBatchBytes;
+
+	HeaderValidationWorkSnapshot headerValidationWorkSnapshot() {
+		return new HeaderValidationWorkSnapshot(
+				lastHeaderValidationWorkers,
+				lastHeaderValidationChunks,
+				lastHeaderValidationEpochGroups);
+	}
+
+	record HeaderValidationWorkSnapshot(int workers, int chunks, int epochGroups) {
+	}
 
 	public SyncRuntimeSnapshot runtimeSnapshot() {
 		SyncRequestTelemetry.Snapshot requestTelemetry = syncRequestTelemetry.snapshot();
@@ -315,6 +360,12 @@ public class BlockSyncManagerService {
 				executor -> executor.getQueue().size());
 		registry.gauge("blockchain.sync.header_validation.parallelism", this,
 				svc -> svc.headerValidationParallelism);
+		registry.gauge("blockchain.sync.header_validation.workers", this,
+				svc -> svc.lastHeaderValidationWorkers);
+		registry.gauge("blockchain.sync.header_validation.chunks", this,
+				svc -> svc.lastHeaderValidationChunks);
+		registry.gauge("blockchain.sync.header_validation.epoch_groups", this,
+				svc -> svc.lastHeaderValidationEpochGroups);
 	}
 
 	/** Wakes the sync loop immediately instead of waiting for its periodic poll. */
@@ -329,6 +380,7 @@ public class BlockSyncManagerService {
 		}
 		syncExecutor.shutdownNow();
 		headerValidationExecutor.shutdownNow();
+		signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.STOPPED, true);
 	}
 
 	private void syncLoop() {
@@ -339,9 +391,13 @@ public class BlockSyncManagerService {
 				signalQueue.poll(pollDelay, TimeUnit.MILLISECONDS);
 				checkAndSync();
 			} catch (InterruptedException e) {
+				miningService.resumeMining();
+				signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.FAILED, false);
 				Thread.currentThread().interrupt();
 				break;
 			} catch (Exception e) {
+				miningService.resumeMining();
+				signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.FAILED, false);
 				log.error("Error in Sync Loop", e);
 			}
 		}
@@ -358,6 +414,7 @@ public class BlockSyncManagerService {
 					synced = true;
 				}
 				miningService.resumeMining();
+				signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.CAUGHT_UP, false);
 				return;
 			}
 			RemotePeer bestPeer = bestPeerOpt.get();
@@ -371,6 +428,7 @@ public class BlockSyncManagerService {
 						localBestStored.getHeight(), localTotalDifficulty,
 						bestPeer.getHeadHeight(), advertisedTotalDifficulty, bestPeer.getIdentity());
 				synced = false;
+				signalCatchUpGap(localBestStored.getHeight(), bestPeer.getHeadHeight());
 
 				boolean success = performSync(bestPeer, localBestStored, advertisedTotalDifficulty);
 
@@ -383,8 +441,11 @@ public class BlockSyncManagerService {
 					synced = true;
 				}
 				miningService.resumeMining();
+				signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.CAUGHT_UP, false);
 			}
 		} catch (Exception e) {
+			miningService.resumeMining();
+			signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.FAILED, false);
 			log.error("Critical error in checkAndSync", e);
 		}
 	}
@@ -421,6 +482,9 @@ public class BlockSyncManagerService {
 							+ ") but repeatedly sent no headers for the same local head.");
 				}
 
+				// A previously successful cycle may have retained the SYNC suspension.
+				// A genuine no-work result must never strand mining paused.
+				miningService.resumeMining();
 				emptyHeaderClaimTracker.clear(peer.getIdentity());
 				log.debug("No new headers found from peer");
 				cycleSucceeded = true;
@@ -430,20 +494,19 @@ public class BlockSyncManagerService {
 
 			log.info("Downloaded {} headers in {}ms", headersToSync.size(), nanosToMillis(headerNanos));
 
-			// Validate headers in parallel AND warm up lazy getters (hash, size)
-			// BlockHeaderImpl caches these values internally after first call
+			// Validate headers in parallel. Header hashes were already computed while
+			// checking linkage, so validation can reuse them to build the seed context.
 			long validateStart = nanoTime();
 			Map<Hash, StatelessValidatedHeader> validatedHeaders;
 			try {
-				validatedHeaders = validateBatch(headersToSync);
+				validatedHeaders = validateBatchWithMiningCoordination(headersToSync);
 			} finally {
 				recordStageDuration("header_validation", validateStart);
 			}
 			long validateNanos = elapsedNanos(validateStart);
 			log.info("Validated {} headers in {}ms", headersToSync.size(), nanosToMillis(validateNanos));
 
-			// Download bodies and persist in batches to limit RAM usage
-			miningService.pauseMining();
+			// Download bodies and persist in batches to limit RAM usage.
 			long bodyStart = nanoTime();
 			int totalBlocksProcessed;
 			try {
@@ -461,6 +524,7 @@ public class BlockSyncManagerService {
 			registry.counter("blockchain.sync.blocks_downloaded").increment(totalBlocksProcessed);
 			SyncProgressEstimator.Estimate progress = syncProgressEstimator.recordCycle(
 					true, blocksAdvanced, totalNanos, committedHeight, targetHeight).orElseThrow();
+			signalSyncProgress(committedHeight, targetHeight);
 
 			log.info("Sync progress: local {}/{}, remaining {}, effective rate {} blocks/s, ETA {}, "
 					+ "cycle {} blocks in {}ms (headers {}ms, validation {}ms, bodies {}ms)",
@@ -492,10 +556,62 @@ public class BlockSyncManagerService {
 			peerReputationService.recordFailure(peer.getIdentity());
 			return false;
 		} finally {
+			if (!cycleSucceeded) {
+				miningService.resumeMining();
+				signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.FAILED, false);
+			}
 			activeSyncCycle.set(false);
 			sample.stop(registry.timer("blockchain.sync.batch_time"));
 			registry.counter("blockchain.sync.cycles", "outcome", cycleSucceeded ? "success" : "failure")
 					.increment();
+		}
+	}
+
+	void signalCatchUpGap(long localHeight, long targetHeight) {
+		try {
+			if (acceleratedCatchUpActive.compareAndSet(false, true)) {
+				verificationAccelerationPolicy.bulkCatchUpStarted(localHeight, targetHeight);
+			} else {
+				verificationAccelerationPolicy.progress(localHeight, targetHeight);
+			}
+		} catch (RuntimeException failure) {
+			log.warn("Sync verification acceleration start signal failed", failure);
+		}
+	}
+
+	void signalSyncProgress(long localHeight, long targetHeight) {
+		try {
+			verificationAccelerationPolicy.progress(localHeight, targetHeight);
+		} catch (RuntimeException failure) {
+			log.warn("Sync verification acceleration progress signal failed", failure);
+		}
+	}
+
+	void signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason reason, boolean force) {
+		if (!acceleratedCatchUpActive.getAndSet(false) && !force) {
+			return;
+		}
+		try {
+			verificationAccelerationPolicy.syncEnded(reason);
+		} catch (RuntimeException failure) {
+			log.warn("Sync verification acceleration end signal failed: {}", reason, failure);
+		}
+	}
+
+	Map<Hash, StatelessValidatedHeader> validateBatchWithMiningCoordination(List<BlockHeader> headers) {
+		// Header proof-of-work is the dominant CPU stage. Quiesce autonomous mining
+		// before it starts instead of allowing mining and verification to compete.
+		long miningPauseStart = nanoTime();
+		try {
+			miningService.pauseMining();
+		} finally {
+			recordStageDuration("mining_quiescence", miningPauseStart);
+		}
+		try {
+			return validateBatch(headers);
+		} catch (RuntimeException | Error failure) {
+			miningService.resumeMining();
+			throw failure;
 		}
 	}
 
@@ -1035,35 +1151,45 @@ public class BlockSyncManagerService {
 	private record EmptyHeaderObservation(Hash localHeadHash, int count) {
 	}
 
-	/**
-	 * Validates headers in parallel AND warms up lazy getters (hash, size).
-	 * BlockHeaderImpl caches these values internally after first call,
-	 * so subsequent calls to getHash()/getSize() are O(1).
-	 */
+	/** Validates headers in parallel against the complete batch seed context. */
 	Map<Hash, StatelessValidatedHeader> validateBatch(List<BlockHeader> headers) {
 		Timer.Sample sample = Timer.start(registry);
 		try {
-			List<Callable<WarmedHeader>> warmTasks = headers.stream()
-					.map(header -> (Callable<WarmedHeader>) () -> {
-						Hash hash = header.getHash();
-						header.getSize();
-						header.getIdentity();
-						return new WarmedHeader(header.getHeight(), hash);
-					})
-					.toList();
-			Map<Long, Hash> contextMap = new HashMap<>();
-			executeHeaderValidationTasks(warmTasks)
-					.forEach(header -> contextMap.put(header.height(), header.hash()));
+			Map<Long, Hash> contextMap = new HashMap<>(headers.size());
+			for (BlockHeader header : headers) {
+				contextMap.put(header.getHeight(), header.getHash());
+			}
 			Map<Long, Hash> immutableContext = Map.copyOf(contextMap);
+			List<PreparedHeaderValidation> preparedHeaders = new ArrayList<>(headers.size());
+			for (BlockHeader header : headers) {
+				preparedHeaders.add(blockValidationService.prepareHeader(header, immutableContext));
+			}
 
-			List<Callable<StatelessValidatedHeader>> validationTasks = headers.stream()
-					.map(header -> (Callable<StatelessValidatedHeader>) () ->
-							blockValidationService.validateHeader(header, immutableContext))
+			List<HeaderEpochGroup> epochGroups = groupPreparedHeaders(preparedHeaders);
+			AtomicReferenceArray<StatelessValidatedHeader> proofs =
+					new AtomicReferenceArray<>(headers.size());
+			List<HeaderEpochWork> epochWork = epochGroups.stream()
+					.map(group -> new HeaderEpochWork(group.context(), partitionEpochGroup(group)))
 					.toList();
+			lastHeaderValidationEpochGroups = epochGroups.size();
+			lastHeaderValidationChunks = epochWork.stream()
+					.mapToInt(work -> work.chunks().size())
+					.sum();
+			lastHeaderValidationWorkers = epochWork.stream()
+					.mapToInt(work -> work.chunks().size())
+					.max()
+					.orElse(0);
+			for (HeaderEpochWork work : epochWork) {
+				validateEpochGroup(work.context(), work.chunks(), proofs);
+			}
+
 			Map<Hash, StatelessValidatedHeader> validatedHeaders = new HashMap<>();
-			List<StatelessValidatedHeader> proofs = executeHeaderValidationTasks(validationTasks);
 			for (int index = 0; index < headers.size(); index++) {
-				validatedHeaders.put(headers.get(index).getHash(), proofs.get(index));
+				StatelessValidatedHeader proof = proofs.get(index);
+				if (proof == null) {
+					throw new GEFailedException("Missing stateless header proof at index " + index);
+				}
+				validatedHeaders.put(headers.get(index).getHash(), proof);
 			}
 			return Map.copyOf(validatedHeaders);
 		} catch (RuntimeException | Error failure) {
@@ -1072,6 +1198,107 @@ public class BlockSyncManagerService {
 		} finally {
 			sample.stop(registry.timer("blockchain.sync.header_validation.duration"));
 		}
+	}
+
+	private List<HeaderEpochGroup> groupPreparedHeaders(List<PreparedHeaderValidation> preparedHeaders) {
+		List<MutableHeaderEpochGroup> groups = new ArrayList<>();
+		for (int index = 0; index < preparedHeaders.size(); index++) {
+			PreparedHeaderValidation prepared = preparedHeaders.get(index);
+			ProofOfWorkVerificationContext context = prepared.verificationContext();
+			MutableHeaderEpochGroup group = groups.isEmpty() ? null : groups.getLast();
+			if (group == null || !group.context.equals(context)) {
+				group = new MutableHeaderEpochGroup(context);
+				groups.add(group);
+			}
+			group.headers.add(new IndexedPreparedHeader(index, prepared));
+		}
+		return groups.stream()
+				.map(group -> new HeaderEpochGroup(group.context, List.copyOf(group.headers)))
+				.toList();
+	}
+
+	private List<HeaderValidationChunk> partitionEpochGroup(HeaderEpochGroup group) {
+		int workerCount = Math.min(headerValidationParallelism, group.headers().size());
+		int baseSize = group.headers().size() / workerCount;
+		int remainder = group.headers().size() % workerCount;
+		List<HeaderValidationChunk> chunks = new ArrayList<>(workerCount);
+		int offset = 0;
+		for (int worker = 0; worker < workerCount; worker++) {
+			int size = baseSize + (worker < remainder ? 1 : 0);
+			int end = offset + size;
+			chunks.add(new HeaderValidationChunk(List.copyOf(group.headers().subList(offset, end))));
+			offset = end;
+		}
+		return List.copyOf(chunks);
+	}
+
+	private void validateEpochGroup(
+			ProofOfWorkVerificationContext context,
+			List<HeaderValidationChunk> chunks,
+			AtomicReferenceArray<StatelessValidatedHeader> proofs) {
+		AtomicReference<IndexedValidationFailure> earliestFailure = new AtomicReference<>();
+		List<Callable<Void>> tasks = chunks.stream()
+				.map(chunk -> (Callable<Void>) () -> {
+					validateChunk(context, chunk, proofs, earliestFailure);
+					return null;
+				})
+				.toList();
+		executeHeaderValidationTasks(tasks);
+		IndexedValidationFailure failure = earliestFailure.get();
+		if (failure != null) {
+			throwHeaderValidationFailure(failure.cause());
+		}
+	}
+
+	private void validateChunk(
+			ProofOfWorkVerificationContext context,
+			HeaderValidationChunk chunk,
+			AtomicReferenceArray<StatelessValidatedHeader> proofs,
+			AtomicReference<IndexedValidationFailure> earliestFailure) {
+		int firstIndex = chunk.headers().getFirst().index();
+		int validationFailureIndex = -1;
+		try (ProofOfWorkVerificationSession session =
+				blockValidationService.openVerificationSession(context)) {
+			for (IndexedPreparedHeader indexed : chunk.headers()) {
+				IndexedValidationFailure cutoff = earliestFailure.get();
+				if (cutoff != null && indexed.index() > cutoff.index()) {
+					return;
+				}
+				try {
+					StatelessValidatedHeader proof = blockValidationService.validatePreparedHeader(
+							indexed.prepared(), session);
+					proofs.set(indexed.index(), proof);
+				} catch (RuntimeException | Error failure) {
+					validationFailureIndex = indexed.index();
+					recordEarlierFailure(earliestFailure, indexed.index(), failure);
+					break;
+				}
+			}
+		} catch (RuntimeException | Error failure) {
+			if (validationFailureIndex < 0) {
+				recordEarlierFailure(earliestFailure, firstIndex, failure);
+			}
+		}
+	}
+
+	private void recordEarlierFailure(
+			AtomicReference<IndexedValidationFailure> earliestFailure,
+			int index,
+			Throwable cause) {
+		earliestFailure.accumulateAndGet(
+				new IndexedValidationFailure(index, cause),
+				(current, candidate) -> current == null || candidate.index() < current.index()
+						? candidate : current);
+	}
+
+	private void throwHeaderValidationFailure(Throwable cause) {
+		if (cause instanceof RuntimeException runtimeException) {
+			throw runtimeException;
+		}
+		if (cause instanceof Error error) {
+			throw error;
+		}
+		throw new GEFailedException("Header validation failed", cause);
 	}
 
 	private <T> List<T> executeHeaderValidationTasks(List<? extends Callable<T>> tasks) {
@@ -1107,9 +1334,47 @@ public class BlockSyncManagerService {
 
 	private void cancelHeaderValidation(List<? extends Future<?>> futures) {
 		futures.forEach(future -> future.cancel(true));
+		headerValidationExecutor.purge();
+		long deadline = System.nanoTime()
+				+ TimeUnit.SECONDS.toNanos(HEADER_VALIDATION_DRAIN_TIMEOUT_SECONDS);
+		while ((headerValidationExecutor.getActiveCount() > 0
+				|| !headerValidationExecutor.getQueue().isEmpty())
+				&& System.nanoTime() < deadline) {
+			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+		}
+		if (headerValidationExecutor.getActiveCount() > 0
+				|| !headerValidationExecutor.getQueue().isEmpty()) {
+			log.warn("Header validation workers did not drain within {} seconds",
+					HEADER_VALIDATION_DRAIN_TIMEOUT_SECONDS);
+		}
 	}
 
-	private record WarmedHeader(long height, Hash hash) {
+	private static final class MutableHeaderEpochGroup {
+		private final ProofOfWorkVerificationContext context;
+		private final List<IndexedPreparedHeader> headers = new ArrayList<>();
+
+		private MutableHeaderEpochGroup(ProofOfWorkVerificationContext context) {
+			this.context = context;
+		}
+	}
+
+	private record IndexedPreparedHeader(int index, PreparedHeaderValidation prepared) {
+	}
+
+	private record HeaderEpochGroup(
+			ProofOfWorkVerificationContext context,
+			List<IndexedPreparedHeader> headers) {
+	}
+
+	private record HeaderValidationChunk(List<IndexedPreparedHeader> headers) {
+	}
+
+	private record HeaderEpochWork(
+			ProofOfWorkVerificationContext context,
+			List<HeaderValidationChunk> chunks) {
+	}
+
+	private record IndexedValidationFailure(int index, Throwable cause) {
 	}
 
 	static final class BodyInflightBudget {

@@ -138,7 +138,8 @@ class BlockSyncManagerRequestCorrelationTest {
 				mock(BlockReorgs.class),
 				mock(PeerRegistry.class),
 				mock(PeerReputationService.class),
-				mock(BlockIngestionService.class));
+				mock(BlockIngestionService.class),
+				mock(SyncVerificationAccelerationPolicy.class));
 		return new Fixture(service, registry);
 	}
 

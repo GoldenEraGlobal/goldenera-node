@@ -31,7 +31,9 @@ import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 import org.springframework.stereotype.Service;
 
@@ -53,6 +55,8 @@ import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkTarget;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationContext;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationSession;
 import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.time.ProductionChainClock;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
@@ -123,48 +127,133 @@ public class BlockValidator {
 		return proofOfWorkProvider.verificationConcurrencyLimit(availableProcessors);
 	}
 
+	public ProofOfWorkVerificationSession openVerificationSession(ProofOfWorkVerificationContext context) {
+		return proofOfWorkProvider.openVerificationSession(context);
+	}
+
 	public StatelessValidatedHeader validateHeader(@NonNull BlockHeader header, @NonNull Map<Long, Hash> batchContext) {
 		try {
-			if (header.getHeight() == 0) {
-				throw new GEValidationException("Consensus violation: Genesis block cannot be validated.");
+			HeaderValidationMaterial material = prepareHeaderMaterial(header);
+			try (ProofOfWorkHasher hasher = proofOfWorkProvider.openVerificationHasher(
+					header.getHeight(), seedResolver(batchContext))) {
+				validateProofOfWork(header, material.target(), hasher.hash(material.powInput()));
+				return new StatelessValidatedHeader(header);
 			}
-
-			// 1. Structural fields required by hashing, signature and contextual checks.
-			checkArgument(header.getPreviousHash() != null, "Previous block hash cannot be null");
-			checkArgument(header.getTxRootHash() != null, "Transaction root hash cannot be null");
-			checkArgument(header.getStateRootHash() != null, "State root hash cannot be null");
-			checkArgument(header.getTimestamp() != null, "Block timestamp cannot be null");
-			checkArgument(header.getDifficulty() != null && header.getDifficulty().signum() > 0,
-					"Block difficulty must be positive");
-			checkArgument(header.getCoinbase() != null && !header.getCoinbase().equals(Address.ZERO),
-					"Consensus violation: Miner coinbase cannot be null or the zero address.");
-			checkArgument(header.getSignature() != null && !header.getSignature().equals(Signature.ZERO),
-					"Consensus violation: Miner signature cannot be null or the zero signature.");
-			checkArgument(header.getIdentity() != null && !header.getIdentity().equals(Address.ZERO),
-					"Consensus violation: Miner identity cannot be null or the zero address.");
-
-			// 2. Header Size sanity check
-			checkArgument(header.getSize() <= Constants.getSettings().getMaxHeaderSizeInBytes(header.getHeight()),
-					"Header size exceeded: %s", header.getSize());
-
-			// 3. Checkpoint (Fast fail)
-			if (!checkpointService.verifyCheckpoint(header.getHeight(), header.getHash())) {
-				throw new GEValidationException("Checkpoint mismatch for block " + header.getHeight());
-			}
-			if (Constants.isForkActive(ForkName.MINING_ECONOMICS, header.getHeight())) {
-				checkArgument(header.getSignature().validate(BlockHeaderUtil.hashForSigning(header), header.getIdentity()),
-						"Miner signature does not authenticate the recovered identity");
-			}
-			// 4. Proof-of-work calculation
-			validateProofOfWorkInternal(header, batchContext);
-			return new StatelessValidatedHeader(header);
 		} catch (BlockValidationException e) {
 			throw e;
 		} catch (Exception e) {
-			log.warn("Stateless validation failed for header at height {}: {}", header.getHeight(), e.getMessage());
-			throw new BlockValidationException(
-					BlockValidationException.Category.STATELESS, "PoW Validation failed", e);
+			throw statelessHeaderFailure(header, e);
 		}
+	}
+
+	public PreparedHeaderValidation prepareHeader(
+			@NonNull BlockHeader header,
+			@NonNull Map<Long, Hash> batchContext) {
+		try {
+			HeaderValidationMaterial material = prepareHeaderMaterial(header);
+			ProofOfWorkVerificationContext verificationContext = proofOfWorkProvider.verificationContext(
+					header.getHeight(), seedResolver(batchContext));
+			return new PreparedHeaderValidation(
+					header,
+					material.hash(),
+					material.powInput(),
+					material.target(),
+					verificationContext);
+		} catch (BlockValidationException e) {
+			throw e;
+		} catch (Exception e) {
+			throw statelessHeaderFailure(header, e);
+		}
+	}
+
+	public StatelessValidatedHeader validatePreparedHeader(
+			@NonNull PreparedHeaderValidation prepared,
+			@NonNull ProofOfWorkVerificationSession session) {
+		try {
+			checkArgument(prepared.verificationContext().equals(session.context()),
+					"Proof-of-work verification session uses a different resource context");
+			byte[] proof = session.hash(prepared.powInput());
+			validateProofOfWork(prepared.header(), prepared.target(), proof);
+			return new StatelessValidatedHeader(prepared.header());
+		} catch (BlockValidationException e) {
+			throw e;
+		} catch (Exception e) {
+			throw statelessHeaderFailure(prepared.header(), e);
+		}
+	}
+
+	private HeaderValidationMaterial prepareHeaderMaterial(BlockHeader header) {
+		if (header.getHeight() == 0) {
+			throw new GEValidationException("Consensus violation: Genesis block cannot be validated.");
+		}
+		checkArgument(header.getPreviousHash() != null, "Previous block hash cannot be null");
+		checkArgument(header.getTxRootHash() != null, "Transaction root hash cannot be null");
+		checkArgument(header.getStateRootHash() != null, "State root hash cannot be null");
+		checkArgument(header.getTimestamp() != null, "Block timestamp cannot be null");
+		checkArgument(header.getDifficulty() != null && header.getDifficulty().signum() > 0,
+				"Block difficulty must be positive");
+		checkArgument(header.getCoinbase() != null && !header.getCoinbase().equals(Address.ZERO),
+				"Consensus violation: Miner coinbase cannot be null or the zero address.");
+		checkArgument(header.getSignature() != null && !header.getSignature().equals(Signature.ZERO),
+				"Consensus violation: Miner signature cannot be null or the zero signature.");
+		checkArgument(header.getIdentity() != null && !header.getIdentity().equals(Address.ZERO),
+				"Consensus violation: Miner identity cannot be null or the zero address.");
+		checkArgument(header.getSize() <= Constants.getSettings().getMaxHeaderSizeInBytes(header.getHeight()),
+				"Header size exceeded: %s", header.getSize());
+		Hash headerHash = header.getHash();
+		if (!checkpointService.verifyCheckpoint(header.getHeight(), headerHash)) {
+			throw new GEValidationException("Checkpoint mismatch for block " + header.getHeight());
+		}
+		if (Constants.isForkActive(ForkName.MINING_ECONOMICS, header.getHeight())) {
+			checkArgument(header.getSignature().validate(BlockHeaderUtil.hashForSigning(header), header.getIdentity()),
+					"Miner signature does not authenticate the recovered identity");
+		}
+		BigInteger target = DifficultyUtil.calculateTargetFromDifficulty(header.getDifficulty());
+		return new HeaderValidationMaterial(
+				headerHash, BlockHeaderUtil.powInput(header), ProofOfWorkTarget.of(target));
+	}
+
+	private Function<Long, Optional<byte[]>> seedResolver(Map<Long, Hash> batchContext) {
+		return height -> Optional.ofNullable(batchContext.get(height)).map(Hash::toArray);
+	}
+
+	private void validateProofOfWork(BlockHeader header, ProofOfWorkTarget target, byte[] proof) {
+		if (!target.accepts(proof)) {
+			BigInteger resultValue = new BigInteger(1, proof);
+			throw new GEValidationException(String.format(
+					"PoW Failed! Hash %s > Target %s",
+					resultValue.toString(16), target.value().toString(16)));
+		}
+	}
+
+	private BlockValidationException statelessHeaderFailure(BlockHeader header, Exception cause) {
+		log.warn("Stateless validation failed for header at height {}: {}", header.getHeight(), cause.getMessage());
+		return new BlockValidationException(
+				BlockValidationException.Category.STATELESS, "PoW Validation failed", cause);
+	}
+
+	public record PreparedHeaderValidation(
+			BlockHeader header,
+			Hash hash,
+			byte[] powInput,
+			ProofOfWorkTarget target,
+			ProofOfWorkVerificationContext verificationContext) {
+
+		public PreparedHeaderValidation {
+			Objects.requireNonNull(header, "header");
+			Objects.requireNonNull(hash, "hash");
+			powInput = Objects.requireNonNull(powInput, "powInput").clone();
+			Objects.requireNonNull(target, "target");
+			Objects.requireNonNull(verificationContext, "verificationContext");
+		}
+
+		@Override
+		public byte[] powInput() {
+			return powInput.clone();
+		}
+	}
+
+	private record HeaderValidationMaterial(Hash hash, byte[] powInput, ProofOfWorkTarget target) {
 	}
 
 	/**
@@ -318,33 +407,4 @@ public class BlockValidator {
 				"Full Block Validation failed: " + cause.getMessage(), cause);
 	}
 
-	// --- Private Helpers ---
-
-	private void validateProofOfWorkInternal(BlockHeader header, Map<Long, Hash> batchContext) {
-		BigInteger difficulty = header.getDifficulty();
-		BigInteger target = DifficultyUtil.calculateTargetFromDifficulty(difficulty);
-		ProofOfWorkTarget proofOfWorkTarget = ProofOfWorkTarget.of(target);
-
-		byte[] powInput = BlockHeaderUtil.powInput(header);
-		byte[] randomXHashBytes;
-
-		// Batch context supplies seed blocks that have not reached local storage yet.
-		// The production provider falls back to its canonical chain query when absent.
-
-		try (ProofOfWorkHasher hasher = proofOfWorkProvider.openVerificationHasher(header.getHeight(), height -> {
-			if (batchContext.containsKey(height)) {
-				return Optional.of(batchContext.get(height).toArray());
-			}
-			return Optional.empty();
-		})) {
-			randomXHashBytes = hasher.hash(powInput);
-		}
-
-		if (!proofOfWorkTarget.accepts(randomXHashBytes)) {
-			BigInteger resultValue = new BigInteger(1, randomXHashBytes);
-			throw new GEValidationException(String.format(
-					"PoW Failed! Hash %s > Target %s",
-					resultValue.toString(16), proofOfWorkTarget.value().toString(16)));
-		}
-	}
 }

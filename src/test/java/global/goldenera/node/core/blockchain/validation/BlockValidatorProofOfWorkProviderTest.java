@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.bytes.Bytes32;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -59,6 +60,9 @@ import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationContext;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationMode;
+import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationSession;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
 import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.sync.BlockOrphanBufferService;
@@ -113,6 +117,39 @@ class BlockValidatorProofOfWorkProviderTest {
 				seed -> assertThat(seed).containsExactly(batchSeed.toArray()));
 		assertThat(resolver.getValue().apply(1L)).isEmpty();
 		verify(hasher).close();
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void preparedValidationPreservesCanonicalInputSeedContextAndTargetParity() {
+		ProofOfWorkProvider provider = mock(ProofOfWorkProvider.class);
+		CheckpointRegistry checkpoints = mock(CheckpointRegistry.class);
+		when(checkpoints.verifyCheckpoint(anyLong(), any(Hash.class))).thenReturn(true);
+		ProofOfWorkVerificationContext context = new ProofOfWorkVerificationContext(Bytes.of(9));
+		when(provider.verificationContext(anyLong(), any())).thenReturn(context);
+		BlockValidator validator = new BlockValidator(provider, mock(DifficultyCalculator.class), checkpoints,
+				mock(TxValidator.class), new ValidatorMiningPolicyService());
+		BlockHeader header = header(BigInteger.TWO);
+		Hash batchSeed = Hash.fromHexString(
+				"0x00000000000000000000000000000000000000000000000000000000000000bb");
+		byte[] targetHash = toHash(DifficultyUtil.calculateTargetFromDifficulty(BigInteger.TWO));
+
+		BlockValidator.PreparedHeaderValidation prepared = validator.prepareHeader(
+				header, Map.of(0L, batchSeed));
+		try (ProofOfWorkVerificationSession session = new ProofOfWorkVerificationSession(
+				context,
+				ProofOfWorkVerificationMode.RANDOMX_LIGHT,
+				input -> targetHash,
+				() -> { })) {
+			assertThatCode(() -> validator.validatePreparedHeader(prepared, session)).doesNotThrowAnyException();
+		}
+
+		assertThat(prepared.hash()).isEqualTo(header.getHash());
+		assertThat(prepared.powInput()).containsExactly(BlockHeaderUtil.powInput(header));
+		ArgumentCaptor<Function<Long, Optional<byte[]>>> resolver = ArgumentCaptor.forClass(Function.class);
+		verify(provider).verificationContext(eq(header.getHeight()), resolver.capture());
+		assertThat(resolver.getValue().apply(0L)).hasValueSatisfying(
+				seed -> assertThat(seed).containsExactly(batchSeed.toArray()));
 	}
 
 	@Test
