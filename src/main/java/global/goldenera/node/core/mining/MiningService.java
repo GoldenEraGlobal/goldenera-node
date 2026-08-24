@@ -422,6 +422,7 @@ public class MiningService {
 
 	private void runMiningLoop() {
 		beginActiveWork(ActiveWork.AUTONOMOUS, MiningAttemptContext.autonomous());
+		log.info("Mining loop started");
 		try {
 			while (autonomousMiningAllowed()) {
 				Thread.interrupted();
@@ -453,6 +454,7 @@ public class MiningService {
 			activeAttempt = null;
 			isMining.set(false);
 			endActiveWork();
+			log.info("Mining loop stopped");
 		}
 	}
 
@@ -1142,7 +1144,7 @@ public class MiningService {
 			}
 			try {
 				blockMiningExecutor.submit(this::runMiningLoop);
-				log.info("Mining started");
+				log.info("Mining scheduled");
 			} catch (RejectedExecutionException e) {
 				isMining.set(false);
 			}

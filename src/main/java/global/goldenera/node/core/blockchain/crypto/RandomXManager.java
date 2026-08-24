@@ -256,7 +256,8 @@ public class RandomXManager {
 		if (gap >= syncVerificationProperties.getBulkEnterGap() && now >= syncCooldownUntilNanos) {
 			syncBulkActive = true;
 			syncBulkActiveGauge.set(1);
-			syncRegistry.counter("blockchain.randomx.sync_dataset.bulk_transitions", "state", "entered")
+			syncRegistry.counter("blockchain.randomx.sync_dataset.bulk_transitions", "state", "entered",
+					"reason", "catch_up_gap")
 					.increment();
 			log.info("RandomX sync accelerator entered BULK mode for gap {}", gap);
 		} else {
@@ -530,7 +531,8 @@ public class RandomXManager {
 				}
 				syncDatasetResources = candidate;
 				syncDatasetSeed = Bytes.wrap(requiredSeed.clone());
-				syncRegistry.counter("blockchain.randomx.sync_dataset.builds", "outcome", "success").increment();
+				syncRegistry.counter("blockchain.randomx.sync_dataset.builds", "outcome", "success",
+						"reason", "none").increment();
 				syncRegistry.timer("blockchain.randomx.sync_dataset.build.duration")
 						.record(System.nanoTime() - started, TimeUnit.NANOSECONDS);
 				log.info("RandomX sync accelerator published FULL dataset for seed {} after {}ms",

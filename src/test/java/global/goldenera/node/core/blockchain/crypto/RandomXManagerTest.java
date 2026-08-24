@@ -70,6 +70,8 @@ import global.goldenera.randomx.RandomXDataset;
 import global.goldenera.randomx.RandomXFlag;
 import global.goldenera.randomx.RandomXVM;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 
 class RandomXManagerTest {
 
@@ -492,7 +494,7 @@ class RandomXManagerTest {
 	void acceleratorPublishesLifecycleAndBuildMetrics() {
 		RecordingFactory factory = new RecordingFactory();
 		RandomXManager manager = manager(properties(false, RandomXMiningMemoryMode.FULL), productionContext(), factory);
-		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
 		manager.configureSyncVerificationAcceleration(
 				highMemoryProperties(), false, registry, this::highMemory);
 		manager.ensureInitializedForHeight(1L);
@@ -501,13 +503,20 @@ class RandomXManagerTest {
 		manager.acquireVerificationVM(context).close();
 
 		assertThat(registry.get("blockchain.randomx.sync_dataset.builds")
-				.tag("outcome", "success").counter().count()).isEqualTo(1);
+				.tag("outcome", "success").tag("reason", "none").counter().count()).isEqualTo(1);
 		assertThat(registry.get("blockchain.randomx.sync_dataset.active").gauge().value()).isEqualTo(1);
 		assertThat(registry.get("blockchain.randomx.sync_dataset.bulk_active").gauge().value()).isEqualTo(1);
 
 		manager.syncCaughtUp();
 		assertThat(registry.get("blockchain.randomx.sync_dataset.active").gauge().value()).isZero();
 		assertThat(registry.get("blockchain.randomx.sync_dataset.bulk_active").gauge().value()).isZero();
+		assertThat(registry.get("blockchain.randomx.sync_dataset.bulk_transitions")
+				.tag("state", "entered").tag("reason", "catch_up_gap").counter().count()).isEqualTo(1);
+		assertThat(registry.get("blockchain.randomx.sync_dataset.bulk_transitions")
+				.tag("state", "exited").tag("reason", "caught_up").counter().count()).isEqualTo(1);
+		assertThat(registry.scrape()).contains(
+				"blockchain_randomx_sync_dataset_bulk_transitions_total{reason=\"catch_up_gap\",state=\"entered\"} 1.0",
+				"blockchain_randomx_sync_dataset_bulk_transitions_total{reason=\"caught_up\",state=\"exited\"} 1.0");
 		manager.close();
 	}
 

@@ -36,6 +36,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -96,6 +97,7 @@ public class MiningBlockAssemblerService {
 	IdentityService identityService;
 	ValidatorMiningPolicyService validatorMiningPolicyService;
 	ChainClock chainClock;
+	AtomicReference<String> lastMiningIneligibility = new AtomicReference<>();
 
 	@Autowired
 	public MiningBlockAssemblerService(WorldStateFactory worldStateFactory, MempoolManager mempoolService,
@@ -164,19 +166,24 @@ public class MiningBlockAssemblerService {
 
 		WorldState worldState = worldStateFactory.createForMining(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
+		long nextHeight = parentBlock.getHeight() + 1;
 
 		// Check if miner identity is a valid validator (skip if no validators
 		// registered - open mining)
 		Address minerIdentity = identityService.getNodeIdentityAddress();
 
 		if (minerIdentity.equals(Address.ZERO)) {
-			log.error("Mining skipped: Miner identity cannot be zero!");
+			if (miningIneligibilityChanged(nextHeight, "zero_identity")) {
+				log.error("Mining hashing is waiting for block #{}: node identity cannot be zero", nextHeight);
+			}
 			return Optional.empty();
 		}
 
 		if (params.getCurrentValidatorCount() > 0 && !worldState.getValidator(minerIdentity).exists()) {
-			log.debug("Mining skipped: Miner identity {} is not a registered validator",
-					minerIdentity.toChecksumAddress());
+			if (miningIneligibilityChanged(nextHeight, "not_registered")) {
+				log.info("Mining hashing is waiting for block #{}: node identity {} is not a registered validator",
+						nextHeight, minerIdentity.toChecksumAddress());
+			}
 			return Optional.empty();
 		}
 
@@ -184,13 +191,15 @@ public class MiningBlockAssemblerService {
 		// identity)
 		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
 
-		long nextHeight = parentBlock.getHeight() + 1;
 		if (!bypassMiningPolicyPrecheck
 				&& !validatorMiningPolicyService.isCandidateEligible(worldState, nextHeight, minerIdentity)) {
-			log.debug("Mining skipped: Miner identity {} exhausted its mining share at height {}",
-					minerIdentity.toChecksumAddress(), nextHeight);
+			if (miningIneligibilityChanged(nextHeight, "share_exhausted")) {
+				log.info("Mining hashing is waiting for block #{}: validator {} exhausted its current mining share",
+						nextHeight, minerIdentity.toChecksumAddress());
+			}
 			return Optional.empty();
 		}
+		lastMiningIneligibility.set(null);
 
 		// Dynamic block size based on mempool utilization (height-aware for fork
 		// overrides)
@@ -249,6 +258,11 @@ public class MiningBlockAssemblerService {
 				.selectedTxs(List.copyOf(txs))
 				.invalidTxs(result.getInvalidTxs())
 				.build());
+	}
+
+	private boolean miningIneligibilityChanged(long candidateHeight, String reason) {
+		String current = candidateHeight + ":" + reason;
+		return !current.equals(lastMiningIneligibility.getAndSet(current));
 	}
 
 	/**

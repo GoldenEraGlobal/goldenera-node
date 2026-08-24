@@ -26,6 +26,7 @@ package global.goldenera.node.core.p2p.netty.handlers;
 import static global.goldenera.node.core.config.CoreAsyncConfig.P2P_RECEIVE_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
@@ -78,6 +79,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.TooLongFrameException;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -148,8 +150,25 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 
 	@Override
 	public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-		log.error("Netty Handler Exception for {}: {}", ctx.channel().remoteAddress(), cause.getMessage());
-		rejectProtocol(ctx, cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage());
+		String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
+		if (isRoutineNetworkFailure(cause)) {
+			log.debug("Closing P2P connection {} after routine network failure: {}",
+					ctx.channel().remoteAddress(), message);
+		} else {
+			log.warn("Unexpected P2P handler failure for {}: {}", ctx.channel().remoteAddress(), message, cause);
+		}
+		rejectProtocol(ctx, message);
+	}
+
+	static boolean isRoutineNetworkFailure(Throwable failure) {
+		Throwable current = failure;
+		while (current != null) {
+			if (current instanceof IOException || current instanceof TooLongFrameException) {
+				return true;
+			}
+			current = current.getCause();
+		}
+		return false;
 	}
 
 	@Override
