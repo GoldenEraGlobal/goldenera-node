@@ -115,6 +115,26 @@ class HttpCheckpointSnapshotClientTest {
 	}
 
 	@Test
+	void retriesChunkAfterRateLimitUsingRetryAfter() throws Exception {
+		serveManifest(manifest(null, Hash.hash(Bytes.wrap(chunk)).toHexString(), 0));
+		server.removeContext(HttpCheckpointSnapshotClient.CHUNKS_PATH + "0");
+		server.createContext(HttpCheckpointSnapshotClient.CHUNKS_PATH + "0", exchange -> {
+			if (chunkRequests.incrementAndGet() == 1) {
+				exchange.getResponseHeaders().add("Retry-After", "0");
+				respond(exchange, 429, new byte[0]);
+			} else {
+				respond(exchange, 200, chunk);
+			}
+		});
+
+		StagedSnapshotDownload staged = client(properties(true)).stage(
+				source, temporaryDirectory.resolve("rate-limited"));
+
+		assertThat(Files.readAllBytes(staged.chunkFiles().getFirst())).isEqualTo(chunk);
+		assertThat(chunkRequests).hasValue(2);
+	}
+
+	@Test
 	void failsClosedAndRemovesPartialFileOnContentHashMismatch() throws Exception {
 		serveManifest(manifest(null, Hash.ZERO.toHexString(), 0));
 		Path staging = temporaryDirectory.resolve("mismatch");

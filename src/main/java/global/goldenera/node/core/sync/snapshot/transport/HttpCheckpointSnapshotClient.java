@@ -101,6 +101,8 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 	private final OkHttpClient httpClient;
 	private final ManifestPreflight manifestPreflight;
 	private static final long WORKER_SHUTDOWN_SECONDS = 30;
+	private static final int RATE_LIMIT_MAX_ATTEMPTS = 8;
+	private static final long RATE_LIMIT_MAX_DELAY_SECONDS = 60;
 	private static final long MIN_FREE_SPACE_RESERVE = 1024L * 1024;
 	private static final long MAX_FREE_SPACE_RESERVE = 64L * 1024 * 1024;
 
@@ -465,7 +467,9 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 
 	private byte[] downloadManifest(URI source, String path, String label) throws IOException {
 		URI manifestUri = source.resolve(path);
-		try (Response response = execute(manifestUri); ResponseBody body = response.body()) {
+		try (TrackedResponse tracked = execute(
+				new Request.Builder().url(manifestUri.toString()).get().build(), null);
+				ResponseBody body = tracked.response().body()) {
 			if (body == null) {
 				throw failure(label + " response is empty");
 			}
@@ -721,9 +725,9 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 		}
 		Path partial = safeTarget(staging, target.getFileName() + ".part");
 		Files.deleteIfExists(partial);
-		Call call = httpClient.newCall(new Request.Builder().url(chunk.uri().toString()).get().build());
-		activeCalls.add(call);
-		try (Response response = execute(call); ResponseBody body = response.body()) {
+		Request request = new Request.Builder().url(chunk.uri().toString()).get().build();
+		try (TrackedResponse tracked = execute(request, activeCalls);
+				ResponseBody body = tracked.response().body()) {
 			long configuredChunkLimit = filePrefix.startsWith("archive-")
 					? properties.getMaxArchiveChunkBytes() : properties.getMaxChunkBytes();
 			if (body == null || body.contentLength() > chunk.encodedByteCount()
@@ -744,8 +748,6 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 		} catch (RuntimeException | IOException e) {
 			Files.deleteIfExists(partial);
 			throw e;
-		} finally {
-			activeCalls.remove(call);
 		}
 	}
 
@@ -765,18 +767,55 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 		return Hash.wrap(digest.digest()).equals(chunk.contentHash());
 	}
 
-	private Response execute(URI uri) throws IOException {
-		return execute(httpClient.newCall(new Request.Builder().url(uri.toString()).get().build()));
+	private TrackedResponse execute(Request request, Set<Call> activeCalls) throws IOException {
+		for (int attempt = 1; attempt <= RATE_LIMIT_MAX_ATTEMPTS; attempt++) {
+			Call call = httpClient.newCall(request);
+			if (activeCalls != null) {
+				activeCalls.add(call);
+			}
+			Response response;
+			try {
+				response = call.execute();
+			} catch (IOException e) {
+				removeActiveCall(activeCalls, call);
+				throw e;
+			}
+			if (response.isSuccessful()) {
+				return new TrackedResponse(call, response, activeCalls);
+			}
+			int code = response.code();
+			long retryAfterSeconds = retryAfterSeconds(response);
+			response.close();
+			removeActiveCall(activeCalls, call);
+			if (code != 429 || attempt == RATE_LIMIT_MAX_ATTEMPTS) {
+				throw failure("Snapshot HTTP request failed with status " + code);
+			}
+			try {
+				TimeUnit.SECONDS.sleep(retryAfterSeconds);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw failure("Interrupted while backing off after snapshot HTTP 429", e);
+			}
+		}
+		throw new IllegalStateException("Unreachable snapshot HTTP retry state");
 	}
 
-	private Response execute(Call call) throws IOException {
-		Response response = call.execute();
-		if (!response.isSuccessful()) {
-			int code = response.code();
-			response.close();
-			throw failure("Snapshot HTTP request failed with status " + code);
+	private long retryAfterSeconds(Response response) {
+		String header = response.header("Retry-After");
+		if (header == null) {
+			return 1;
 		}
-		return response;
+		try {
+			return Math.min(RATE_LIMIT_MAX_DELAY_SECONDS, Math.max(0, Long.parseLong(header.trim())));
+		} catch (NumberFormatException e) {
+			return 1;
+		}
+	}
+
+	private void removeActiveCall(Set<Call> activeCalls, Call call) {
+		if (activeCalls != null) {
+			activeCalls.remove(call);
+		}
 	}
 
 	private void ensureUsableSpace(Path staging, List<ResolvedChunk> chunks) throws IOException {
@@ -960,6 +999,20 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 	}
 
 	private record ResolvedChunk(int index, URI uri, long encodedByteCount, Hash contentHash) {
+	}
+
+	private record TrackedResponse(Call call, Response response, Set<Call> activeCalls) implements AutoCloseable {
+
+		@Override
+		public void close() {
+			try {
+				response.close();
+			} finally {
+				if (activeCalls != null) {
+					activeCalls.remove(call);
+				}
+			}
+		}
 	}
 
 	private record FullArchiveCandidate(

@@ -28,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -90,8 +91,9 @@ class CoreOnlySecurityConfigurationTest {
 			fixture.mockMvc.perform(get("/api/core/v1/sync/snapshots/checkpoint/manifest"))
 					.andExpect(status().isOk());
 
-			verify(fixture.throttlingService).checkGlobalIpLimit(any());
-			verify(fixture.throttlingService).checkSpecificLimit(any(), anyString(), anyBoolean());
+			verify(fixture.throttlingService, never()).checkGlobalIpLimit(any());
+			verify(fixture.throttlingService, never())
+					.checkSpecificLimit(any(), anyString(), anyBoolean());
 		}
 	}
 

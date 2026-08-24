@@ -60,30 +60,45 @@ class ThrottlingFilterTest {
 	}
 
 	@Test
-	void snapshotRequestsAreSubjectToGlobalAndSpecificRateLimits() throws Exception {
+	void snapshotRequestsBypassGenericRateLimitsAndUseTheirDedicatedStreamLimiter() throws Exception {
 		ThrottlingService service = mock(ThrottlingService.class);
-		when(service.checkGlobalIpLimit(any())).thenReturn(true);
-		when(service.checkSpecificLimit(any(), eq("127.0.0.1"), eq(false))).thenReturn(true);
 		MockHttpServletRequest request = new MockHttpServletRequest("GET", SNAPSHOT_MANIFEST_PATH);
 		request.setRemoteAddr("127.0.0.1");
+		MockFilterChain chain = mock(MockFilterChain.class);
 
 		new ThrottlingFilter(service).doFilter(
 				request,
 				new MockHttpServletResponse(),
-				new MockFilterChain());
+				chain);
 
-		verify(service).checkGlobalIpLimit(request);
-		verify(service).checkSpecificLimit(request, "127.0.0.1", false);
+		verify(service, never()).checkGlobalIpLimit(any());
+		verify(service, never()).checkSpecificLimit(any(), any(), eq(false));
+		verify(chain).doFilter(any(), any());
 	}
 
 	@Test
-	void snapshotRequestIsRejectedWhenSpecificRateLimitIsExceeded() throws Exception {
+	void versionedSnapshotChunksAlsoBypassGenericRateLimits() throws Exception {
+		ThrottlingService service = mock(ThrottlingService.class);
+		MockHttpServletRequest request = new MockHttpServletRequest(
+				"GET",
+				"/api/core/v1/sync/snapshots/checkpoint/versions/snapshot-1-hash/archive/chunks/0");
+		request.setRemoteAddr("127.0.0.1");
+		MockHttpServletResponse response = new MockHttpServletResponse();
+		MockFilterChain chain = mock(MockFilterChain.class);
+
+		new ThrottlingFilter(service).doFilter(request, response, chain);
+
+		assertThat(response.getStatus()).isEqualTo(200);
+		verify(service, never()).checkGlobalIpLimit(any());
+		verify(chain).doFilter(any(), any());
+	}
+
+	@Test
+	void nonSnapshotCoreRequestStillReturnsRateLimitResponse() throws Exception {
 		ThrottlingService service = mock(ThrottlingService.class);
 		when(service.checkGlobalIpLimit(any())).thenReturn(true);
 		when(service.checkSpecificLimit(any(), eq("127.0.0.1"), eq(false))).thenReturn(false);
-		MockHttpServletRequest request = new MockHttpServletRequest(
-				"GET",
-				"/api/core/v1/sync/snapshots/checkpoint/archive/chunks/0");
+		MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/core/v1/node/info");
 		request.setRemoteAddr("127.0.0.1");
 		MockHttpServletResponse response = new MockHttpServletResponse();
 		MockFilterChain chain = mock(MockFilterChain.class);

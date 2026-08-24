@@ -119,7 +119,8 @@ public class OfflineSnapshotOperatorConfiguration {
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock) {
 		return new LiveHeadCoreSnapshotCloneService(
 				blockchainDB, families, databaseProperties,
-				new BlockchainRocksDbFactory(databaseProperties), masterChainLock, objectMapper);
+				new BlockchainRocksDbFactory(SnapshotCloneResourceLimits.databaseProperties(databaseProperties)),
+				masterChainLock, objectMapper);
 	}
 
 	@Bean

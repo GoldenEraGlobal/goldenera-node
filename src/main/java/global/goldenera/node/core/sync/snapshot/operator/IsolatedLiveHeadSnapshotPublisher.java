@@ -28,6 +28,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 
+import org.springframework.boot.Banner;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
@@ -61,10 +62,7 @@ public final class IsolatedLiveHeadSnapshotPublisher {
 		Path peerDatabase = Files.createTempDirectory(
 				clone.databaseDirectory().getParent(), ".snapshot-peer-reputation-").toRealPath();
 		LiveHeadCloneExportCapability capability = LiveHeadCloneExportCapability.from(clone);
-		try (ConfigurableApplicationContext context = new SpringApplicationBuilder(Application.class)
-				.web(WebApplicationType.NONE)
-				.initializers(applicationContext -> applicationContext.getBeanFactory().registerSingleton(
-						LiveHeadCloneExportCapability.BEAN_NAME, capability))
+		try (ConfigurableApplicationContext context = exportApplication(capability)
 				.run(
 						"--ge.snapshot.operator.enabled=true",
 						"--ge.snapshot.operator.clone-export-context=true",
@@ -75,6 +73,22 @@ public final class IsolatedLiveHeadSnapshotPublisher {
 						"--ge.snapshot.operator.public-origin=" + properties.getPublicOrigin(),
 						"--ge.snapshot.operator.explorer-chunk-bytes=" + properties.getExplorerChunkBytes(),
 						"--ge.core.blockchain.db.path=" + clone.databaseDirectory(),
+						"--ge.core.blockchain.db.rocksdb-block-cache-mb="
+								+ SnapshotCloneResourceLimits.ROCKS_DB_BLOCK_CACHE_MB,
+						"--ge.core.blockchain.db.rocksdb-write-buffer-mb="
+								+ SnapshotCloneResourceLimits.ROCKS_DB_WRITE_BUFFER_MB,
+						"--ge.core.blockchain.db.rocksdb-max-write-buffers="
+								+ SnapshotCloneResourceLimits.ROCKS_DB_MAX_WRITE_BUFFERS,
+						"--ge.core.blockchain.db.cache-block-mb="
+								+ SnapshotCloneResourceLimits.BLOCK_CACHE_MB,
+						"--ge.core.blockchain.db.cache-trie-node-mb="
+								+ SnapshotCloneResourceLimits.TRIE_NODE_CACHE_MB,
+						"--ge.core.blockchain.db.cache-tx-mb="
+								+ SnapshotCloneResourceLimits.TX_CACHE_MB,
+						"--ge.core.blockchain.db.cache-header-max-entries="
+								+ SnapshotCloneResourceLimits.INDEX_CACHE_ENTRIES,
+						"--ge.core.blockchain.db.cache-height-max-entries="
+								+ SnapshotCloneResourceLimits.INDEX_CACHE_ENTRIES,
 						"--ge.core.peer-reputation.db.path=" + peerDatabase,
 						"--ge.core.sync.snapshot.bootstrap-enabled=false",
 						"--ge.core.sync.snapshot.publish-enabled=false",
@@ -102,6 +116,16 @@ public final class IsolatedLiveHeadSnapshotPublisher {
 		} finally {
 			deleteDirectory(peerDatabase);
 		}
+	}
+
+	SpringApplicationBuilder exportApplication(LiveHeadCloneExportCapability capability) {
+		return new SpringApplicationBuilder(Application.class)
+				.web(WebApplicationType.NONE)
+				.lazyInitialization(true)
+				.bannerMode(Banner.Mode.OFF)
+				.logStartupInfo(false)
+				.initializers(applicationContext -> applicationContext.getBeanFactory().registerSingleton(
+						LiveHeadCloneExportCapability.BEAN_NAME, capability));
 	}
 
 	private void deleteDirectory(Path directory) throws IOException {
