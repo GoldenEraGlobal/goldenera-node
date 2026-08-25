@@ -224,7 +224,7 @@ class P2PInboundHandlerChainIdentityTest {
 	}
 
 	@Test
-	void preHandshakeTrafficCannotEnterExecutorAndQueuedTrafficCannotBypassLaterRejection() {
+	void trafficBeforeStatusIsRejectedAndTrafficAfterStatusWaitsForValidation() {
 		QueueExecutor executor = new QueueExecutor();
 		Fixture preHandshake = fixture(executor);
 
@@ -244,14 +244,16 @@ class P2PInboundHandlerChainIdentityTest {
 
 		queuedExecutor.runAll();
 
-		verify(queued.publisher, never()).publishEvent(any(P2PMempoolHashesRequestedEvent.class));
-		verify(queued.publisher, never()).publishEvent(any(P2PHandshakeCompletedEvent.class));
+		assertThat(queued.channel.isActive()).isTrue();
+		verify(queued.publisher).publishEvent(any(P2PHandshakeCompletedEvent.class));
+		verify(queued.publisher).publishEvent(any(P2PMempoolHashesRequestedEvent.class));
 	}
 
 	@Test
 	void queuedPingCannotRunAfterStatusRejection() {
 		QueueExecutor executor = new QueueExecutor();
 		Fixture fixture = fixture(executor);
+		when(fixture.policy.validate(any())).thenThrow(new GEFailedException("chain mismatch"));
 		P2PStatusDto status = status(REMOTE_IDENTITY, BigInteger.ONE);
 		fixture.channel.writeInbound(new P2PEnvelope(1, P2PMessageType.STATUS, status));
 		fixture.channel.writeInbound(new P2PEnvelope(2, P2PMessageType.PING, null));

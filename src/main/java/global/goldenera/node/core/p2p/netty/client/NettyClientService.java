@@ -28,6 +28,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
@@ -57,6 +58,7 @@ public class NettyClientService implements DisposableBean {
 	EventLoopGroup workerGroup;
 	ChannelGroup channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
 
+	@Autowired
 	public NettyClientService(P2PChannelInitializer p2pChannelInitializer,
 			PeerReputationService peerReputationService) {
 		this(p2pChannelInitializer, peerReputationService,

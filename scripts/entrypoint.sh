@@ -13,6 +13,8 @@ NATIVE_PKG_DIR="${OVERRIDES_DIR}/native"
 APP_JAR="${APP_HOME}/app.jar"
 MEMORY_SIZING_LIB="${GOLDENERA_MEMORY_SIZING_LIB:-/usr/local/lib/goldenera/memory-sizing.sh}"
 MAX_DIRECT_MEMORY_MB=512
+MINIMUM_JAVA_HEAP_MB=1024
+MINIMUM_JAVA_INITIAL_HEAP_MB=512
 RANDOMX_LARGE_PAGE_WORKING_SET_MB=2560
 JAVA_NMT_LEVEL="${JAVA_NMT_LEVEL:-summary}"
 JAVA_JFR_ENABLE="${JAVA_JFR_ENABLE:-true}"
@@ -100,6 +102,8 @@ if "$FULL_MEMORY_MINING"; then
 fi
 
 calculate_safe_heap_budget() {
+    # PostgreSQL runs in its own memory-limited container. Reserving its budget
+    # again inside the node cgroup would double-count the same 1 GiB allocation.
     ge_calculate_auto_heap_mb \
         "$GE_EFFECTIVE_MEMORY_MB" \
         "$1" \
@@ -110,7 +114,7 @@ calculate_safe_heap_budget() {
         "${ROCKSDB_BLOCK_CACHE_MB:-512}" \
         "${ROCKSDB_WRITE_BUFFER_MB:-32}" \
         "${ROCKSDB_MAX_WRITE_BUFFERS:-2}" \
-        "${POSTGRESQL_ENABLE:-${EXPLORER_ENABLE:-true}}" \
+        false \
         "$MAX_DIRECT_MEMORY_MB" \
         "$LARGE_PAGES_USABLE" \
         "$HUGEPAGES_OUTSIDE_MEMORY_CGROUP"
@@ -123,8 +127,8 @@ if [ -n "${JAVA_HEAP_MB:-}" ]; then
             exit 1
             ;;
     esac
-    if [ "$JAVA_HEAP_MB" -lt 1024 ]; then
-        echo ">>> [FATAL] JAVA_HEAP_MB must be at least 1024 MB."
+    if [ "$JAVA_HEAP_MB" -lt "$MINIMUM_JAVA_HEAP_MB" ]; then
+        echo ">>> [FATAL] JAVA_HEAP_MB must be at least ${MINIMUM_JAVA_HEAP_MB} MB."
         exit 1
     fi
     if ! "$MEMORY_ENV_DETECTED"; then
@@ -177,8 +181,8 @@ case "$JAVA_INITIAL_HEAP_MB" in
         exit 1
         ;;
 esac
-if [ "$JAVA_INITIAL_HEAP_MB" -lt 512 ] || [ "$JAVA_INITIAL_HEAP_MB" -gt "$RESOLVED_HEAP_MB" ]; then
-    echo ">>> [FATAL] JAVA_INITIAL_HEAP_MB must be between 512 and ${RESOLVED_HEAP_MB} MB."
+if [ "$JAVA_INITIAL_HEAP_MB" -lt "$MINIMUM_JAVA_INITIAL_HEAP_MB" ] || [ "$JAVA_INITIAL_HEAP_MB" -gt "$RESOLVED_HEAP_MB" ]; then
+    echo ">>> [FATAL] JAVA_INITIAL_HEAP_MB must be between ${MINIMUM_JAVA_INITIAL_HEAP_MB} and ${RESOLVED_HEAP_MB} MB."
     exit 1
 fi
 JAVA_MEM_OPTS="-Xms${JAVA_INITIAL_HEAP_MB}m -Xmx${RESOLVED_HEAP_MB}m"

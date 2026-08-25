@@ -208,7 +208,8 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		}
 
 		if (requiresCompletedHandshake(envelope.getMessageType())
-				&& handshakeState != HandshakeState.COMPLETED) {
+				&& handshakeState != HandshakeState.COMPLETED
+				&& handshakeState != HandshakeState.VALIDATING) {
 			rejectProtocol(ctx, "Received " + envelope.getMessageType() + " before a valid STATUS handshake");
 			return;
 		}
@@ -411,8 +412,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 			rejectProtocol(ctx, "STATUS payload is required");
 			return;
 		}
-		try {
-			p2pReceiveExecutor.execute(() -> {
+		if (!enqueueInbound(() -> {
 				if (!ctx.channel().isActive() || handshakeState != HandshakeState.VALIDATING) {
 					return;
 				}
@@ -423,8 +423,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					log.warn("Rejected STATUS from {}: {}", getPeerLogInfo(), message);
 					rejectProtocol(ctx, message);
 				}
-			});
-		} catch (RejectedExecutionException exception) {
+			})) {
 			rejectProtocol(ctx, "P2P processing queue is full during STATUS handshake");
 		}
 	}

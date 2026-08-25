@@ -318,8 +318,20 @@ public class BlockSyncManagerService {
 	}
 
 	public SyncRuntimeSnapshot runtimeSnapshot() {
-		SyncRequestTelemetry.Snapshot requestTelemetry = syncRequestTelemetry.snapshot();
+		SyncRequestTelemetry.Snapshot requestTelemetry;
+		int observedMaxHeaderPage;
+		long observedLegacyHeaderRequests;
+		long observedV2HeaderRequests;
+		synchronized (syncRequestTelemetry) {
+			requestTelemetry = syncRequestTelemetry.snapshot();
+			observedMaxHeaderPage = maxHeaderPageRequested.get();
+			observedLegacyHeaderRequests = legacyHeaderPageRequests.get();
+			observedV2HeaderRequests = v2HeaderPageRequests.get();
+		}
 		BodyPipelineTelemetry.Snapshot bodyTelemetry = bodyPipelineTelemetry.snapshot();
+		int observedBufferedWindows = bufferedHeaderWindows;
+		int observedBufferedCount = bufferedHeaderCount;
+		long observedBufferedBytes = bufferedHeaderBytes;
 		return new SyncRuntimeSnapshot(
 				synced,
 				activeSyncCycle.get(),
@@ -345,16 +357,16 @@ public class BlockSyncManagerService {
 				MAX_PERSIST_BATCH_BYTES,
 				currentPersistBatchBytes,
 				peakPersistBatchBytes,
-				maxHeaderPageRequested.get(),
-				legacyHeaderPageRequests.get(),
-				v2HeaderPageRequests.get(),
+				observedMaxHeaderPage,
+				observedLegacyHeaderRequests,
+				observedV2HeaderRequests,
 				lastHeaderPrefetchDepth,
-				bufferedHeaderWindows,
-				bufferedHeaderCount,
-				bufferedHeaderBytes,
-				peakBufferedHeaderWindows,
-				peakBufferedHeaderCount,
-				peakBufferedHeaderBytes,
+				observedBufferedWindows,
+				observedBufferedCount,
+				observedBufferedBytes,
+				Math.max(peakBufferedHeaderWindows, observedBufferedWindows),
+				Math.max(peakBufferedHeaderCount, observedBufferedCount),
+				Math.max(peakBufferedHeaderBytes, observedBufferedBytes),
 				validatedAheadHeaders,
 				discardedPrefetchHeaders.get());
 	}
@@ -1206,12 +1218,11 @@ public class BlockSyncManagerService {
 		while (!pipeline.cancelled() && totalHeaders < maxHeaders) {
 			int negotiatedLimit = negotiatedHeaderPageLimit(peer);
 			int requested = Math.min(negotiatedLimit, maxHeaders - totalHeaders);
-			recordHeaderPageRequest(negotiatedLimit, requested);
 			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
 			long requestId = peer.reserveRequestId();
 			PeerRequestKey requestKey = new PeerRequestKey(peer, requestId);
 			registerHeaderRequest(requestKey, future);
-			recordHeaderRequest();
+			recordHeaderRequest(negotiatedLimit, requested);
 			long requestStarted = nanoTime();
 			List<BlockHeader> page;
 			try {
@@ -1455,8 +1466,11 @@ public class BlockSyncManagerService {
 		}
 	}
 
-	private void recordHeaderRequest() {
-		syncRequestTelemetry.recordHeaderRequest();
+	private void recordHeaderRequest(int negotiatedLimit, int requested) {
+		synchronized (syncRequestTelemetry) {
+			recordHeaderPageRequest(negotiatedLimit, requested);
+			syncRequestTelemetry.recordHeaderRequest();
+		}
 	}
 
 	private void recordBodyRequest() {
