@@ -6,6 +6,7 @@ services:
     image: ghcr.io/goldeneraglobal/goldenera-node:latest
     restart: unless-stopped
     pull_policy: always
+    mem_limit: ${NODE_MEMORY_LIMIT_MB:-8192}m
 
     env_file:
       - .env
@@ -31,8 +32,9 @@ services:
       memlock:
         soft: -1
         hard: -1
-    # Memory is managed via .env: JAVA_HEAP_MB + ROCKSDB_BLOCK_CACHE_MB
-    # Minimum recommended: 8GB RAM (see .env.example for sizing guide)
+    # Memory is bounded by NODE_MEMORY_LIMIT_MB; heap is derived inside it.
+    # Minimum: 8GB without mining, 16GB for production FULL mining.
+    # See .env.example for the complete native/heap sizing guide.
 
   # ==============================================================================
   # DATABASE
@@ -40,6 +42,7 @@ services:
   db:
     image: postgres:18.1-alpine
     restart: unless-stopped
+    mem_limit: ${POSTGRESQL_MEMORY_LIMIT_MB:-1024}m
 
     env_file:
       - .env

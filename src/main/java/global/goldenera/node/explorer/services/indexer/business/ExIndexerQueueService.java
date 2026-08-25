@@ -53,7 +53,7 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExIndexerQueueService {
 
-	private static final int MAX_QUEUE_CAPACITY = 10000;
+	static final int MAX_QUEUE_CAPACITY = 64;
 
 	GeneralProperties generalProperties;
 	ExplorerRuntimeReadiness explorerReadiness;
@@ -63,7 +63,6 @@ public class ExIndexerQueueService {
 
 	ReentrantLock lock = new ReentrantLock(true);
 	Condition notEmpty = lock.newCondition();
-	Condition notFull = lock.newCondition();
 
 	@PostConstruct
 	public void initMetrics() {
@@ -74,9 +73,9 @@ public class ExIndexerQueueService {
 		registry.gauge("explorer.catchup.lag.blocks", catchUpLagBlocks);
 	}
 
-	public void pushConnect(BlockConnectedEvent event) {
+	public BatchAdmission pushConnect(BlockConnectedEvent event) {
 		if (!enabled()) {
-			return;
+			return BatchAdmission.IGNORED;
 		}
 		lock.lock();
 		try {
@@ -88,17 +87,19 @@ public class ExIndexerQueueService {
 
 				queue.removeLast();
 				markTaskProcessed();
-				notFull.signalAll();
 				log.debug("Optimization: Skipped flickering (Disconnect->Connect) for block #{}",
 						event.getBlock().getHeight());
-				return;
+				return BatchAdmission.ENQUEUED;
 			}
 
-			awaitCapacity(1);
+			if (queue.size() >= MAX_QUEUE_CAPACITY) {
+				return overflowToRebuild(1, "live connect");
+			}
 
 			queue.addLast(new ExIndexerTask.ConnectTask(event));
 			catchUpLagBlocks.incrementAndGet();
 			notEmpty.signalAll();
+			return BatchAdmission.ENQUEUED;
 		} finally {
 			lock.unlock();
 		}
@@ -115,20 +116,8 @@ public class ExIndexerQueueService {
 		}
 		lock.lock();
 		try {
-			if (events.size() > MAX_QUEUE_CAPACITY
-					|| queue.size() + events.size() > MAX_QUEUE_CAPACITY) {
-				int discarded = queue.size();
-				queue.clear();
-				catchUpLagBlocks.addAndGet(events.size());
-				notFull.signalAll();
-				explorerReadiness.rebuilding(
-						"Explorer live queue overflowed and is rebuilding from the local canonical archive");
-				registry.counter("explorer.queue.overflow_to_rebuild").increment();
-				log.warn(
-						"Explorer queue cannot atomically admit {} committed sync blocks ({} queued); "
-								+ "switching to nonblocking local archive rebuild",
-						events.size(), discarded);
-				return BatchAdmission.REBUILD_REQUIRED;
+			if (events.size() > MAX_QUEUE_CAPACITY || queue.size() + events.size() > MAX_QUEUE_CAPACITY) {
+				return overflowToRebuild(events.size(), "sync batch");
 			}
 			events.forEach(event -> queue.addLast(new ExIndexerTask.ConnectTask(event)));
 			catchUpLagBlocks.addAndGet(events.size());
@@ -139,9 +128,9 @@ public class ExIndexerQueueService {
 		}
 	}
 
-	public void pushDisconnect(BlockDisconnectedEvent event) {
+	public BatchAdmission pushDisconnect(BlockDisconnectedEvent event) {
 		if (!enabled()) {
-			return;
+			return BatchAdmission.IGNORED;
 		}
 		lock.lock();
 		try {
@@ -153,36 +142,42 @@ public class ExIndexerQueueService {
 
 				queue.removeLast();
 				markTaskProcessed();
-				notFull.signalAll();
 				log.debug("Optimization: Skipped indexing/reverting block #{} (cancelled in queue)",
 						event.getBlock().getHeight());
-				return;
+				return BatchAdmission.ENQUEUED;
 			}
 
-			awaitCapacity(1);
+			if (queue.size() >= MAX_QUEUE_CAPACITY) {
+				return overflowToRebuild(1, "live disconnect");
+			}
 
 			queue.addLast(new ExIndexerTask.DisconnectTask(event));
 			catchUpLagBlocks.incrementAndGet();
 			notEmpty.signalAll();
+			return BatchAdmission.ENQUEUED;
 		} finally {
 			lock.unlock();
 		}
 	}
 
-	private void awaitCapacity(int requiredCapacity) {
-		boolean blocked = false;
-		long blockedSince = 0L;
-		while (queue.size() + requiredCapacity > MAX_QUEUE_CAPACITY) {
-			if (!blocked) {
-				registry.counter("explorer.queue.blocked").increment();
-				blocked = true;
-				blockedSince = System.nanoTime();
-			}
-			notFull.awaitUninterruptibly();
-		}
-		if (blocked) {
-			registry.timer("explorer.queue.blocked.duration")
-					.record(System.nanoTime() - blockedSince, TimeUnit.NANOSECONDS);
+	private BatchAdmission overflowToRebuild(int incomingTasks, String source) {
+		int discarded = queue.size();
+		queue.clear();
+		catchUpLagBlocks.addAndGet(incomingTasks);
+		explorerReadiness.rebuilding(
+				"Explorer live queue overflowed and is rebuilding from the local canonical archive");
+		registry.counter("explorer.queue.overflow_to_rebuild", "source", source).increment();
+		log.warn("Explorer queue rejected {} {} task(s) with {} queued; switching to canonical rebuild",
+				incomingTasks, source, discarded);
+		return BatchAdmission.REBUILD_REQUIRED;
+	}
+
+	public void discardForRebuild(String source) {
+		lock.lock();
+		try {
+			overflowToRebuild(0, source);
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -213,7 +208,6 @@ public class ExIndexerQueueService {
 				notEmpty.await();
 			}
 			ExIndexerTask task = queue.pollFirst();
-			notFull.signalAll();
 			return task;
 		} finally {
 			lock.unlock();
@@ -235,9 +229,6 @@ public class ExIndexerQueueService {
 			while (!queue.isEmpty() && batch.size() < maxElements) {
 				batch.add(queue.pollFirst());
 			}
-			if (!batch.isEmpty()) {
-				notFull.signalAll();
-			}
 			return batch;
 		} finally {
 			lock.unlock();
@@ -254,9 +245,6 @@ public class ExIndexerQueueService {
 				notEmpty.await(timeoutMs, TimeUnit.MILLISECONDS);
 			}
 			ExIndexerTask task = queue.pollFirst();
-			if (task != null) {
-				notFull.signalAll();
-			}
 			return task;
 		} finally {
 			lock.unlock();

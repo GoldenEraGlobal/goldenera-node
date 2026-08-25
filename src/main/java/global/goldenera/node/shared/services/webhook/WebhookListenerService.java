@@ -36,8 +36,6 @@ import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
-import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
-import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
@@ -83,14 +81,6 @@ public class WebhookListenerService {
 			return;
 		}
 		submitWebhookEvent("block connected", () -> processBlockConnected(event));
-	}
-
-	@EventListener
-	public void handleBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
-		if (event.getConnectedSource() != ConnectedSource.SYNC) {
-			return;
-		}
-		submitWebhookEvent("sync block batch", () -> event.getBlockEvents().forEach(this::processBlockConnected));
 	}
 
 	private void processBlockConnected(BlockConnectedEvent event) {

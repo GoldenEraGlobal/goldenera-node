@@ -6,6 +6,7 @@ services:
     image: goldenera-node:local
     restart: unless-stopped
     pull_policy: never
+    mem_limit: ${NODE_MEMORY_LIMIT_MB:-4096}m
 
     env_file:
       - .env
@@ -31,17 +32,13 @@ services:
       memlock:
         soft: -1
         hard: -1
-    deploy:
-      resources:
-        reservations:
-          memory: 4G
-
   # ==============================================================================
   # DATABASE
   # ==============================================================================
   db:
     image: postgres:18.1-alpine
     restart: unless-stopped
+    mem_limit: ${POSTGRESQL_MEMORY_LIMIT_MB:-1024}m
 
     env_file:
       - .env

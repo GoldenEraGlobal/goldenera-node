@@ -67,8 +67,10 @@ import global.goldenera.node.core.sync.snapshot.publication.VerifiedCorePublicat
 import global.goldenera.node.core.sync.snapshot.transport.CoreSnapshotArchiveTransportManifest;
 import global.goldenera.node.core.sync.snapshot.transport.SnapshotTransportManifest;
 import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
+import lombok.extern.slf4j.Slf4j;
 
 /** Persistent one-day delayed explorer enrichment for the automatic publisher. */
+@Slf4j
 public final class DelayedExplorerSnapshotPublicationGenerator
 		implements ExplorerSnapshotPublicationGenerator {
 
@@ -240,6 +242,8 @@ public final class DelayedExplorerSnapshotPublicationGenerator
 			if (Files.notExists(target, LinkOption.NOFOLLOW_LINKS)) {
 				Files.move(temporary, target, ATOMIC_MOVE);
 				completed = true;
+				log.info("EXPLORER SNAPSHOT: Captured pending PostgreSQL snapshot at height {}; "
+						+ "it becomes publishable after 24h of canonical chain time", anchor.height());
 			}
 		} finally {
 			if (!completed) {
@@ -412,6 +416,7 @@ public final class DelayedExplorerSnapshotPublicationGenerator
 			}
 			Files.write(output.resolve(ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME), codec.encode(rebound),
 					CREATE_NEW);
+			log.info("EXPLORER SNAPSHOT: Finalized snapshot bound to CORE height {}", core.checkpointHeight());
 		} catch (Exception e) {
 			deleteRecursively(output);
 			throw e;

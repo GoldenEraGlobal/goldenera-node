@@ -25,6 +25,8 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.List;
+
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -78,6 +80,21 @@ public class ExIndexerService {
 
 	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
 	public void handleBlockConnected(BlockConnectedEvent event) {
+		handleBlockConnectedInCurrentTransaction(event, true);
+	}
+
+	/** Commits a canonical archive replay batch atomically instead of once per block. */
+	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+	public void handleBlockConnectedBatch(List<BlockConnectedEvent> events) {
+		if (events == null || events.isEmpty()) {
+			return;
+		}
+		for (BlockConnectedEvent event : events) {
+			handleBlockConnectedInCurrentTransaction(event, false);
+		}
+	}
+
+	private void handleBlockConnectedInCurrentTransaction(BlockConnectedEvent event, boolean logBlockProgress) {
 		Timer.Sample sample = Timer.start(registry);
 		Block block = event.getBlock();
 
@@ -113,11 +130,11 @@ public class ExIndexerService {
 			}
 		}
 
-		processBlock(block, event);
+		processBlock(block, event, logBlockProgress);
 		sample.stop(registry.timer("explorer.block.index_time"));
 	}
 
-	private void processBlock(Block block, BlockConnectedEvent event) {
+	private void processBlock(Block block, BlockConnectedEvent event, boolean logBlockProgress) {
 		long start = System.currentTimeMillis();
 		if (block.getHeight() % 10000 == 0) {
 			postgrePartitionService.ensurePartitionsExist(block.getHeight());
@@ -148,8 +165,9 @@ public class ExIndexerService {
 					block,
 					event.getCumulativeDifficulty(),
 					event.getMinerTotalFees(),
-					event.getMinerActualRewardPaid(),
-					event.getEvents()));
+					 event.getMinerActualRewardPaid(),
+					event.getEvents(),
+					event.getConnectedSource()));
 
 			long elapsed = System.currentTimeMillis() - start;
 			int txCount = block.getTxs().size();
@@ -158,9 +176,9 @@ public class ExIndexerService {
 			// - Log every 100 blocks with summary
 			// - Log individual blocks only if they have transactions or are slow (>500ms)
 			// - Use DEBUG for routine empty blocks
-			if (block.getHeight() % 100 == 0) {
+			if (logBlockProgress && block.getHeight() % 100 == 0) {
 				log.info("Explorer indexed to block #{} in {} ms", block.getHeight(), elapsed);
-			} else if (txCount > 0 || elapsed > 500) {
+			} else if (logBlockProgress && (txCount > 0 || elapsed > 500)) {
 				log.info("Indexed block #{} ({} txs) in {} ms", block.getHeight(), txCount, elapsed);
 			} else {
 				log.debug("Indexed block #{} ({}) in {} ms", block.getHeight(), txCount, elapsed);
@@ -281,7 +299,7 @@ public class ExIndexerService {
 						.orElseThrow(() -> new GEFailedException("Missing block in chain query: " + currentHeight));
 
 				BlockConnectedEvent event = eventReconstructionService.reconstructEvent(storedBlock);
-				processBlock(storedBlock.getBlock(), event);
+				processBlock(storedBlock.getBlock(), event, true);
 			} catch (Exception e) {
 				throw new GEFailedException("Failed to heal gap at block " + h, e);
 			}

@@ -36,6 +36,7 @@ import global.goldenera.node.explorer.entities.ExBlockHeader;
 import global.goldenera.node.explorer.entities.ExStatus;
 import global.goldenera.node.explorer.repositories.ExBlockHeaderRepository;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -51,6 +52,7 @@ public class ExIndexerSyncService {
 	ExIndexerStatusCoreService exStatusCoreService;
 	ExIndexerQueueService exQueueService;
 	ExIndexerRevertService exRevertService;
+	ExplorerArchiveRebuildTrigger archiveRebuildTrigger;
 
 	ChainQuery chainQuery;
 	ExIndexerEventReconstructionService eventReconstructionService;
@@ -69,6 +71,12 @@ public class ExIndexerSyncService {
 		// 2. Sync Forward
 		if (explorerHeight < coreHeight) {
 			log.info("Explorer is behind. Starting sync from {} to {}...", explorerHeight + 1, coreHeight);
+			long gap = coreHeight - explorerHeight;
+			if (gap > ExIndexerQueueService.MAX_QUEUE_CAPACITY) {
+				log.info("Explorer startup gap of {} blocks exceeds live queue capacity; using canonical rebuild", gap);
+				archiveRebuildTrigger.request();
+				return;
+			}
 
 			for (long h = explorerHeight + 1; h <= coreHeight; h++) {
 				StoredBlock storedBlock = chainQuery.getStoredBlockByHeight(h).orElse(null);
@@ -78,7 +86,11 @@ public class ExIndexerSyncService {
 				}
 				try {
 					BlockConnectedEvent reconstructedEvent = eventReconstructionService.reconstructEvent(storedBlock);
-					exQueueService.pushConnect(reconstructedEvent);
+					if (exQueueService.pushConnect(reconstructedEvent)
+							== ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED) {
+						archiveRebuildTrigger.request();
+						return;
+					}
 				} catch (Exception e) {
 					log.error("Failed to reconstruct event for block #{}", h, e);
 					throw new RuntimeException("Explorer sync failed at block " + h, e);

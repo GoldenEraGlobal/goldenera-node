@@ -32,13 +32,18 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -75,7 +80,6 @@ import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.services.core.WebhookCoreService.WebhookEventFilter;
 import global.goldenera.node.shared.services.webhook.dtos.WebhookEventDtoV1;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -100,8 +104,10 @@ public class WebhookDispatchService {
 	private static final int DEFAULT_DTO_VERSION = 1;
 
 	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-	private static final int MAX_QUEUE_SIZE_PER_WEBHOOK = 10_000;
-	private static final int MAX_BATCH_SIZE = 2000;
+	static final int MAX_QUEUE_SIZE_PER_WEBHOOK = 256;
+	static final int MAX_GLOBAL_QUEUE_SIZE = 2_048;
+	static final int MAX_GLOBAL_IN_FLIGHT = 64;
+	private static final int MAX_BATCH_SIZE = 256;
 
 	final OkHttpClient okHttpClient;
 	final ObjectMapper objectMapper;
@@ -117,7 +123,10 @@ public class WebhookDispatchService {
 	final Map<Address, Set<WebhookSubscription>> addressSubscriptions = new ConcurrentHashMap<>();
 	final Set<WebhookSubscription> newBlockSubscriptions = ConcurrentHashMap.newKeySet();
 	final Set<WebhookSubscription> reorgSubscriptions = ConcurrentHashMap.newKeySet();
-	final Map<UUID, java.util.Queue<Object>> pendingBatches = new ConcurrentHashMap<>();
+	final Map<UUID, Queue<Object>> pendingBatches = new ConcurrentHashMap<>();
+	final Set<UUID> deliveriesInFlight = ConcurrentHashMap.newKeySet();
+	final AtomicInteger pendingPayloadCount = new AtomicInteger();
+	final AtomicInteger inFlightDeliveryCount = new AtomicInteger();
 
 	public WebhookDispatchService(@Qualifier("webhookOkHttpClient") OkHttpClient webhookOkHttpClient,
 			ObjectMapper objectMapper,
@@ -142,6 +151,7 @@ public class WebhookDispatchService {
 
 	@PostConstruct
 	public void init() {
+		registry.gauge("webhook.queue.size", pendingPayloadCount, AtomicInteger::get);
 		explorerScheduler.scheduleWithFixedDelay(this::dispatchPendingBatches, Duration.ofMillis(3000));
 	}
 
@@ -212,7 +222,10 @@ public class WebhookDispatchService {
 	public void handleWebhookUpdate(WebhookUpdateEvent event) {
 		UUID webhookId = event.getWebhookId();
 		removeWebhookFromIndex(webhookId);
-		apiKeyToWebhookIds.values().forEach(set -> set.remove(webhookId));
+		apiKeyToWebhookIds.entrySet().removeIf(entry -> {
+			entry.getValue().remove(webhookId);
+			return entry.getValue().isEmpty();
+		});
 		switch (event.getType()) {
 			case CREATE_WEBHOOK:
 			case UPDATE_WEBHOOK:
@@ -223,12 +236,12 @@ public class WebhookDispatchService {
 					log.info("Updated cache for webhook {}", webhookId);
 				} else {
 					webhookConfigs.remove(webhookId);
-					pendingBatches.remove(webhookId);
+					removePendingQueue(webhookId);
 				}
 				break;
 			case DELETE_WEBHOOK:
 				webhookConfigs.remove(webhookId);
-				pendingBatches.remove(webhookId);
+				removePendingQueue(webhookId);
 				break;
 		}
 	}
@@ -281,15 +294,18 @@ public class WebhookDispatchService {
 			Address tokenAddressFilter) {
 		if (type == WebhookEventType.NEW_BLOCK) {
 			newBlockSubscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId) &&
-					java.util.Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
+					Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
 		} else if (type == WebhookEventType.REORG) {
 			reorgSubscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId) &&
-					java.util.Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
+					Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
 		} else if (type == WebhookEventType.ADDRESS_ACTIVITY && addressFilter != null) {
 			Set<WebhookSubscription> subs = addressSubscriptions.get(addressFilter);
 			if (subs != null) {
 				subs.removeIf(sub -> sub.getWebhookId().equals(webhookId) &&
-						java.util.Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
+						Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
+				if (subs.isEmpty()) {
+					addressSubscriptions.remove(addressFilter, subs);
+				}
 			}
 		}
 	}
@@ -300,6 +316,7 @@ public class WebhookDispatchService {
 		for (Set<WebhookSubscription> subscriptions : addressSubscriptions.values()) {
 			subscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId));
 		}
+		addressSubscriptions.entrySet().removeIf(entry -> entry.getValue().isEmpty());
 	}
 
 	private void removeWebhooksByApiKey(Long apiKeyId) {
@@ -307,7 +324,7 @@ public class WebhookDispatchService {
 		if (webhookIds != null) {
 			for (UUID webhookId : webhookIds) {
 				webhookConfigs.remove(webhookId);
-				pendingBatches.remove(webhookId);
+				removePendingQueue(webhookId);
 				removeWebhookFromIndex(webhookId);
 			}
 			log.info("Unloaded {} webhooks for ApiKey ID {}", webhookIds.size(), apiKeyId);
@@ -326,6 +343,7 @@ public class WebhookDispatchService {
 	// --- PROCESSING LOGIC ---
 
 	public void processNewBlockEvent(Block block, List<BlockEvent> events, WebhookType targetType) {
+		WebhookEventDtoV1.NewBlockEvent payload = null;
 		for (WebhookSubscription sub : newBlockSubscriptions) {
 			// Filter by webhook type (BLOCKCHAIN vs EXPLORER)
 			if (sub.getWebhookType() != targetType) {
@@ -335,11 +353,13 @@ public class WebhookDispatchService {
 			// if (config.getDtoVersion() == 1) {
 			// TODO
 			// }
-			WebhookEventDtoV1.NewBlockEvent event = new WebhookEventDtoV1.NewBlockEvent(
-					WebhookEventType.NEW_BLOCK,
-					targetType,
-					blockchainBlockHeaderMapper.mapBlockWithEvents(block, events));
-			queuePayload(sub.getWebhookId(), event);
+			if (payload == null) {
+				payload = new WebhookEventDtoV1.NewBlockEvent(
+						WebhookEventType.NEW_BLOCK,
+						targetType,
+						blockchainBlockHeaderMapper.mapBlockWithEvents(block, events));
+			}
+			queuePayload(sub.getWebhookId(), payload);
 		}
 	}
 
@@ -380,18 +400,18 @@ public class WebhookDispatchService {
 			}
 		}
 
+		WebhookEventDtoV1.AddressActivityEvent payload = targetWebhookIds.isEmpty() ? null
+				: new WebhookEventDtoV1.AddressActivityEvent(
+						WebhookEventType.ADDRESS_ACTIVITY,
+						targetType,
+						blockchainTxMapper.mapTx(block, tx, index),
+						status);
 		for (UUID webhookId : targetWebhookIds) {
 			// WebhookConfig config = webhookConfigs.get(webhookId);
 			// if (config.getDtoVersion() == 1) {
 			// TODO
 			// }
-			WebhookEventDtoV1.AddressActivityEvent event = new WebhookEventDtoV1.AddressActivityEvent(
-					WebhookEventType.ADDRESS_ACTIVITY,
-					targetType,
-					blockchainTxMapper.mapTx(block, tx, index),
-					status);
-
-			queuePayload(webhookId, event);
+			queuePayload(webhookId, payload);
 		}
 	}
 
@@ -399,54 +419,66 @@ public class WebhookDispatchService {
 		if (!webhookConfigs.containsKey(webhookId))
 			return;
 
-		java.util.Queue<Object> queue = pendingBatches.computeIfAbsent(webhookId, k -> {
-			java.util.Queue<Object> q = new java.util.concurrent.ConcurrentLinkedQueue<>();
-			registry.gaugeCollectionSize("webhook.queue.size", Tags.of("webhookId", webhookId.toString()), q);
-			return q;
-		});
+		Queue<Object> queue = pendingBatches.computeIfAbsent(webhookId, ignored -> new ConcurrentLinkedQueue<>());
 
 		if (queue.size() >= MAX_QUEUE_SIZE_PER_WEBHOOK) {
-			registry.counter("webhook.queue.dropped", "webhookId", webhookId.toString(), "reason", "full").increment();
-			if (queue.size() % 1000 == 0) {
-				log.warn("Webhook {} queue full. Dropping events.", webhookId);
+			registry.counter("webhook.queue.dropped", "reason", "per_webhook_full").increment();
+			if (queue.poll() != null) {
+				pendingPayloadCount.decrementAndGet();
 			}
-			queue.poll();
+		}
+		if (!reserveGlobalQueueSlot()) {
+			registry.counter("webhook.queue.dropped", "reason", "global_full").increment();
+			return;
 		}
 		queue.add(payload);
+	}
+
+	private boolean reserveGlobalQueueSlot() {
+		int current;
+		do {
+			current = pendingPayloadCount.get();
+			if (current >= MAX_GLOBAL_QUEUE_SIZE) {
+				return false;
+			}
+		} while (!pendingPayloadCount.compareAndSet(current, current + 1));
+		return true;
 	}
 
 	// --- DISPATCH LOGIC ---
 
 	public void dispatchPendingBatches() {
-		for (Map.Entry<UUID, java.util.Queue<Object>> entry : pendingBatches.entrySet()) {
+		for (Map.Entry<UUID, Queue<Object>> entry : pendingBatches.entrySet()) {
 			UUID webhookId = entry.getKey();
-			java.util.Queue<Object> queue = entry.getValue();
+			Queue<Object> queue = entry.getValue();
 
 			// Get current config (URL, Secret) from cache
 			WebhookConfig config = webhookConfigs.get(webhookId);
 			if (config == null) {
 				// Config disappeared (webhook was deleted/disabled), clear queue
-				queue.clear();
-				pendingBatches.remove(webhookId);
+				removePendingQueue(webhookId);
 				continue;
 			}
 
-			if (queue.isEmpty())
+			if (queue.isEmpty() || !reserveDelivery(webhookId))
 				continue;
 
-			List<Object> batchToSend = new java.util.ArrayList<>(MAX_BATCH_SIZE);
+			List<Object> batchToSend = new ArrayList<>(MAX_BATCH_SIZE);
 			int count = 0;
 			while (!queue.isEmpty() && count < MAX_BATCH_SIZE) {
 				Object item = queue.poll();
 				if (item != null) {
+					pendingPayloadCount.decrementAndGet();
 					batchToSend.add(item);
 					count++;
 				}
 			}
 
 			if (!batchToSend.isEmpty()) {
-				registry.summary("webhook.batch.size", "webhookId", webhookId.toString()).record(batchToSend.size());
+				registry.summary("webhook.batch.size").record(batchToSend.size());
 				sendBatch(config, webhookId, batchToSend);
+			} else {
+				releaseDelivery(webhookId);
 			}
 		}
 	}
@@ -470,15 +502,16 @@ public class WebhookDispatchService {
 			okHttpClient.newCall(request).enqueue(new Callback() {
 				@Override
 				public void onFailure(Call call, IOException e) {
-					sample.stop(registry.timer("webhook.delivery.latency", "webhookId", webhookId.toString(), "status",
-							"error"));
+					releaseDelivery(webhookId);
+					sample.stop(registry.timer("webhook.delivery.latency", "status", "error"));
 					log.warn("Webhook delivery failed {}: {}", config.url, e.getMessage());
 				}
 
 				@Override
 				public void onResponse(Call call, Response response) throws IOException {
 					try (response) {
-						sample.stop(registry.timer("webhook.delivery.latency", "webhookId", webhookId.toString(),
+						releaseDelivery(webhookId);
+						sample.stop(registry.timer("webhook.delivery.latency",
 								"status", String.valueOf(response.code())));
 						if (!response.isSuccessful()) {
 							log.warn("Webhook error {}: Code {}", config.url, response.code());
@@ -488,7 +521,42 @@ public class WebhookDispatchService {
 			});
 
 		} catch (Exception e) {
+			releaseDelivery(webhookId);
 			log.error("Error sending webhook batch", e);
+		}
+	}
+
+	private void removePendingQueue(UUID webhookId) {
+		Queue<Object> queue = pendingBatches.remove(webhookId);
+		releaseDelivery(webhookId);
+		if (queue == null) {
+			return;
+		}
+		int removed = 0;
+		while (queue.poll() != null) {
+			removed++;
+		}
+		if (removed > 0) {
+			pendingPayloadCount.addAndGet(-removed);
+		}
+	}
+
+	private boolean reserveDelivery(UUID webhookId) {
+		if (!deliveriesInFlight.add(webhookId)) {
+			return false;
+		}
+		int current = inFlightDeliveryCount.incrementAndGet();
+		if (current <= MAX_GLOBAL_IN_FLIGHT) {
+			return true;
+		}
+		inFlightDeliveryCount.decrementAndGet();
+		deliveriesInFlight.remove(webhookId);
+		return false;
+	}
+
+	private void releaseDelivery(UUID webhookId) {
+		if (deliveriesInFlight.remove(webhookId)) {
+			inFlightDeliveryCount.decrementAndGet();
 		}
 	}
 

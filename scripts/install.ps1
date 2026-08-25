@@ -133,8 +133,14 @@ $parsedIp = $null
 if (-not [Net.IPAddress]::TryParse($p2pHost, [ref]$parsedIp) -or $parsedIp.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
     Fail "P2P host must be a valid IPv4 address."
 }
+$explorerDefault = (Env-OrDefault "GOLDENERA_EXPLORER_ENABLE" (Get-ExistingValue "EXPLORER_ENABLE" "false")) -eq "true"
+$explorerEnabled = Ask-YesNo "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" $explorerDefault
+
 $p2pPort = [int](Ask "P2P port" (Env-OrDefault "GOLDENERA_P2P_PORT" (Get-ExistingValue "P2P_PORT" "9000")))
-$apiPort = [int](Ask "API/Explorer port" (Env-OrDefault "GOLDENERA_API_PORT" (Get-ExistingValue "LISTEN_PORT" "8080")))
+$apiPort = [int](Env-OrDefault "GOLDENERA_API_PORT" (Get-ExistingValue "LISTEN_PORT" "8080"))
+if ($explorerEnabled) {
+    $apiPort = [int](Ask "API/Explorer port" $apiPort)
+}
 if ($p2pPort -lt 1 -or $p2pPort -gt 65535 -or $apiPort -lt 1 -or $apiPort -gt 65535 -or $p2pPort -eq $apiPort) {
     Fail "Ports must be different numbers from 1 to 65535."
 }
@@ -149,9 +155,13 @@ if ($miningEnabled) {
     $miningThreads = Ask "Mining threads (-1 = automatic)" $miningThreads
     if ($miningThreads -notmatch '^-1$|^[1-9][0-9]*$') { Fail "Mining threads must be -1 or a positive integer." }
 }
-
-$explorerDefault = (Env-OrDefault "GOLDENERA_EXPLORER_ENABLE" (Get-ExistingValue "EXPLORER_ENABLE" "true")) -eq "true"
-$explorerEnabled = Ask-YesNo "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" $explorerDefault
+$defaultNodeMemoryMb = if ($miningEnabled) { "12288" } else { "8192" }
+$minimumNodeMemoryMb = if ($miningEnabled) { 12288 } else { 8192 }
+$nodeMemoryLimitMb = Ask "Node container memory limit in MB" (Env-OrDefault "GOLDENERA_NODE_MEMORY_LIMIT_MB" (Get-ExistingValue "NODE_MEMORY_LIMIT_MB" $defaultNodeMemoryMb))
+if ($nodeMemoryLimitMb -notmatch '^[1-9][0-9]*$' -or [int64]$nodeMemoryLimitMb -lt $minimumNodeMemoryMb) {
+    Fail "This profile requires a node memory limit of at least $minimumNodeMemoryMb MB."
+}
+$postgresMemoryLimitMb = "1024"
 $identityMnemonic = Env-OrDefault "GOLDENERA_IDENTITY_MNEMONIC" ""
 if ([string]::IsNullOrWhiteSpace($identityMnemonic) -and -not $NonInteractive) {
     $identityMode = Ask "Node identity (automatic/import mnemonic)" "automatic"
@@ -181,6 +191,7 @@ services:
     image: ${GOLDENERA_IMAGE}
     pull_policy: ${GOLDENERA_PULL_POLICY}
     restart: unless-stopped
+    mem_limit: ${NODE_MEMORY_LIMIT_MB}m
     env_file: [.env]
     environment:
       POSTGRESQL_HOST: db
@@ -207,6 +218,7 @@ if ($explorerEnabled) {
   db:
     image: postgres:18.1-alpine
     restart: unless-stopped
+    mem_limit: ${POSTGRESQL_MEMORY_LIMIT_MB:-1024}m
     env_file: [.env]
     command: postgres -c shared_buffers=512MB -c max_connections=100
     environment:
@@ -239,6 +251,9 @@ PEER_REPUTATION_DB_PATH=./node_data/peer-reputation
 MINING_ENABLE=$boolMining
 MINING_HASHING_THREADS=$miningThreads
 MINING_MEMORY_MODE=FULL
+CONFIGURE_RANDOMX_HUGEPAGES=false
+NODE_MEMORY_LIMIT_MB=$nodeMemoryLimitMb
+POSTGRESQL_MEMORY_LIMIT_MB=$postgresMemoryLimitMb
 POSTGRESQL_ENABLE=$boolExplorer
 EXPLORER_ENABLE=$boolExplorer
 WEBHOOK_ENABLE=$boolExplorer
@@ -252,10 +267,13 @@ SECURITY_CORE_API_ENABLED=false
 SECURITY_EXPLORER_API_ENABLED=$boolExplorer
 ADMIN_USERNAME=$adminUser
 ADMIN_PASSWORD=$adminPassword
-JAVA_HEAP_MB=
+JAVA_HEAP_MB=$(Get-ExistingValue "JAVA_HEAP_MB" "")
+JAVA_INITIAL_HEAP_MB=1024
+JAVA_NMT_LEVEL=summary
+JAVA_JFR_ENABLE=true
 ROCKSDB_BLOCK_CACHE_MB=512
-ROCKSDB_WRITE_BUFFER_MB=64
-ROCKSDB_MAX_WRITE_BUFFERS=4
+ROCKSDB_WRITE_BUFFER_MB=32
+ROCKSDB_MAX_WRITE_BUFFERS=2
 ROCKSDB_MAX_BACKGROUND_JOBS=6
 ROCKSDB_BLOCK_SIZE_KB=16
 ROCKSDB_BLOOM_FILTER_BITS=10
@@ -278,6 +296,7 @@ MEMPOOL_MAX_SIZE=100000
 MEMPOOL_EXPIRE_TX_IN_MINUTES=60
 MEMPOOL_MIN_ACCEPTABLE_FEE_IN_WEI=10
 MEMPOOL_MAX_NONCE_GAP_PER_SENDER=64
+SYNC_RANDOMX_VERIFICATION_MODE=LIGHT
 LOGGING_DIR=./node_logs
 LOGGING_FILE=goldenera.log
 LOGGING_LEVEL_ROOT=INFO
@@ -332,7 +351,11 @@ if (-not $SkipDockerCheck) {
 
 Write-Info "GoldenEra Node is configured in $InstallDir"
 Write-Info "Manage it with: & '$InstallDir\goldenera.ps1' status|logs|update|restart|stop|start"
-Write-Info "API/Explorer: http://localhost:$apiPort"
+if ($explorerEnabled) {
+    Write-Info "API/Explorer: http://localhost:$apiPort"
+} else {
+    Write-Info "Core API: http://localhost:$apiPort"
+}
 Write-Info "Admin username: $adminUser"
 Write-Info "Admin password: $adminPassword"
 Write-Warning ".env contains sensitive values; save the password in a password manager."

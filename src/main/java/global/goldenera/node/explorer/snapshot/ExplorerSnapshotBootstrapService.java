@@ -38,8 +38,10 @@ import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloor;
 import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
+import lombok.extern.slf4j.Slf4j;
 
 /** Restores explorer-only data after the verified core snapshot floor is open. */
+@Slf4j
 public final class ExplorerSnapshotBootstrapService {
 
 	private final SnapshotDistributionProperties properties;
@@ -67,12 +69,17 @@ public final class ExplorerSnapshotBootstrapService {
 	public Outcome prepareForIndexing(StoredChainIdentity identity) {
 		Optional<CoreSnapshotCheckpointFloor> optionalFloor = floorPolicy.floor();
 		if (optionalFloor.isEmpty()) {
+			log.info("EXPLORER SNAPSHOT: No activated CORE snapshot floor; using live indexer path");
 			return Outcome.LEGACY_NO_FLOOR;
 		}
 		CoreSnapshotCheckpointFloor floor = optionalFloor.orElseThrow();
+		log.info("EXPLORER SNAPSHOT: Activated CORE floor at height {}; inspecting PostgreSQL",
+				floor.height());
 		ExplorerSnapshotBinding binding = binding(identity, floor);
 		DatabaseState databaseState = inspectDatabase(floor);
 		if (databaseState == DatabaseState.CANONICAL_AT_OR_ABOVE_FLOOR) {
+			log.info("EXPLORER SNAPSHOT: PostgreSQL is already canonical at or above CORE floor {}",
+					floor.height());
 			return Outcome.ALREADY_INDEXED;
 		}
 		if (databaseState != DatabaseState.EMPTY) {
@@ -83,7 +90,11 @@ public final class ExplorerSnapshotBootstrapService {
 			throw new ExplorerSnapshotException(
 					"Explorer snapshot bootstrap is disabled while core starts above genesis");
 		}
+		log.info("EXPLORER SNAPSHOT: Empty PostgreSQL detected; downloading snapshot bound to CORE height {}",
+				floor.height());
 		try (StagedExplorerSnapshotDownload staged = remoteSource.stageFromFirstTrustedSource(binding)) {
+			log.info("EXPLORER SNAPSHOT: Downloaded {} chunk(s); importing PostgreSQL snapshot",
+					staged.manifest().chunks().size());
 			PreparedExplorerSnapshotImport prepared = importer.importIntoEmptySchema(binding, staged.directory());
 			if (!prepared.binding().equals(binding)) {
 				throw new ExplorerSnapshotException("Explorer importer returned a mismatched prepared capability");
@@ -96,6 +107,7 @@ public final class ExplorerSnapshotBootstrapService {
 		if (inspectDatabase(floor) != DatabaseState.CANONICAL_AT_OR_ABOVE_FLOOR) {
 			throw new ExplorerSnapshotException("Imported explorer snapshot did not reach the active checkpoint floor");
 		}
+		log.info("EXPLORER SNAPSHOT: Imported PostgreSQL snapshot at CORE height {}", floor.height());
 		return Outcome.IMPORTED;
 	}
 

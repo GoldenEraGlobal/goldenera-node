@@ -34,6 +34,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import io.netty.handler.codec.LengthFieldPrepender;
+import io.netty.handler.timeout.ReadTimeoutHandler;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
@@ -45,10 +46,14 @@ public class P2PChannelInitializer extends ChannelInitializer<SocketChannel> {
 	ApplicationContext applicationContext;
 
 	public static final int MAX_FRAME_SIZE = 40 * 1024 * 1024;
+	public static final int PRE_HANDSHAKE_MAX_FRAME_SIZE = 64 * 1024;
+	public static final String FRAME_DECODER_NAME = "p2pFrameDecoder";
 
 	@Override
 	protected void initChannel(SocketChannel ch) {
-		ch.pipeline().addLast(new LengthFieldBasedFrameDecoder(MAX_FRAME_SIZE, 0, 4, 0, 4));
+		ch.pipeline().addLast(new ReadTimeoutHandler(60));
+		ch.pipeline().addLast(FRAME_DECODER_NAME,
+				new LengthFieldBasedFrameDecoder(PRE_HANDSHAKE_MAX_FRAME_SIZE, 0, 4, 0, 4));
 		ch.pipeline().addLast(new LengthFieldPrepender(4));
 		ch.pipeline().addLast(new P2PMessageCodec());
 		ch.pipeline().addLast(applicationContext.getBean(P2PInboundHandler.class));

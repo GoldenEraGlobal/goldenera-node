@@ -23,11 +23,12 @@
  */
 package global.goldenera.node.explorer.snapshot;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +40,7 @@ import java.util.Optional;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
@@ -72,7 +74,8 @@ class IsolatedExplorerArchiveReplayEngineTest {
 
 		fixture.engine().rebuildToCanonicalHead();
 
-		verify(fixture.indexer()).handleBlockConnected(any(BlockConnectedEvent.class));
+		verify(fixture.indexer()).handleBlockConnectedBatch(anyList());
+		verify(fixture.indexer(), never()).handleBlockConnected(any());
 	}
 
 	@Test
@@ -83,6 +86,7 @@ class IsolatedExplorerArchiveReplayEngineTest {
 				.isInstanceOf(ExplorerSnapshotException.class)
 				.hasMessageContaining("state root mismatch at block 0");
 		verify(fixture.indexer(), never()).handleBlockConnected(any());
+		verify(fixture.indexer(), never()).handleBlockConnectedBatch(anyList());
 	}
 
 	@Test
@@ -94,6 +98,7 @@ class IsolatedExplorerArchiveReplayEngineTest {
 		fixture.engine().rebuildToCanonicalHead();
 
 		verify(fixture.indexer(), never()).handleBlockConnected(any());
+		verify(fixture.indexer(), never()).handleBlockConnectedBatch(anyList());
 	}
 
 	@Test
@@ -144,7 +149,11 @@ class IsolatedExplorerArchiveReplayEngineTest {
 
 		engine.rebuildToCanonicalHead();
 
-		verify(indexer, times(2)).handleBlockConnected(any(BlockConnectedEvent.class));
+		@SuppressWarnings("unchecked")
+		ArgumentCaptor<List<BlockConnectedEvent>> batch = ArgumentCaptor.forClass(List.class);
+		verify(indexer).handleBlockConnectedBatch(batch.capture());
+		assertThat(batch.getValue()).hasSize(2);
+		verify(indexer, never()).handleBlockConnected(any());
 	}
 
 	private Fixture fixture(Hash stateRoot, Optional<ExStatus> initialStatus) {

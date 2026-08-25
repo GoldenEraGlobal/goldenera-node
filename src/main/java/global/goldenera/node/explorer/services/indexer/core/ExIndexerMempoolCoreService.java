@@ -80,6 +80,12 @@ public class ExIndexerMempoolCoreService {
 	private static final String TRUNCATE_SQL = "TRUNCATE TABLE explorer_mem_transfer";
 
 	@Transactional
+	public void applyBatch(List<ExMemTransfer> transfers, List<Hash> hashesToDelete) {
+		batchInsert(transfers);
+		batchDelete(hashesToDelete);
+	}
+
+	@Transactional
 	public void batchInsert(List<ExMemTransfer> transfers) {
 		if (transfers.isEmpty())
 			return;

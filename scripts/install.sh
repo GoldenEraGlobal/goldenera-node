@@ -8,8 +8,8 @@ readonly ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
 # scratchpads. The entrypoint separately budgets standard-memory rollover.
 readonly RANDOMX_DATASET_CACHE_HUGEPAGES=1168
 readonly RANDOMX_HUGEPAGE_MARGIN=64
-readonly RANDOMX_MIN_HUGEPAGES=1280
-readonly RANDOMX_HUGEPAGE_GRANULARITY=64
+readonly RANDOMX_MIN_HUGEPAGES=2000
+readonly RANDOMX_HUGEPAGE_GRANULARITY=16
 
 INSTALL_DIR=""
 NON_INTERACTIVE=false
@@ -43,7 +43,8 @@ Non-interactive variables:
   GOLDENERA_INSTALL_DIR, GOLDENERA_IMAGE, GOLDENERA_NETWORK,
   GOLDENERA_P2P_HOST, GOLDENERA_P2P_PORT, GOLDENERA_API_PORT,
   GOLDENERA_MINING_ENABLE, GOLDENERA_BENEFICIARY_ADDRESS,
-  GOLDENERA_MINING_THREADS, GOLDENERA_EXPLORER_ENABLE,
+  GOLDENERA_MINING_THREADS, GOLDENERA_CONFIGURE_HUGEPAGES,
+  GOLDENERA_NODE_MEMORY_LIMIT_MB, GOLDENERA_EXPLORER_ENABLE,
   GOLDENERA_IDENTITY_MNEMONIC, GOLDENERA_ADMIN_USERNAME,
   GOLDENERA_ADMIN_PASSWORD, GOLDENERA_POSTGRES_PASSWORD
 EOF
@@ -283,10 +284,15 @@ select_configuration() {
   [ -n "$P2P_HOST" ] || die "P2P host is required."
   validate_ipv4 "$P2P_HOST" || die "P2P host must be a valid IPv4 address."
 
+  EXPLORER_ENABLE="${GOLDENERA_EXPLORER_ENABLE:-$(existing_env_value EXPLORER_ENABLE false)}"
+  prompt_yes_no EXPLORER_ENABLE "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" "$EXPLORER_ENABLE"
+
   P2P_PORT="${GOLDENERA_P2P_PORT:-$(existing_env_value P2P_PORT 9000)}"
   API_PORT="${GOLDENERA_API_PORT:-$(existing_env_value LISTEN_PORT 8080)}"
   prompt P2P_PORT "P2P port" "$P2P_PORT"
-  prompt API_PORT "API/Explorer port" "$API_PORT"
+  if is_true "$EXPLORER_ENABLE"; then
+    prompt API_PORT "API/Explorer port" "$API_PORT"
+  fi
   validate_port "$P2P_PORT" || die "Invalid P2P port: $P2P_PORT"
   validate_port "$API_PORT" || die "Invalid API port: $API_PORT"
   [ "$P2P_PORT" != "$API_PORT" ] || die "P2P and API ports must be different."
@@ -303,9 +309,29 @@ select_configuration() {
     [[ "$MINING_THREADS" =~ ^-1$|^[1-9][0-9]*$ ]] || die "Mining threads must be -1 or a positive integer."
   fi
 
-  EXPLORER_ENABLE="${GOLDENERA_EXPLORER_ENABLE:-$(existing_env_value EXPLORER_ENABLE true)}"
-  prompt_yes_no EXPLORER_ENABLE "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" "$EXPLORER_ENABLE"
+  CONFIGURE_HUGEPAGES="${GOLDENERA_CONFIGURE_HUGEPAGES:-$(existing_env_value CONFIGURE_RANDOMX_HUGEPAGES false)}"
+  if is_true "$MINING_ENABLE" && [ "$(uname -s)" = Linux ]; then
+    prompt_yes_no CONFIGURE_HUGEPAGES \
+      "Reserve 2000 huge pages (usually 4GB host RAM) for RandomX" "$CONFIGURE_HUGEPAGES"
+  else
+    CONFIGURE_HUGEPAGES=false
+  fi
 
+  local default_node_memory_mb=8192 minimum_node_memory_mb=8192
+  if is_true "$MINING_ENABLE"; then
+    default_node_memory_mb=12288
+    minimum_node_memory_mb=12288
+    if is_true "$CONFIGURE_HUGEPAGES"; then
+      default_node_memory_mb=9216
+      minimum_node_memory_mb=9216
+    fi
+  fi
+  NODE_MEMORY_LIMIT_MB="${GOLDENERA_NODE_MEMORY_LIMIT_MB:-$(existing_env_value NODE_MEMORY_LIMIT_MB "$default_node_memory_mb")}"
+  prompt NODE_MEMORY_LIMIT_MB "Node container memory limit in MB" "$NODE_MEMORY_LIMIT_MB"
+  [[ "$NODE_MEMORY_LIMIT_MB" =~ ^[1-9][0-9]*$ ]] || die "Node memory limit must be a positive integer."
+  [ "$NODE_MEMORY_LIMIT_MB" -ge "$minimum_node_memory_mb" ] \
+    || die "This profile requires a node memory limit of at least ${minimum_node_memory_mb} MB."
+  POSTGRESQL_MEMORY_LIMIT_MB=1024
   IDENTITY_MNEMONIC="${GOLDENERA_IDENTITY_MNEMONIC:-}"
   if [ -z "$IDENTITY_MNEMONIC" ] && ! "$NON_INTERACTIVE"; then
     prompt identity_mode "Node identity (automatic/import mnemonic)" "automatic"
@@ -334,6 +360,7 @@ services:
     image: ${GOLDENERA_IMAGE}
     pull_policy: ${GOLDENERA_PULL_POLICY}
     restart: unless-stopped
+    mem_limit: ${NODE_MEMORY_LIMIT_MB}m
     env_file: [.env]
     environment:
       POSTGRESQL_HOST: db
@@ -360,6 +387,7 @@ EOF
   db:
     image: postgres:18.1-alpine
     restart: unless-stopped
+    mem_limit: ${POSTGRESQL_MEMORY_LIMIT_MB:-1024}m
     env_file: [.env]
     command: postgres -c shared_buffers=512MB -c max_connections=100
     environment:
@@ -395,6 +423,9 @@ PEER_REPUTATION_DB_PATH=./node_data/peer-reputation
 MINING_ENABLE=$MINING_ENABLE
 MINING_HASHING_THREADS=$MINING_THREADS
 MINING_MEMORY_MODE=FULL
+CONFIGURE_RANDOMX_HUGEPAGES=$CONFIGURE_HUGEPAGES
+NODE_MEMORY_LIMIT_MB=$NODE_MEMORY_LIMIT_MB
+POSTGRESQL_MEMORY_LIMIT_MB=$POSTGRESQL_MEMORY_LIMIT_MB
 POSTGRESQL_ENABLE=$EXPLORER_ENABLE
 EXPLORER_ENABLE=$EXPLORER_ENABLE
 WEBHOOK_ENABLE=$EXPLORER_ENABLE
@@ -408,10 +439,13 @@ SECURITY_CORE_API_ENABLED=false
 SECURITY_EXPLORER_API_ENABLED=$EXPLORER_ENABLE
 ADMIN_USERNAME=$ADMIN_USERNAME
 ADMIN_PASSWORD=$ADMIN_PASSWORD
-JAVA_HEAP_MB=
+JAVA_HEAP_MB=$(existing_env_value JAVA_HEAP_MB "")
+JAVA_INITIAL_HEAP_MB=1024
+JAVA_NMT_LEVEL=summary
+JAVA_JFR_ENABLE=true
 ROCKSDB_BLOCK_CACHE_MB=512
-ROCKSDB_WRITE_BUFFER_MB=64
-ROCKSDB_MAX_WRITE_BUFFERS=4
+ROCKSDB_WRITE_BUFFER_MB=32
+ROCKSDB_MAX_WRITE_BUFFERS=2
 ROCKSDB_MAX_BACKGROUND_JOBS=6
 ROCKSDB_BLOCK_SIZE_KB=16
 ROCKSDB_BLOOM_FILTER_BITS=10
@@ -434,6 +468,7 @@ MEMPOOL_MAX_SIZE=100000
 MEMPOOL_EXPIRE_TX_IN_MINUTES=60
 MEMPOOL_MIN_ACCEPTABLE_FEE_IN_WEI=10
 MEMPOOL_MAX_NONCE_GAP_PER_SENDER=64
+SYNC_RANDOMX_VERIFICATION_MODE=LIGHT
 LOGGING_DIR=./node_logs
 LOGGING_FILE=goldenera.log
 LOGGING_LEVEL_ROOT=INFO
@@ -521,17 +556,32 @@ read_linux_hugepage_count() {
 }
 
 tune_linux_hugepages() {
-  local processors workers hugepages actual_total actual_free
+  local processors workers hugepages actual_total actual_free host_memory_mb hugepage_size_kb
+  local hugepage_reserve_mb postgres_reserve_mb required_host_mb
   is_true "$MINING_ENABLE" || return 0
+  is_true "$CONFIGURE_HUGEPAGES" || {
+    info "Huge-page tuning skipped; enable it explicitly with GOLDENERA_CONFIGURE_HUGEPAGES=true."
+    return 0
+  }
   [ "$(uname -s)" = Linux ] || return 0
   if "$SKIP_DOCKER_CHECK"; then return 0; fi
   processors="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')"
   [[ "$processors" =~ ^[1-9][0-9]*$ ]] || processors=1
   workers="$(resolve_mining_workers "$MINING_THREADS" "$processors")"
   hugepages="$(calculate_randomx_hugepages "$workers")"
+  host_memory_mb="$(awk '$1 == "MemTotal:" { print int($2 / 1024); exit }' /proc/meminfo)"
+  hugepage_size_kb="$(awk '$1 == "Hugepagesize:" { print $2; exit }' /proc/meminfo)"
+  [[ "$host_memory_mb" =~ ^[1-9][0-9]*$ ]] || die "Unable to detect host memory before huge-page tuning."
+  [[ "$hugepage_size_kb" =~ ^[1-9][0-9]*$ ]] || die "Unable to detect the huge-page size."
+  hugepage_reserve_mb=$((hugepages * hugepage_size_kb / 1024))
+  postgres_reserve_mb=0
+  is_true "$EXPLORER_ENABLE" && postgres_reserve_mb="$POSTGRESQL_MEMORY_LIMIT_MB"
+  required_host_mb=$((NODE_MEMORY_LIMIT_MB + hugepage_reserve_mb + postgres_reserve_mb + 1024))
+  [ "$host_memory_mb" -ge "$required_host_mb" ] \
+    || die "Huge-page profile requires at least ${required_host_mb} MB host RAM; detected ${host_memory_mb} MB."
   info "Configuring ${hugepages} huge pages for RandomX mining (${workers} workers)..."
   printf 'vm.nr_hugepages=%s\n' "$hugepages" | sudo_run tee /etc/sysctl.d/99-goldenera-node.conf >/dev/null
-  sudo_run sysctl --system >/dev/null
+  sudo_run sysctl -w "vm.nr_hugepages=$hugepages" >/dev/null
   actual_total="$(read_linux_hugepage_count HugePages_Total || printf '0')"
   actual_free="$(read_linux_hugepage_count HugePages_Free || printf '0')"
   if [ "$actual_total" -lt "$hugepages" ] || [ "$actual_free" -lt "$RANDOMX_MIN_HUGEPAGES" ]; then
@@ -559,7 +609,11 @@ install_node() {
 
   info "GoldenEra Node is configured in $INSTALL_DIR"
   info "Manage it with: $INSTALL_DIR/goldenera {status|logs|update|restart|stop|start}"
-  info "API/Explorer: http://localhost:$API_PORT"
+  if is_true "$EXPLORER_ENABLE"; then
+    info "API/Explorer: http://localhost:$API_PORT"
+  else
+    info "Core API: http://localhost:$API_PORT"
+  fi
   info "Admin username: $ADMIN_USERNAME"
   info "Admin password: $ADMIN_PASSWORD"
   warn "Save the admin password in a password manager; .env contains sensitive values."

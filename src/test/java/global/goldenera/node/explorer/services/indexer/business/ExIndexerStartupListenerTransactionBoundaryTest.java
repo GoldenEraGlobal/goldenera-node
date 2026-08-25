@@ -126,6 +126,7 @@ class ExIndexerStartupListenerTransactionBoundaryTest {
 					mock(ExIndexerStatusCoreService.class),
 					mock(ExIndexerQueueService.class),
 					mock(ExIndexerRevertService.class),
+					mock(global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger.class),
 					mock(ChainQuery.class),
 					mock(ExIndexerEventReconstructionService.class));
 		}

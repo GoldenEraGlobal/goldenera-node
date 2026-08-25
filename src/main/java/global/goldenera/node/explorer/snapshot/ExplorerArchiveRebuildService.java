@@ -25,6 +25,7 @@ package global.goldenera.node.explorer.snapshot;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.DisposableBean;
@@ -135,6 +136,19 @@ public final class ExplorerArchiveRebuildService implements DisposableBean {
 	@Override
 	public void destroy() {
 		executor.shutdownNow();
+		boolean interrupted = false;
+		while (!executor.isTerminated()) {
+			try {
+				if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+					log.warn("Still waiting for explorer archive rebuild worker to stop safely");
+				}
+			} catch (InterruptedException e) {
+				interrupted = true;
+			}
+		}
+		if (interrupted) {
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	private String rootMessage(Throwable failure) {

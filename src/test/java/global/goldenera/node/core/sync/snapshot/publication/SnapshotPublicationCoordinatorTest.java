@@ -26,6 +26,7 @@ package global.goldenera.node.core.sync.snapshot.publication;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -115,6 +116,20 @@ class SnapshotPublicationCoordinatorTest {
 		assertThat(fixture.coordinator.attempt().outcome())
 				.isEqualTo(SnapshotPublicationCoordinator.Outcome.CADENCE_NOT_REACHED);
 		assertThat(fixture.generated.get()).isEqualTo(1);
+	}
+
+	@Test
+	void cadenceCheckDoesNotReloadExplorerCaptureOnEveryHeadSignal() {
+		Fixture fixture = new Fixture(100, hash(20), true, Instant.parse("2026-08-22T00:00:00Z"));
+		ExplorerSnapshotPublicationGenerator explorer = mock(ExplorerSnapshotPublicationGenerator.class);
+		when(explorer.preferredCoreAnchor(org.mockito.ArgumentMatchers.any())).thenReturn(Optional.empty());
+		when(fixture.explorerProvider.getIfAvailable()).thenReturn(explorer);
+		fixture.coordinator.attempt();
+		fixture.head(101, hash(21));
+
+		assertThat(fixture.coordinator.attempt().outcome())
+				.isEqualTo(SnapshotPublicationCoordinator.Outcome.CADENCE_NOT_REACHED);
+		verify(explorer, times(1)).preferredCoreAnchor(org.mockito.ArgumentMatchers.any());
 	}
 
 	@Test

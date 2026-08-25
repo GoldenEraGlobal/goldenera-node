@@ -84,8 +84,10 @@ import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityStateC
 import global.goldenera.node.core.sync.snapshot.archive.CoreSnapshotEntityType;
 import global.goldenera.node.core.sync.snapshot.archive.VerifiedCoreSnapshotArchive;
 import global.goldenera.node.core.sync.snapshot.transport.StagedCoreSnapshotArchiveDownload;
+import lombok.extern.slf4j.Slf4j;
 
 /** Builds a complete closed sibling RocksDB from an already verified FULL snapshot. */
+@Slf4j
 public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiveImporter {
 
 	static final int MAX_BATCH_ENTRIES = 10_000;
@@ -141,14 +143,22 @@ public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiv
 		RocksDB database = null;
 		boolean complete = false;
 		try {
+			log.info("CORE SNAPSHOT: Preparing RocksDB import at height {}",
+					verifiedArchive.checkpointHeight());
 			database = rocksDbFactory.open(preparedDirectory, families);
 			long stateNodeCount;
 			ImportCounts blocks;
 			ImportCounts entities;
 			try (BoundedBatchWriter writer = new BoundedBatchWriter(database)) {
 				stateNodeCount = importState(staged, families, writer);
+				log.info("CORE SNAPSHOT: Imported {} state trie nodes; importing full block history",
+						stateNodeCount);
 				blocks = importBlocks(staged, verifiedArchive, families, writer);
+				log.info("CORE SNAPSHOT: Imported {} blocks and {} transactions; importing entity indexes",
+						blocks.primaryCount(), blocks.secondaryCount());
 				entities = importEntities(staged, verifiedArchive, families, writer);
+				log.info("CORE SNAPSHOT: Imported {} entity index entries; finalizing prepared RocksDB",
+						entities.primaryCount());
 				writer.flush();
 				writeFinalMetadata(database, families, staged, verifiedArchive);
 			}
@@ -159,6 +169,7 @@ public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiv
 			}
 			postflightReadOnly(
 					preparedDirectory, staged, verifiedArchive, stateNodeCount, blocks, entities);
+			log.info("CORE SNAPSHOT: Prepared RocksDB postflight verification complete");
 			complete = true;
 			return new DiskPreparedCoreSnapshotImport(preparedDirectory, verifiedArchive);
 		} finally {
@@ -256,7 +267,9 @@ public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiv
 		Hash previousHash = null;
 		BigInteger cumulativeDifficulty = BigInteger.ZERO;
 		long transactionCount = 0;
-		for (CoreSnapshotBlockChunkDescriptor descriptor : staged.archiveManifest().blockChunks()) {
+		List<CoreSnapshotBlockChunkDescriptor> chunks = staged.archiveManifest().blockChunks();
+		for (int chunkIndex = 0; chunkIndex < chunks.size(); chunkIndex++) {
+			CoreSnapshotBlockChunkDescriptor descriptor = chunks.get(chunkIndex);
 			try (InputStream input = Files.newInputStream(
 					staged.blockChunkFiles().get(descriptor.index()), LinkOption.NOFOLLOW_LINKS);
 					CoreSnapshotBlockChunkCodec.Reader reader =
@@ -302,6 +315,7 @@ public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiv
 				}
 				reader.finish();
 			}
+			logProgress("Block import", chunkIndex + 1, chunks.size(), expectedHeight);
 		}
 		if (expectedHeight != verified.blockCount()
 				|| expectedHeight != verified.checkpointHeight() + 1
@@ -318,7 +332,9 @@ public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiv
 			RocksDbColumnFamilies families,
 			BoundedBatchWriter writer) throws Exception {
 		long entries = 0;
-		for (CoreSnapshotEntityChunkDescriptor descriptor : staged.archiveManifest().entityChunks()) {
+		List<CoreSnapshotEntityChunkDescriptor> chunks = staged.archiveManifest().entityChunks();
+		for (int chunkIndex = 0; chunkIndex < chunks.size(); chunkIndex++) {
+			CoreSnapshotEntityChunkDescriptor descriptor = chunks.get(chunkIndex);
 			try (InputStream opened = Files.newInputStream(
 					staged.entityChunkFiles().get(descriptor.index()), LinkOption.NOFOLLOW_LINKS);
 					CoreSnapshotCompression.VerifiedInputStream verifiedInput =
@@ -340,11 +356,19 @@ public final class CoreSnapshotDiskArchiveImporter implements CoreSnapshotArchiv
 				reader.finish();
 				verifiedInput.finish();
 			}
+			logProgress("Entity import", chunkIndex + 1, chunks.size(), entries);
 		}
 		if (entries != verified.entityEntryCount()) {
 			throw new IllegalStateException("Imported entity count differs from verified sidecar");
 		}
 		return new ImportCounts(entries, 0);
+	}
+
+	private void logProgress(String phase, int completed, int total, long entries) {
+		if (completed == total || completed * 10 / total > (completed - 1) * 10 / total) {
+			log.info("CORE SNAPSHOT: {} progress: {}/{} chunks ({}%), {} entries",
+					phase, completed, total, completed * 100 / total, entries);
+		}
 	}
 
 	private ColumnFamilyHandle entityFamily(

@@ -59,29 +59,37 @@ public class CoreAsyncConfig {
 	public static final String MINER_THREAD_FACTORY = "minerThreadFactory";
 
 	@Bean(name = P2P_RECEIVE_EXECUTOR)
-	public Executor p2pReceiveExecutor() {
+	public Executor p2pReceiveExecutor(MeterRegistry registry) {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		int cores = Runtime.getRuntime().availableProcessors();
-		executor.setCorePoolSize(Math.max(4, cores / 2));
-		executor.setMaxPoolSize(Math.max(8, cores));
-		executor.setQueueCapacity(3000);
+		executor.setCorePoolSize(Math.min(4, Math.max(2, cores / 2)));
+		executor.setMaxPoolSize(8);
+		executor.setQueueCapacity(256);
 		executor.setThreadNamePrefix("P2P-In-");
-		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
 		executor.initialize();
+		registerExecutorMetrics("p2p.receive.executor", executor, registry);
 		return executor;
 	}
 
 	@Bean(name = P2P_SEND_EXECUTOR)
-	public Executor p2pSendExecutor() {
+	public Executor p2pSendExecutor(MeterRegistry registry) {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		int cores = Runtime.getRuntime().availableProcessors();
-		executor.setCorePoolSize(Math.max(4, cores / 2));
-		executor.setMaxPoolSize(Math.max(8, cores));
-		executor.setQueueCapacity(3000);
+		executor.setCorePoolSize(Math.min(4, Math.max(2, cores / 2)));
+		executor.setMaxPoolSize(8);
+		executor.setQueueCapacity(256);
 		executor.setThreadNamePrefix("P2P-Out-");
-		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
 		executor.initialize();
+		registerExecutorMetrics("p2p.send.executor", executor, registry);
 		return executor;
+	}
+
+	private void registerExecutorMetrics(String prefix, ThreadPoolTaskExecutor executor, MeterRegistry registry) {
+		registry.gauge(prefix + ".queued", executor,
+				value -> value.getThreadPoolExecutor().getQueue().size());
+		registry.gauge(prefix + ".active", executor, ThreadPoolTaskExecutor::getActiveCount);
 	}
 
 	@Bean(name = CORE_TASK_EXECUTOR)
@@ -89,9 +97,9 @@ public class CoreAsyncConfig {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		executor.setCorePoolSize(4);
 		executor.setMaxPoolSize(12);
-		executor.setQueueCapacity(10000);
+		executor.setQueueCapacity(256);
 		executor.setThreadNamePrefix("Core-Worker-");
-		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
 		executor.initialize();
 		return executor;
 	}
@@ -124,7 +132,7 @@ public class CoreAsyncConfig {
 		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 		executor.setCorePoolSize(1);
 		executor.setMaxPoolSize(1);
-		executor.setQueueCapacity(10000);
+		executor.setQueueCapacity(256);
 		executor.setThreadNamePrefix(threadNamePrefix);
 		ThreadPoolExecutor.CallerRunsPolicy callerRuns = new ThreadPoolExecutor.CallerRunsPolicy();
 		executor.setRejectedExecutionHandler((task, threadPool) -> {

@@ -14,6 +14,16 @@ function Assert-NotContains([string]$Path, [string]$Text) {
 }
 
 try {
+    $DefaultInstallDir = Join-Path $TestRoot "default-node"
+    $env:GOLDENERA_P2P_HOST = "203.0.113.19"
+    Remove-Item Env:GOLDENERA_EXPLORER_ENABLE -ErrorAction SilentlyContinue
+    & (Join-Path $RootDir "scripts\install.ps1") -InstallDir $DefaultInstallDir -LocalImage -NonInteractive -SkipDockerCheck
+    Assert-Contains (Join-Path $DefaultInstallDir ".env") "EXPLORER_ENABLE=false"
+    Assert-Contains (Join-Path $DefaultInstallDir ".env") "POSTGRESQL_ENABLE=false"
+    Assert-Contains (Join-Path $DefaultInstallDir ".env") "LISTEN_PORT=8080"
+    Assert-Contains (Join-Path $DefaultInstallDir ".env") "NODE_MEMORY_LIMIT_MB=8192"
+    Assert-NotContains (Join-Path $DefaultInstallDir "compose.yaml") "image: postgres:18.1-alpine"
+
     $env:GOLDENERA_P2P_HOST = "203.0.113.20"
     $env:GOLDENERA_MINING_ENABLE = "true"
     $env:GOLDENERA_BENEFICIARY_ADDRESS = "0x2222222222222222222222222222222222222222"
@@ -29,7 +39,11 @@ try {
     Assert-True (Test-Path (Join-Path $InstallDir "goldenera.ps1")) "controller is missing"
     Assert-Contains (Join-Path $InstallDir ".env") "GOLDENERA_IMAGE=goldenera-node:sandbox-local"
     Assert-Contains (Join-Path $InstallDir ".env") "POSTGRESQL_PASSWORD=postgres-secret"
+    Assert-Contains (Join-Path $InstallDir ".env") "NODE_MEMORY_LIMIT_MB=12288"
+    Assert-Contains (Join-Path $InstallDir ".env") "ROCKSDB_WRITE_BUFFER_MB=32"
+    Assert-Contains (Join-Path $InstallDir ".env") "SYNC_RANDOMX_VERIFICATION_MODE=LIGHT"
     Assert-Contains (Join-Path $InstallDir "compose.yaml") "image: postgres:18.1-alpine"
+    Assert-Contains (Join-Path $InstallDir "compose.yaml") 'mem_limit: ${NODE_MEMORY_LIMIT_MB}m'
     Assert-Contains (Join-Path $InstallDir "compose.yaml") "- IPC_LOCK"
     Assert-NotContains (Join-Path $InstallDir "compose.yaml") "container_name:"
 

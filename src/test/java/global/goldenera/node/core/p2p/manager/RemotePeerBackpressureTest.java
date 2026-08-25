@@ -21,36 +21,38 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.peers;
+package global.goldenera.node.core.p2p.manager;
 
-import static lombok.AccessLevel.PRIVATE;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.List;
 
-import org.rocksdb.ColumnFamilyHandle;
-import org.springframework.stereotype.Component;
+import org.junit.jupiter.api.Test;
 
-import lombok.experimental.FieldDefaults;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
 
-@Component
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public class PeerReputationColumnFamilies {
+class RemotePeerBackpressureTest {
 
-	public static final String CF_PEER_REPUTATION = "peer_reputation";
+	@Test
+	void unwritablePeerCannotAccumulateOutboundMessagesAndIsEventuallyClosed() {
+		Channel channel = mock(Channel.class);
+		when(channel.isActive()).thenReturn(true);
+		when(channel.isWritable()).thenReturn(false);
+		when(channel.close()).thenReturn(mock(ChannelFuture.class));
+		RemotePeer peer = new RemotePeer(channel, new SimpleMeterRegistry());
 
-	Map<String, ColumnFamilyHandle> handles = new HashMap<>();
+		for (int attempt = 0; attempt < 8; attempt++) {
+			assertThat(peer.sendBlockHeaders(List.of(), attempt)).isFalse();
+		}
 
-	public void addHandle(String name, ColumnFamilyHandle handle) {
-		handles.put(name, handle);
-	}
-
-	public ColumnFamilyHandle peerReputation() {
-		return handles.get(CF_PEER_REPUTATION);
-	}
-
-	public void close() {
-		handles.values().forEach(ColumnFamilyHandle::close);
-		handles.clear();
+		verify(channel, never()).writeAndFlush(any());
+		verify(channel).close();
 	}
 }

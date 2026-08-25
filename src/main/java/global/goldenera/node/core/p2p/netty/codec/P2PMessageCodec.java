@@ -30,6 +30,7 @@ import org.apache.tuweni.bytes.Bytes;
 import global.goldenera.node.core.p2p.messages.NetworkMessage;
 import global.goldenera.node.core.p2p.messages.P2PEnvelope;
 import global.goldenera.node.core.p2p.messages.serialization.P2PSerializer;
+import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
 import global.goldenera.rlp.RLP;
 import global.goldenera.rlp.RLPInput;
@@ -64,13 +65,17 @@ public class P2PMessageCodec extends ByteToMessageCodec<P2PEnvelope> {
 			}
 			writer.endList();
 		});
+		if (rlpEncoded.size() > P2PChannelInitializer.MAX_FRAME_SIZE) {
+			throw new IllegalArgumentException("Encoded P2P frame exceeds maximum size");
+		}
 
 		out.writeBytes(rlpEncoded.toArrayUnsafe());
 	}
 
 	@Override
 	protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-		byte[] bytes = new byte[in.readableBytes()];
+		int wireSizeBytes = in.readableBytes();
+		byte[] bytes = new byte[wireSizeBytes];
 		in.readBytes(bytes);
 		Bytes rlpBytes = Bytes.wrap(bytes);
 		P2PMessageType type = null;
@@ -99,12 +104,13 @@ public class P2PMessageCodec extends ByteToMessageCodec<P2PEnvelope> {
 
 			input.leaveList();
 
-			out.add(new P2PEnvelope(requestId, type, payload));
+			out.add(new P2PEnvelope(requestId, type, payload, wireSizeBytes));
 
 		} catch (Exception e) {
-			log.error("Failed to decode P2P message from {} (Type: {}): {}",
+			log.warn("Failed to decode P2P message from {} (Type: {}): {}",
 					ctx.channel().remoteAddress(), type, e.getMessage());
-			log.error("RLP bytes (first 100): {}", rlpBytes.slice(0, Math.min(100, rlpBytes.size())).toHexString());
+			log.debug("Rejected RLP bytes (first 100): {}",
+					rlpBytes.slice(0, Math.min(100, rlpBytes.size())).toHexString());
 			ctx.close();
 		}
 	}

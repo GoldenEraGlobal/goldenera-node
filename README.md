@@ -20,7 +20,9 @@ To run a node successfully, your system **must** meet the following minimum requ
 > - **RocksDB writes, direct buffers, PostgreSQL, JVM native memory, and OS:** additional native memory
 >
 > When `JAVA_HEAP_MB` is empty, the container derives a safe heap from the
-> cgroup limit, currently available memory, huge pages, and enabled services.
+> hard container budget, current cgroup usage, huge pages, and enabled services.
+> Prefer setting `NODE_MEMORY_LIMIT_MB`; a manual heap is accepted only when it
+> fits the same native-memory safety model.
 
 ---
 
@@ -117,10 +119,10 @@ match; the published release-image path remains the default Docker target.
 
 ### 1. Optimize Linux Kernel (Recommended)
 
-For optimal mining performance (RandomX), huge pages must be enabled on the host machine.
-The automated installer calculates the required count from the number of mining
-workers. For a typical manual deployment, 1280 two-megabyte pages provide a
-2.5GB RandomX allocation including working margin. The generated Compose file
+For optimal mining performance (RandomX), huge pages can be enabled on the host machine.
+The automated Linux installer offers this as an explicit opt-in because it is a
+global host change. The production profile uses 2000 two-megabyte pages (about
+4GB), which leaves additional working and fragmentation margin. The generated Compose file
 grants only `IPC_LOCK`, which lets the unprivileged node process use those pages.
 If that capability is unavailable, automatic heap sizing reserves enough normal
 memory for RandomX's fallback instead.
@@ -131,11 +133,11 @@ memory for RandomX's fallback instead.
     ```
 2.  Add the following line to the end of the file:
     ```properties
-    vm.nr_hugepages=1280
+    vm.nr_hugepages=2000
     ```
 3.  Apply the changes immediately:
     ```bash
-    sudo sysctl -w vm.nr_hugepages=1280
+    sudo sysctl -w vm.nr_hugepages=2000
     ```
 
 ### 2. Project Setup
@@ -180,7 +182,7 @@ services:
       memlock:
         soft: -1
         hard: -1
-    # Memory is managed via .env: JAVA_HEAP_MB + ROCKSDB_BLOCK_CACHE_MB
+# Memory is bounded by NODE_MEMORY_LIMIT_MB; heap is derived inside that limit.
     # Minimum: 8GB non-mining or 16GB for FULL mining (see .env.example)
 
   # ==============================================================================
@@ -246,14 +248,17 @@ PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
 #   - RandomX epoch rollover peak:  ~6 GB (auto-sizing accounts for overlap)
 #   - RocksDB writes, direct buffers, PostgreSQL, JVM native memory, and OS
 #
-# Conservative manual examples by VPS size:
-#   8GB VPS, non-mining: JAVA_HEAP_MB=3072, ROCKSDB_BLOCK_CACHE_MB=512
-#   16GB VPS, FULL mining: JAVA_HEAP_MB=5120, ROCKSDB_BLOCK_CACHE_MB=512
-#   32GB VPS: JAVA_HEAP_MB=15360, ROCKSDB_BLOCK_CACHE_MB=4096
+# Conservative container profiles:
+#   non-mining: NODE_MEMORY_LIMIT_MB=8192
+#   FULL mining without huge pages: NODE_MEMORY_LIMIT_MB=12288
+#   FULL mining with 2000 host huge pages: NODE_MEMORY_LIMIT_MB=9216
 #
 # Leave empty for cgroup- and huge-page-aware auto-calculation (recommended)
 # =============================================================================
 JAVA_HEAP_MB=
+JAVA_INITIAL_HEAP_MB=1024
+NODE_MEMORY_LIMIT_MB=8192
+POSTGRESQL_MEMORY_LIMIT_MB=1024
 
 # =============================================================================
 # RocksDB Tuning
@@ -264,10 +269,10 @@ ROCKSDB_BLOCK_CACHE_MB=512
 
 # Write buffer (memtable) size per column family
 # Larger = better write throughput, higher memory usage
-ROCKSDB_WRITE_BUFFER_MB=64
+ROCKSDB_WRITE_BUFFER_MB=32
 
 # Max write buffers per CF (allows writes during flush)
-ROCKSDB_MAX_WRITE_BUFFERS=4
+ROCKSDB_MAX_WRITE_BUFFERS=2
 
 # Background jobs for compaction/flush (set to CPU cores / 2)
 ROCKSDB_MAX_BACKGROUND_JOBS=6
@@ -410,6 +415,9 @@ Before running the node, you must adjust specific `.env` variables to match your
 | Variable | Description & Requirement |
 | :--- | :--- |
 | **`JAVA_HEAP_MB`** | Java heap size in MB. Leave empty for cgroup-, huge-page-, and service-aware auto-calculation. |
+| **`NODE_MEMORY_LIMIT_MB`** | Hard node-container budget. Default `8192`; use at least `12288` for FULL mining without huge pages. |
+| **`POSTGRESQL_MEMORY_LIMIT_MB`** | Hard PostgreSQL-container budget. Default `1024`. |
+| **`CONFIGURE_RANDOMX_HUGEPAGES`** | Linux installer opt-in for `vm.nr_hugepages=2000`; this globally reserves about 4GB host RAM. |
 | **`ROCKSDB_BLOCK_CACHE_MB`** | RocksDB read cache (off-heap). Default `512`. See memory examples above. |
 | **`LISTEN_PORT`** | The port for the Explorer/Admin API (exposed via Docker). Default is `8080`. |
 | **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |

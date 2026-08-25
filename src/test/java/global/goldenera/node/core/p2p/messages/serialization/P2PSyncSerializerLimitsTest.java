@@ -21,36 +21,30 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.core.storage.peers;
+package global.goldenera.node.core.p2p.messages.serialization;
 
-import static lombok.AccessLevel.PRIVATE;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.Collections;
 
-import org.rocksdb.ColumnFamilyHandle;
-import org.springframework.stereotype.Component;
+import org.junit.jupiter.api.Test;
 
-import lombok.experimental.FieldDefaults;
+import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.p2p.messages.dtos.sync.P2PBlockHeadersReqDto;
 
-@Component
-@FieldDefaults(level = PRIVATE, makeFinal = true)
-public class PeerReputationColumnFamilies {
+class P2PSyncSerializerLimitsTest {
 
-	public static final String CF_PEER_REPUTATION = "peer_reputation";
+	@Test
+	void locatorCountBombIsRejectedDuringListDecode() {
+		P2PBlockHeadersReqDto oversized = P2PBlockHeadersReqDto.builder()
+				.locators(Collections.nCopies(P2PSyncSerializer.MAX_LOCATORS + 1, Hash.ZERO))
+				.stopHash(Hash.ZERO)
+				.batchSize(1)
+				.build();
 
-	Map<String, ColumnFamilyHandle> handles = new HashMap<>();
-
-	public void addHandle(String name, ColumnFamilyHandle handle) {
-		handles.put(name, handle);
-	}
-
-	public ColumnFamilyHandle peerReputation() {
-		return handles.get(CF_PEER_REPUTATION);
-	}
-
-	public void close() {
-		handles.values().forEach(ColumnFamilyHandle::close);
-		handles.clear();
+		assertThatThrownBy(() -> P2PSyncSerializer.decodeGetHeaders(
+				P2PSyncSerializer.encodeGetHeaders(oversized)))
+				.isInstanceOf(IllegalArgumentException.class)
+				.hasMessageContaining("maximum");
 	}
 }

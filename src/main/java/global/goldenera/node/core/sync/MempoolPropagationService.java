@@ -27,8 +27,8 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
@@ -38,8 +38,12 @@ import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
+import lombok.experimental.NonFinal;
+import lombok.experimental.PackagePrivate;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -48,27 +52,51 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MempoolPropagationService {
+	static final int MAX_QUEUE_SIZE = 100_000;
+	static final int BATCH_SIZE = 500;
+	static final int BROADCAST_PEER_COUNT = 8;
 
 	MeterRegistry registry;
 	PeerRegistry peerRegistry;
 
-	BlockingQueue<Hash> hashQueue = new LinkedBlockingQueue<>();
-
-	static int BATCH_SIZE = 500;
-	static int BROADCAST_PEER_COUNT = 8;
+	@PackagePrivate
+	BlockingQueue<Hash> hashQueue = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+	@NonFinal
+	volatile Thread propagatorThread;
 
 	@PostConstruct
 	public void init() {
 		Thread propagator = new Thread(this::propagationLoop, "Mempool-Propagator");
 		propagator.setDaemon(true);
+		propagatorThread = propagator;
+		registry.gaugeCollectionSize("p2p.mempool.propagation_queue.size", Tags.empty(), hashQueue);
 		propagator.start();
+	}
+
+	@PreDestroy
+	public void shutdown() {
+		Thread propagator = propagatorThread;
+		if (propagator != null) {
+			propagator.interrupt();
+		}
 	}
 
 	@EventListener
 	public void onMempoolTxAdded(MempoolTxAddEvent event) {
 		if (event.getReason() == MempoolTxAddEvent.AddReason.NEW) {
-			hashQueue.offer(event.getEntry().getTx().getHash());
+			offerLatest(event.getEntry().getTx().getHash());
 		}
+	}
+
+	private void offerLatest(Hash hash) {
+		if (hashQueue.offer(hash)) {
+			return;
+		}
+		hashQueue.poll();
+		if (!hashQueue.offer(hash)) {
+			log.warn("Mempool propagation queue remained full after evicting its oldest entry");
+		}
+		registry.counter("p2p.mempool.propagation_queue.dropped", "reason", "full").increment();
 	}
 
 	private void propagationLoop() {

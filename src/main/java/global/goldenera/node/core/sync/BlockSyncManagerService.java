@@ -23,7 +23,7 @@
  */
 package global.goldenera.node.core.sync;
 
-import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_SCHEDULER;
+import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_TASK_EXECUTOR;
 import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.INTERNAL_VALIDATION_WINDOW_HEADERS;
 import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT;
 import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.MAX_LOCAL_HEADER_WINDOW;
@@ -46,6 +46,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -121,7 +122,7 @@ public class BlockSyncManagerService {
 	static final long MAX_IN_FLIGHT_BODY_BYTES = 2L * P2PChannelInitializer.MAX_FRAME_SIZE;
 	static final long MAX_PERSIST_BATCH_BYTES = 128L * 1024 * 1024;
 	static final int EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD = 3;
-	static final int MAX_PENDING_BROADCAST_DOWNLOADS = 128;
+	static final int MAX_PENDING_BROADCAST_DOWNLOADS = 8;
 	static final long MAX_BROADCAST_REORG_DEPTH = 10;
 
 	/**
@@ -183,7 +184,7 @@ public class BlockSyncManagerService {
 	public BlockSyncManagerService(
 			MeterRegistry registry,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
-			@Qualifier(CORE_SCHEDULER) Executor coreTaskExecutor,
+			@Qualifier(CORE_TASK_EXECUTOR) Executor coreTaskExecutor,
 			MiningService miningService,
 			IdentityService identityService,
 			BlockValidator blockValidationService,
@@ -460,6 +461,11 @@ public class BlockSyncManagerService {
 		headerFetchExecutor.shutdownNow();
 		headerStageExecutor.shutdownNow();
 		headerValidationExecutor.shutdownNow();
+		pendingHeaderRequests.values().forEach(future -> future.cancel(true));
+		pendingBodyRequests.values().forEach(future -> future.cancel(true));
+		pendingHeaderRequests.clear();
+		pendingBodyRequests.clear();
+		pendingBroadcastDownloads.clear();
 		signalSyncEnded(SyncVerificationAccelerationPolicy.EndReason.STOPPED, true);
 	}
 
@@ -897,6 +903,13 @@ public class BlockSyncManagerService {
 					inflightBudget.release(oldest.range().reservedBytes());
 					bodyPipelineTelemetry.requestCompleted(oldest.peer(), oldest.range().reservedBytes());
 					throw localInvariant;
+				} catch (InterruptedException interrupted) {
+					pendingBodyRequests.remove(oldest.requestKey());
+					inflightBudget.release(oldest.range().reservedBytes());
+					bodyPipelineTelemetry.requestCompleted(oldest.peer(), oldest.range().reservedBytes());
+					cleanupPendingBodyRequests(pendingRequests);
+					Thread.currentThread().interrupt();
+					throw interrupted;
 				} catch (Exception peerFailure) {
 					pendingBodyRequests.remove(oldest.requestKey());
 					failedBodyPeers.add(oldest.peer());
@@ -1494,6 +1507,8 @@ public class BlockSyncManagerService {
 	}
 
 	static final class EmptyHeaderClaimTracker {
+		private static final int MAX_OBSERVATIONS = 1_024;
+		private static final long EXPIRY_NANOS = TimeUnit.MINUTES.toNanos(15);
 		private final Map<Address, EmptyHeaderObservation> observations = new ConcurrentHashMap<>();
 
 		boolean record(Address identity, Hash localHeadHash) {
@@ -1501,12 +1516,20 @@ public class BlockSyncManagerService {
 				return false;
 			}
 			AtomicBoolean thresholdReached = new AtomicBoolean();
+			long now = System.nanoTime();
+			observations.entrySet().removeIf(entry -> now - entry.getValue().observedAtNanos() >= EXPIRY_NANOS);
+			if (observations.size() >= MAX_OBSERVATIONS && !observations.containsKey(identity)) {
+				Address eviction = observations.keySet().stream().findFirst().orElse(null);
+				if (eviction != null) {
+					observations.remove(eviction);
+				}
+			}
 			observations.compute(identity, (ignored, previous) -> {
 				int count = previous != null && previous.localHeadHash().equals(localHeadHash)
 						? previous.count() + 1
 						: 1;
 				thresholdReached.set(count >= EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD);
-				return new EmptyHeaderObservation(localHeadHash, count);
+				return new EmptyHeaderObservation(localHeadHash, count, now);
 			});
 			return thresholdReached.get();
 		}
@@ -1516,9 +1539,13 @@ public class BlockSyncManagerService {
 				observations.remove(identity);
 			}
 		}
+
+		int size() {
+			return observations.size();
+		}
 	}
 
-	private record EmptyHeaderObservation(Hash localHeadHash, int count) {
+	private record EmptyHeaderObservation(Hash localHeadHash, int count, long observedAtNanos) {
 	}
 
 	/** Validates headers in parallel against the complete batch seed context. */
@@ -1725,17 +1752,16 @@ public class BlockSyncManagerService {
 	private void cancelHeaderValidation(List<? extends Future<?>> futures) {
 		futures.forEach(future -> future.cancel(true));
 		headerValidationExecutor.purge();
-		long deadline = System.nanoTime()
+		long nextWarning = System.nanoTime()
 				+ TimeUnit.SECONDS.toNanos(HEADER_VALIDATION_DRAIN_TIMEOUT_SECONDS);
-		while ((headerValidationExecutor.getActiveCount() > 0
-				|| !headerValidationExecutor.getQueue().isEmpty())
-				&& System.nanoTime() < deadline) {
-			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
-		}
-		if (headerValidationExecutor.getActiveCount() > 0
+		while (headerValidationExecutor.getActiveCount() > 0
 				|| !headerValidationExecutor.getQueue().isEmpty()) {
-			log.warn("Header validation workers did not drain within {} seconds",
-					HEADER_VALIDATION_DRAIN_TIMEOUT_SECONDS);
+			LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+			if (System.nanoTime() >= nextWarning) {
+				log.warn("Still waiting for native header validation workers to stop safely");
+				nextWarning = System.nanoTime()
+						+ TimeUnit.SECONDS.toNanos(HEADER_VALIDATION_DRAIN_TIMEOUT_SECONDS);
+			}
 		}
 	}
 
@@ -2159,9 +2185,11 @@ public class BlockSyncManagerService {
 					.thenAcceptAsync(bodies -> {
 						pendingBodyRequests.remove(requestKey);
 
-						if (bodies == null || bodies.isEmpty()) {
-							log.warn("Peer {} sent empty body response for #{}", peer.getIdentity(),
+						if (bodies == null || bodies.size() != 1) {
+							log.warn("Peer {} sent {} bodies for a one-block request at #{}", peer.getIdentity(),
+									bodies == null ? 0 : bodies.size(),
 									header.getHeight());
+							peerReputationService.recordFailure(peer.getIdentity());
 							return;
 						}
 
@@ -2186,13 +2214,17 @@ public class BlockSyncManagerService {
 
 					}, coreTaskExecutor)
 					.exceptionally(e -> {
-						if (e instanceof TimeoutException) {
+						Throwable cause = unwrapCompletionFailure(e);
+						if (cause instanceof CancellationException || cause instanceof InterruptedException
+								|| !isRunning.get()) {
+							log.debug("Broadcast body processing cancelled for block #{}", header.getHeight());
+						} else if (cause instanceof TimeoutException) {
 							log.warn("Timeout waiting for body of block #{} from {}", header.getHeight(),
 									peer.getIdentity());
 							peerReputationService.recordFailure(peer.getIdentity()); // Penalty for slowness
 						} else {
 							log.warn("Failed to download/process broadcast body for #{} - {}", header.getHeight(),
-									e.getMessage());
+									cause.getMessage());
 						}
 						pendingBodyRequests.remove(requestKey);
 						return null;
@@ -2207,6 +2239,15 @@ public class BlockSyncManagerService {
 			log.error("Failed to handle broadcast header", e);
 			pendingBroadcastDownloads.remove(headerHash);
 		}
+	}
+
+	private Throwable unwrapCompletionFailure(Throwable failure) {
+		Throwable current = failure;
+		while ((current instanceof CompletionException || current instanceof ExecutionException)
+				&& current.getCause() != null) {
+			current = current.getCause();
+		}
+		return current;
 	}
 
 	boolean tryTrackBroadcastDownload(Hash headerHash) {

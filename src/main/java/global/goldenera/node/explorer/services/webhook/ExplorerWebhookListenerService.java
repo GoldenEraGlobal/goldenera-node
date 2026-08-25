@@ -36,6 +36,7 @@ import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
 import global.goldenera.node.explorer.events.ExBlockReorgEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
@@ -70,6 +71,9 @@ public class ExplorerWebhookListenerService {
 
 	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 	public void handleExBlockConnected(ExBlockConnectedEvent event) {
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			return;
+		}
 		submitWebhookEvent("explorer block connected", () -> {
 			log.debug("Processing ExBlockConnectedEvent: {}", event.getBlock().getHash());
 			webhookDispatchService.processNewBlockEvent(

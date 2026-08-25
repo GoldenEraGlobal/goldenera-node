@@ -24,6 +24,7 @@
 package global.goldenera.node.core.sync;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -90,5 +91,15 @@ class BlockSyncManagerServiceTelemetryTest {
 
 		tracker.clear(PEER);
 		assertThat(tracker.record(PEER, advancedLocalHead)).isFalse();
+	}
+
+	@Test
+	void emptyHeaderObservationsStayBoundedAcrossSybilIdentities() {
+		var tracker = new BlockSyncManagerService.EmptyHeaderClaimTracker();
+		for (int identity = 0; identity < 1_100; identity++) {
+			tracker.record(mock(Address.class), Hash.ZERO);
+		}
+
+		assertThat(tracker.size()).isLessThanOrEqualTo(1_024);
 	}
 }

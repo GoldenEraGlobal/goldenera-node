@@ -42,8 +42,10 @@ import global.goldenera.node.core.properties.SnapshotDistributionProperties;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.sync.snapshot.publication.SnapshotPublicationStore.LockUnavailableException;
 import global.goldenera.node.shared.properties.GeneralProperties;
+import lombok.extern.slf4j.Slf4j;
 
 /** One locked, idempotent automatic publication evaluation. */
+@Slf4j
 public final class SnapshotPublicationCoordinator {
 
 	private final SnapshotDistributionProperties properties;
@@ -104,10 +106,10 @@ public final class SnapshotPublicationCoordinator {
 		if (selectedAnchor.isEmpty()) {
 			return new AttemptResult(Outcome.HEAD_BELOW_SAFETY_LAG, Duration.ZERO, head.getHeight());
 		}
-		SnapshotPublicationAnchor anchor = preferredExplorerAnchor(selectedAnchor.orElseThrow());
 		if (current.isPresent() && !cadenceReached(current.orElseThrow(), state, now)) {
 			return new AttemptResult(Outcome.CADENCE_NOT_REACHED, Duration.ZERO, head.getHeight());
 		}
+		SnapshotPublicationAnchor anchor = preferredExplorerAnchor(selectedAnchor.orElseThrow());
 
 		store.cleanupStaleGenerations();
 		Path generation = store.createGenerationDirectory();
@@ -190,7 +192,13 @@ public final class SnapshotPublicationCoordinator {
 			return;
 		}
 		ExplorerSnapshotPublicationGenerator generator = explorerGenerator.getIfAvailable();
-		if (generator == null || !generator.isExactlyCaughtUp(core)) {
+		if (generator == null) {
+			log.info("SNAPSHOT PUBLISHER: Publishing CORE-only snapshot; Explorer generator is unavailable");
+			return;
+		}
+		if (!generator.isExactlyCaughtUp(core)) {
+			log.info("SNAPSHOT PUBLISHER: Publishing CORE-only snapshot at height {}; "
+					+ "Explorer capture is not yet mature at the same anchor", core.height());
 			return;
 		}
 			Path explorer = null;
@@ -212,7 +220,10 @@ public final class SnapshotPublicationCoordinator {
 					movedTargets.add(target);
 				}
 			}
-		} catch (Exception ignored) {
+			log.info("SNAPSHOT PUBLISHER: Attached Explorer snapshot at height {}", core.height());
+		} catch (Exception failure) {
+			log.warn("SNAPSHOT PUBLISHER: Explorer artifact failed and CORE remains valid: {}",
+					failure.getMessage());
 			// Explorer data is optional and cannot invalidate the verified core artifact.
 			for (int index = movedTargets.size() - 1; index >= 0; index--) {
 				try {

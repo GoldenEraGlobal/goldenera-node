@@ -25,6 +25,8 @@ package global.goldenera.node.core.p2p.netty.client;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.concurrent.TimeUnit;
+
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.stereotype.Service;
 
@@ -36,21 +38,38 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import lombok.AllArgsConstructor;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
 @Slf4j
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class NettyClientService implements DisposableBean {
 
 	P2PChannelInitializer p2pChannelInitializer;
 	PeerReputationService peerReputationService;
-	EventLoopGroup workerGroup = new NioEventLoopGroup();
+	EventLoopGroup workerGroup;
+	ChannelGroup channels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
+
+	public NettyClientService(P2PChannelInitializer p2pChannelInitializer,
+			PeerReputationService peerReputationService) {
+		this(p2pChannelInitializer, peerReputationService,
+				new NioEventLoopGroup(Math.max(2,
+						Math.min(4, Runtime.getRuntime().availableProcessors() / 2))));
+	}
+
+	NettyClientService(P2PChannelInitializer p2pChannelInitializer,
+			PeerReputationService peerReputationService, EventLoopGroup workerGroup) {
+		this.p2pChannelInitializer = p2pChannelInitializer;
+		this.peerReputationService = peerReputationService;
+		this.workerGroup = workerGroup;
+	}
 
 	/**
 	 * Attempts to connect to a remote peer.
@@ -60,6 +79,9 @@ public class NettyClientService implements DisposableBean {
 	 *            Directory Service P2P Client
 	 */
 	public ChannelFuture connect(DirectoryService.P2PClient p2pDirClient) {
+		if (workerGroup.isShuttingDown()) {
+			throw new IllegalStateException("Netty client is shutting down");
+		}
 		String host = p2pDirClient.getP2pListenHost().trim();
 		int port = p2pDirClient.getP2pListenPort().intValue();
 		log.debug("Initiating connection to {}:{}", host, port);
@@ -72,12 +94,15 @@ public class NettyClientService implements DisposableBean {
 				.option(ChannelOption.SO_KEEPALIVE, true)
 				.option(ChannelOption.TCP_NODELAY, true)
 				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
-				.option(ChannelOption.SO_SNDBUF, 1024 * 1024)
-				.option(ChannelOption.SO_RCVBUF, 1024 * 1024);
+				.option(ChannelOption.SO_SNDBUF, 256 * 1024)
+				.option(ChannelOption.SO_RCVBUF, 256 * 1024)
+				.option(ChannelOption.WRITE_BUFFER_WATER_MARK,
+						new WriteBufferWaterMark(1024 * 1024, 4 * 1024 * 1024));
 
 		ChannelFuture f = b.connect(host, port);
 		f.addListener(future -> {
 			if (future.isSuccess()) {
+				channels.add(f.channel());
 				log.info("Successfully connected to peer: {}:{}", host, port);
 			} else {
 				log.warn("Failed to connect to peer {}:{}. Cause: {}", host, port, future.cause().getMessage());
@@ -92,6 +117,7 @@ public class NettyClientService implements DisposableBean {
 	@Override
 	public void destroy() {
 		log.info("Shutting down Netty Client Worker Group...");
-		workerGroup.shutdownGracefully();
+		channels.close().awaitUninterruptibly(5, TimeUnit.SECONDS);
+		workerGroup.shutdownGracefully(0, 5, TimeUnit.SECONDS).awaitUninterruptibly();
 	}
 }

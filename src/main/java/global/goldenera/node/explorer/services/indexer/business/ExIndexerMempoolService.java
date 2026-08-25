@@ -48,6 +48,7 @@ import global.goldenera.node.explorer.services.indexer.core.ExIndexerMempoolCore
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
 import lombok.AccessLevel;
 import lombok.Value;
@@ -58,6 +59,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExIndexerMempoolService {
+	private static final int MAX_FLUSH_ACTIONS = 1_000;
 
 	GeneralProperties generalProperties;
 	ExplorerRuntimeReadiness explorerReadiness;
@@ -99,6 +101,7 @@ public class ExIndexerMempoolService {
 				this::flushBuffer,
 				Duration.ofMillis(3000));
 		log.info("ExMempoolService: Scheduled flushBuffer on explorerTaskScheduler every 3s");
+		registry.gaugeMapSize("explorer.mempool.pending_actions", Tags.empty(), buffer);
 	}
 
 	// --------------------------------------------------------
@@ -128,7 +131,7 @@ public class ExIndexerMempoolService {
 			if (existingAction != null && existingAction.getType() == ActionType.ADD) {
 				return null;
 			}
-			return new PendingAction(ActionType.REMOVE, event.getEntry());
+			return new PendingAction(ActionType.REMOVE, null);
 		});
 	}
 
@@ -140,7 +143,6 @@ public class ExIndexerMempoolService {
 	 * Flushes pending mempool changes to database.
 	 * Scheduled via explorerTaskScheduler in init().
 	 */
-	@Transactional(rollbackFor = Exception.class)
 	public void flushBuffer() {
 		if (!enabled()) {
 			return;
@@ -149,17 +151,19 @@ public class ExIndexerMempoolService {
 			return;
 		}
 
-		List<Hash> keysProcessing = new ArrayList<>(buffer.keySet());
+		List<Hash> keysProcessing = buffer.keySet().stream().limit(MAX_FLUSH_ACTIONS).toList();
 
 		if (keysProcessing.isEmpty())
 			return;
 
 		List<ExMemTransfer> toAdd = new ArrayList<>();
 		List<Hash> toRemove = new ArrayList<>();
+		Map<Hash, PendingAction> processing = new ConcurrentHashMap<>();
 
 		for (Hash hash : keysProcessing) {
 			PendingAction action = buffer.remove(hash);
 			if (action != null) {
+				processing.put(hash, action);
 				if (action.getType() == ActionType.ADD) {
 					MempoolEntry entry = action.getEntry();
 					Tx tx = entry.getTx();
@@ -193,14 +197,13 @@ public class ExIndexerMempoolService {
 		int addedCount = 0;
 		int removedCount = 0;
 
-		if (!toAdd.isEmpty()) {
-			exMempoolCoreService.batchInsert(toAdd);
+		try {
+			exMempoolCoreService.applyBatch(toAdd, toRemove);
 			addedCount = toAdd.size();
-		}
-
-		if (!toRemove.isEmpty()) {
-			exMempoolCoreService.batchDelete(toRemove);
 			removedCount = toRemove.size();
+		} catch (RuntimeException failure) {
+			processing.forEach(buffer::putIfAbsent);
+			throw failure;
 		}
 
 		if (addedCount > 0 || removedCount > 0) {

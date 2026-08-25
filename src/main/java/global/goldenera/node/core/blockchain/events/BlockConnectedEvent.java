@@ -148,25 +148,29 @@ public class BlockConnectedEvent extends ApplicationEvent {
 		super(source);
 		this.connectedSource = connectedSource;
 		this.block = block;
-		this.balanceDiffs = balanceDiffs;
-		this.nonceDiffs = nonceDiffs;
-		this.tokenDiffs = tokenDiffs;
-		this.bipDiffs = bipDiffs;
+		this.balanceDiffs = immutableMap(balanceDiffs);
+		this.nonceDiffs = immutableMap(nonceDiffs);
+		this.tokenDiffs = immutableMap(tokenDiffs);
+		this.bipDiffs = immutableMap(bipDiffs);
 		this.networkParamsDiff = networkParamsDiff;
-		this.authoritiesToAdd = authoritiesToAdd;
-		this.authoritiesToRemove = authoritiesToRemove;
-		this.validatorsToAdd = validatorsToAdd;
-		this.validatorsToRemove = validatorsToRemove;
-		this.addressAliasesToAdd = addressAliasesToAdd;
-		this.addressAliasesToRemove = addressAliasesToRemove;
+		this.authoritiesToAdd = immutableMap(authoritiesToAdd);
+		this.authoritiesToRemove = immutableMap(authoritiesToRemove);
+		this.validatorsToAdd = immutableMap(validatorsToAdd);
+		this.validatorsToRemove = immutableMap(validatorsToRemove);
+		this.addressAliasesToAdd = immutableMap(addressAliasesToAdd);
+		this.addressAliasesToRemove = immutableMap(addressAliasesToRemove);
 		this.minerTotalFees = totalFees;
 		this.minerActualRewardPaid = actualRewardPaid;
 		this.cumulativeDifficulty = cumulativeDifficulty;
-		this.actualBurnAmounts = actualBurnAmounts;
-		this.events = events;
+		this.actualBurnAmounts = immutableMap(actualBurnAmounts);
+		this.events = events == null ? List.of() : List.copyOf(events);
 		this.receivedFrom = receivedFrom;
 		this.receivedAt = receivedAt;
 		this.batchMember = batchMember;
+	}
+
+	private static <K, V> Map<K, V> immutableMap(Map<K, V> values) {
+		return values == null || values.isEmpty() ? Map.of() : Map.copyOf(values);
 	}
 
 	@AllArgsConstructor

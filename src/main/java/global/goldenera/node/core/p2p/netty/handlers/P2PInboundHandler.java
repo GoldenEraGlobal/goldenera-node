@@ -28,8 +28,12 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayDeque;
+import java.util.Queue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -68,6 +72,7 @@ import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsReqDto;
 import global.goldenera.node.core.p2p.messages.validation.P2PValidation;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
 import global.goldenera.node.core.p2p.netty.P2PChannelAttributes;
+import global.goldenera.node.core.p2p.netty.P2PChannelInitializer;
 import global.goldenera.node.core.p2p.reputation.PeerReputationService;
 import global.goldenera.node.core.p2p.services.P2PStatusProvider;
 import global.goldenera.node.shared.exceptions.GEFailedException;
@@ -80,6 +85,7 @@ import io.micrometer.core.instrument.Timer;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.TooLongFrameException;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -110,6 +116,9 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	volatile HandshakeState handshakeState = HandshakeState.AWAITING_STATUS;
 	volatile Validation acceptedChainIdentity;
 	volatile long acceptedProtocolVersion;
+	volatile ScheduledFuture<?> handshakeTimeout;
+	final Queue<Runnable> orderedInboundTasks = new ArrayDeque<>();
+	boolean inboundDrainScheduled;
 
 	public P2PInboundHandler(ApplicationEventPublisher applicationEventPublisher, PeerRegistry peerRegistry,
 			PeerReputationService reputationService,
@@ -137,13 +146,27 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	public void channelActive(ChannelHandlerContext ctx) {
 		log.debug("[RAW] New Peer Connected: {}", ctx.channel().remoteAddress());
 		peer = new RemotePeer(ctx.channel(), registry);
-		peerRegistry.register(peer);
+		if (!peerRegistry.register(peer)) {
+			log.warn("Rejecting P2P connection because the inbound connection limit was reached: {}",
+					ctx.channel().remoteAddress());
+			ctx.close();
+			return;
+		}
+		handshakeTimeout = ctx.executor().schedule(() -> {
+			if (handshakeState != HandshakeState.COMPLETED) {
+				rejectProtocol(ctx, "STATUS handshake timeout");
+			}
+		}, 15, TimeUnit.SECONDS);
 		// Send Handshake immediately on connect
 		peer.sendStatus(statusProvider.currentStatus());
 	}
 
 	@Override
 	public void channelInactive(ChannelHandlerContext ctx) {
+		cancelHandshakeTimeout();
+		synchronized (orderedInboundTasks) {
+			orderedInboundTasks.clear();
+		}
 		handshakeState = HandshakeState.REJECTED;
 		peerRegistry.unregister(ctx.channel());
 	}
@@ -173,17 +196,17 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 
 	@Override
 	protected void channelRead0(ChannelHandlerContext ctx, P2PEnvelope envelope) {
-		if (!rateLimitBucket.tryConsume(1)) {
-			log.warn("Peer {} exceeded rate limit. Closing connection.", getPeerLogInfo());
-			rejectProtocol(ctx, "P2P rate limit exceeded");
-			return;
-		}
-
 		registry.counter("p2p.messages.in", "type", envelope.getMessageType().name()).increment();
 		if (envelope.getMessageType() == P2PMessageType.STATUS) {
 			handleStatusSerially(ctx, envelope);
 			return;
 		}
+		if (!rateLimitBucket.tryConsume(messageCost(envelope))) {
+			log.warn("Peer {} exceeded rate limit. Closing connection.", getPeerLogInfo());
+			rejectProtocol(ctx, "P2P rate limit exceeded");
+			return;
+		}
+
 		if (requiresCompletedHandshake(envelope.getMessageType())
 				&& handshakeState != HandshakeState.COMPLETED) {
 			rejectProtocol(ctx, "Received " + envelope.getMessageType() + " before a valid STATUS handshake");
@@ -191,19 +214,67 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		}
 		try {
 			Timer.Sample sample = Timer.start(registry);
-			p2pReceiveExecutor.execute(() -> {
+			if (!enqueueInbound(() -> {
 				try {
 					processData(ctx, envelope);
 				} finally {
 					sample.stop(registry.timer("p2p.message.process_time", "type", envelope.getMessageType().name()));
 				}
-			});
+			})) {
+				throw new RejectedExecutionException("Per-peer P2P processing queue is full");
+			}
 		} catch (RejectedExecutionException re) {
 			log.warn("Node Overloaded: Dropping message from {} (Queue full)", getPeerLogInfo());
+			rejectProtocol(ctx, "P2P processing queue is full");
 		} catch (Exception e) {
 			String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
 			log.error("Protocol Error from {}: {}", getPeerLogInfo(), message);
 			rejectProtocol(ctx, message);
+		}
+	}
+
+	private boolean enqueueInbound(Runnable task) {
+		boolean scheduleDrain = false;
+		synchronized (orderedInboundTasks) {
+			if (orderedInboundTasks.size() >= 8) {
+				return false;
+			}
+			orderedInboundTasks.add(task);
+			if (!inboundDrainScheduled) {
+				inboundDrainScheduled = true;
+				scheduleDrain = true;
+			}
+		}
+		if (!scheduleDrain) {
+			return true;
+		}
+		try {
+			p2pReceiveExecutor.execute(this::drainInbound);
+			return true;
+		} catch (RejectedExecutionException failure) {
+			synchronized (orderedInboundTasks) {
+				orderedInboundTasks.clear();
+				inboundDrainScheduled = false;
+			}
+			return false;
+		}
+	}
+
+	private void drainInbound() {
+		while (true) {
+			Runnable task;
+			synchronized (orderedInboundTasks) {
+				task = orderedInboundTasks.poll();
+				if (task == null) {
+					inboundDrainScheduled = false;
+					return;
+				}
+			}
+			try {
+				task.run();
+			} catch (RuntimeException failure) {
+				log.warn("Unexpected failure in ordered P2P processing", failure);
+			}
 		}
 	}
 
@@ -298,7 +369,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					break;
 				case MEMPOOL_TRANSACTIONS:
 					P2PMempoolTxsDto txsMsg = (P2PMempoolTxsDto) envelope.getPayload();
-					txsMsg.getTxs().parallelStream().forEach(p2pValidation::validateTxDto);
+					txsMsg.getTxs().forEach(p2pValidation::validateTxDto);
 					applicationEventPublisher.publishEvent(
 							new P2PMempoolTxsReceivedEvent(this, envelope.getRequestId(), peer,
 									txsMsg.getTxs().stream().map(P2PTxDto::getTx).collect(Collectors.toList())));
@@ -336,15 +407,25 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 			return;
 		}
 		handshakeState = HandshakeState.VALIDATING;
+		if (!(envelope.getPayload() instanceof P2PStatusDto status)) {
+			rejectProtocol(ctx, "STATUS payload is required");
+			return;
+		}
 		try {
-			if (!(envelope.getPayload() instanceof P2PStatusDto status)) {
-				throw new GEFailedException("STATUS payload is required");
-			}
-			handleStatus(status, envelope.getRequestId());
-		} catch (Exception e) {
-			String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-			log.warn("Rejected STATUS from {}: {}", getPeerLogInfo(), message);
-			rejectProtocol(ctx, message);
+			p2pReceiveExecutor.execute(() -> {
+				if (!ctx.channel().isActive() || handshakeState != HandshakeState.VALIDATING) {
+					return;
+				}
+				try {
+					handleStatus(status, envelope.getRequestId());
+				} catch (Exception e) {
+					String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+					log.warn("Rejected STATUS from {}: {}", getPeerLogInfo(), message);
+					rejectProtocol(ctx, message);
+				}
+			});
+		} catch (RejectedExecutionException exception) {
+			rejectProtocol(ctx, "P2P processing queue is full during STATUS handshake");
 		}
 	}
 
@@ -367,12 +448,44 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		acceptedChainIdentity = validatedChainIdentity;
 		acceptedProtocolVersion = status.getProtocolVersion();
 		log.info("Handshake Success with {}: Identity={}", peer.getChannel().remoteAddress(), status.getNodeIdentity());
-		reputationService.recordSuccess(status.getNodeIdentity());
 		updatePeerState(status);
-		peerRegistry.updateIdentity(peer.getChannel(), status.getNodeIdentity());
+		if (!peerRegistry.updateIdentity(peer.getChannel(), status.getNodeIdentity())) {
+			throw new GEFailedException("Duplicate peer identity connection");
+		}
+		reputationService.recordSuccess(status.getNodeIdentity());
 		handshakeState = HandshakeState.COMPLETED;
+		cancelHandshakeTimeout();
+		peer.getChannel().eventLoop().execute(() -> {
+			if (peer.getChannel().isActive()
+					&& peer.getChannel().pipeline().get(P2PChannelInitializer.FRAME_DECODER_NAME) != null) {
+				peer.getChannel().pipeline().replace(
+						P2PChannelInitializer.FRAME_DECODER_NAME,
+						P2PChannelInitializer.FRAME_DECODER_NAME,
+						new LengthFieldBasedFrameDecoder(
+								P2PChannelInitializer.MAX_FRAME_SIZE, 0, 4, 0, 4));
+			}
+		});
 		applicationEventPublisher
 				.publishEvent(new P2PHandshakeCompletedEvent(this, requestId, peer, status));
+	}
+
+	private long messageCost(P2PEnvelope envelope) {
+		long typeCost = switch (envelope.getMessageType()) {
+			case BLOCK_BODIES, MEMPOOL_TRANSACTIONS -> 100;
+			case NEW_BLOCK, BLOCK_HEADERS -> 20;
+			case GET_BLOCK_BODIES, GET_MEMPOOL_TRANSACTIONS, MEMPOOL_HASHES -> 10;
+			default -> 1;
+		};
+		long byteCost = Math.max(1L, (envelope.getWireSizeBytes() + 4_095L) / 4_096L);
+		return Math.max(typeCost, byteCost);
+	}
+
+	private void cancelHandshakeTimeout() {
+		ScheduledFuture<?> timeout = handshakeTimeout;
+		handshakeTimeout = null;
+		if (timeout != null) {
+			timeout.cancel(false);
+		}
 	}
 
 	private void handlePongStatusUpdate(P2PStatusDto status) {

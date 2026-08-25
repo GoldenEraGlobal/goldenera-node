@@ -31,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
+import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -56,6 +57,7 @@ public class ExIndexerCoordinateService {
 	final ExIndexerQueueService queueService;
 	final ExIndexerService indexer;
 	final ExplorerIndexingExecutionGate executionGate;
+	final ExplorerArchiveRebuildTrigger archiveRebuildTrigger;
 
 	final Thread worker = new Thread(this::processQueue, "Explorer-Coordinator");
 	final AtomicBoolean running = new AtomicBoolean(true);
@@ -166,6 +168,9 @@ public class ExIndexerCoordinateService {
 
 	private void triggerPanicMode(ExIndexerTask task) {
 		panicMode.set(true);
+		running.set(false);
+		queueService.discardForRebuild("coordinator panic");
+		archiveRebuildTrigger.request();
 		registry.counter("explorer.coordinator.panic").increment();
 		log.error("################################################################");
 		log.error("CRITICAL EXPLORER FAILURE: POISON BLOCK DETECTED");

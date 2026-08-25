@@ -15,6 +15,7 @@ mnemonic="alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu"
 GOLDENERA_INSTALL_DIR="$install_dir" \
 GOLDENERA_P2P_HOST="203.0.113.10" \
 GOLDENERA_MINING_ENABLE=true \
+GOLDENERA_CONFIGURE_HUGEPAGES=true \
 GOLDENERA_BENEFICIARY_ADDRESS="0x1111111111111111111111111111111111111111" \
 GOLDENERA_EXPLORER_ENABLE=true \
 GOLDENERA_IDENTITY_MNEMONIC="$mnemonic" \
@@ -31,7 +32,14 @@ assert_file "$install_dir/node_data/.node_identity"
 assert_contains "$install_dir/.env" "GOLDENERA_IMAGE=goldenera-node:sandbox-local"
 assert_contains "$install_dir/.env" "GOLDENERA_PULL_POLICY=never"
 assert_contains "$install_dir/.env" "MINING_ENABLE=true"
+assert_contains "$install_dir/.env" "CONFIGURE_RANDOMX_HUGEPAGES=true"
+assert_contains "$install_dir/.env" "NODE_MEMORY_LIMIT_MB=9216"
+assert_contains "$install_dir/.env" "ROCKSDB_WRITE_BUFFER_MB=32"
+assert_contains "$install_dir/.env" "ROCKSDB_MAX_WRITE_BUFFERS=2"
+assert_contains "$install_dir/.env" "SYNC_RANDOMX_VERIFICATION_MODE=LIGHT"
 assert_contains "$install_dir/.env" "POSTGRESQL_PASSWORD=postgres-secret"
+assert_contains "$install_dir/compose.yaml" 'mem_limit: ${NODE_MEMORY_LIMIT_MB}m'
+assert_contains "$install_dir/compose.yaml" 'mem_limit: ${POSTGRESQL_MEMORY_LIMIT_MB:-1024}m'
 assert_contains "$install_dir/compose.yaml" "image: postgres:18.1-alpine"
 assert_contains "$install_dir/compose.yaml" "IPC_LOCK"
 assert_not_contains "$install_dir/compose.yaml" "container_name:"
@@ -48,6 +56,17 @@ assert_contains "$install_dir/.env" "POSTGRESQL_PASSWORD=postgres-secret"
 assert_contains "$install_dir/.env" "SECURITY_HMAC_SECRET=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 assert_contains "$install_dir/.env" "P2P_HOST=203.0.113.11"
 assert_not_contains "$install_dir/compose.yaml" "image: postgres:18.1-alpine"
+
+# A fresh installation defaults to core-only and does not add PostgreSQL.
+default_dir="$TEST_ROOT/default"
+GOLDENERA_INSTALL_DIR="$default_dir" \
+GOLDENERA_P2P_HOST="203.0.113.13" \
+"$ROOT_DIR/scripts/install.sh" --local-image --non-interactive --skip-docker-check >/dev/null
+assert_contains "$default_dir/.env" "EXPLORER_ENABLE=false"
+assert_contains "$default_dir/.env" "POSTGRESQL_ENABLE=false"
+assert_contains "$default_dir/.env" "LISTEN_PORT=8080"
+assert_contains "$default_dir/.env" "NODE_MEMORY_LIMIT_MB=8192"
+assert_not_contains "$default_dir/compose.yaml" "image: postgres:18.1-alpine"
 
 # The local-image update path must recreate containers without attempting a pull.
 fake_bin="$TEST_ROOT/bin"

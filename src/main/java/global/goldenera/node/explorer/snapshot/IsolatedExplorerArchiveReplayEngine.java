@@ -23,9 +23,11 @@
  */
 package global.goldenera.node.explorer.snapshot;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -66,11 +68,15 @@ import global.goldenera.node.explorer.entities.ExStatus;
 import global.goldenera.node.explorer.services.indexer.business.ExIndexerService;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
 import global.goldenera.node.shared.datatypes.BalanceKey;
+import lombok.extern.slf4j.Slf4j;
 
 /** Re-executes the local canonical archive in an isolated trie database. */
+@Slf4j
 public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiveReplayEngine {
 
 	private static final int YIELD_INTERVAL = 250;
+	private static final int INDEX_BATCH_SIZE = 64;
+	private static final int PROGRESS_INTERVAL = 10_000;
 
 	private final ChainQuery chainQuery;
 	private final StateProcessor stateProcessor;
@@ -101,11 +107,17 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 					"Explorer rebuild resume height is above canonical head");
 		}
 		try (IsolatedWorldStateStorage isolated = IsolatedWorldStateStorage.temporary("explorer-rebuild-")) {
+			long startedNanos = System.nanoTime();
+			List<BlockConnectedEvent> indexBatch = new ArrayList<>(INDEX_BATCH_SIZE);
+			log.info("EXPLORER SNAPSHOT: Replaying canonical CORE archive 0..{}; PostgreSQL batch size={}",
+					target.getHeight(), INDEX_BATCH_SIZE);
 			Hash previousRoot = MerkleTrie.EMPTY_TRIE_NODE_HASH;
 			Hash previousBlockHash = null;
 			long nextHeight = 0L;
 			while (true) {
+				assertNotInterrupted();
 				while (nextHeight <= target.getHeight()) {
+					assertNotInterrupted();
 					StoredBlock stored = canonical(nextHeight);
 					if (nextHeight > 0
 							&& !stored.getBlock().getHeader().getPreviousHash().equals(previousBlockHash)) {
@@ -124,8 +136,12 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 					previousRoot = calculated;
 					previousBlockHash = stored.getHash();
 					if (nextHeight > resumeHeight) {
-						indexerService.handleBlockConnected(event);
+						indexBatch.add(event);
+						if (indexBatch.size() == INDEX_BATCH_SIZE) {
+							flushIndexBatch(indexBatch);
+						}
 					}
+					logProgress(nextHeight, target.getHeight(), startedNanos);
 					if (nextHeight > 0 && nextHeight % YIELD_INTERVAL == 0) {
 						Thread.yield();
 					}
@@ -139,6 +155,7 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 				}
 				StoredBlock current = chainQuery.getLatestStoredBlockOrThrow();
 				if (current.getHeight() == target.getHeight() && current.getHash().equals(target.getHash())) {
+					flushIndexBatch(indexBatch);
 					assertExplorerCaughtUp(target);
 					return;
 				}
@@ -153,6 +170,34 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 		} catch (Exception e) {
 			throw new ExplorerSnapshotException("Explorer archive rebuild failed", e);
 		}
+	}
+
+	private void assertNotInterrupted() {
+		if (Thread.currentThread().isInterrupted()) {
+			throw new ExplorerSnapshotException("Explorer canonical archive rebuild was interrupted");
+		}
+	}
+
+	private void flushIndexBatch(List<BlockConnectedEvent> batch) {
+		if (batch.isEmpty()) {
+			return;
+		}
+		indexerService.handleBlockConnectedBatch(List.copyOf(batch));
+		batch.clear();
+	}
+
+	private void logProgress(long height, long targetHeight, long startedNanos) {
+		if (height != targetHeight && height % PROGRESS_INTERVAL != 0) {
+			return;
+		}
+		long elapsedSeconds = Math.max(1, (System.nanoTime() - startedNanos) / 1_000_000_000L);
+		long processed = height + 1;
+		double blocksPerSecond = processed / (double) elapsedSeconds;
+		long remaining = Math.max(0, targetHeight - height);
+		long etaSeconds = blocksPerSecond <= 0 ? -1 : Math.round(remaining / blocksPerSecond);
+		int percent = targetHeight < 0 ? 100 : (int) Math.min(100, processed * 100 / (targetHeight + 1));
+		log.info("EXPLORER SNAPSHOT: Archive rebuild progress: {}/{} ({}%), {} blocks/s, ETA {}s",
+				height, targetHeight, percent, String.format(Locale.ROOT, "%.1f", blocksPerSecond), etaSeconds);
 	}
 
 	private long canonicalResumeHeight(ExStatus resumeStatus, StoredBlock target) {

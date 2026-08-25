@@ -26,6 +26,7 @@ package global.goldenera.node.core.p2p.manager;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
+import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -47,14 +48,36 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class PeerRegistry {
+	static final int MAX_ACTIVE_CONNECTIONS = 128;
+	static final int MAX_CONNECTIONS_PER_IP = 8;
 
 	PeerReputationService reputationService;
 
 	ConcurrentHashMap<ChannelId, RemotePeer> activeConnections = new ConcurrentHashMap<>();
 	ConcurrentHashMap<Address, RemotePeer> identityIndex = new ConcurrentHashMap<>();
 
-	public void register(RemotePeer peer) {
+	public synchronized boolean register(RemotePeer peer) {
+		if (activeConnections.size() >= MAX_ACTIVE_CONNECTIONS) {
+			return false;
+		}
+		String remoteIp = remoteIp(peer.getChannel());
+		if (remoteIp != null) {
+			long matchingConnections = activeConnections.values().stream()
+					.filter(existing -> remoteIp.equals(remoteIp(existing.getChannel())))
+					.count();
+			if (matchingConnections >= MAX_CONNECTIONS_PER_IP) {
+				return false;
+			}
+		}
 		activeConnections.put(peer.getChannel().id(), peer);
+		return true;
+	}
+
+	private String remoteIp(Channel channel) {
+		if (!(channel.remoteAddress() instanceof InetSocketAddress address)) {
+			return null;
+		}
+		return address.getAddress() == null ? address.getHostString() : address.getAddress().getHostAddress();
 	}
 
 	public void unregister(Channel channel) {
@@ -70,12 +93,14 @@ public class PeerRegistry {
 		}
 	}
 
-	public void updateIdentity(Channel channel, Address identity) {
+	public boolean updateIdentity(Channel channel, Address identity) {
 		RemotePeer peer = activeConnections.get(channel.id());
 		if (peer != null) {
 			peer.setIdentity(identity);
-			identityIndex.putIfAbsent(identity, peer);
+			RemotePeer existing = identityIndex.putIfAbsent(identity, peer);
+			return existing == null || existing == peer;
 		}
+		return false;
 	}
 
 	public RemotePeer get(Channel channel) {

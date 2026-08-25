@@ -60,12 +60,14 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.core.properties.SnapshotDistributionProperties;
 import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
 import global.goldenera.node.shared.properties.GeneralProperties;
+import lombok.extern.slf4j.Slf4j;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 @Service
+@Slf4j
 public class HttpExplorerSnapshotRemoteSource implements ExplorerSnapshotRemoteSource {
 
 	public static final String MANIFEST_PATH =
@@ -78,6 +80,8 @@ public class HttpExplorerSnapshotRemoteSource implements ExplorerSnapshotRemoteS
 	private static final long MAX_CHUNK_BYTES = 64L * 1024 * 1024 + 64L * 1024;
 	private static final int MAX_CHUNKS = 100_000;
 	private static final long MAX_ROWS = 2_000_000_000L;
+	private static final int RATE_LIMIT_MAX_ATTEMPTS = 8;
+	private static final long RATE_LIMIT_MAX_DELAY_SECONDS = 60;
 
 	private final ObjectMapper objectMapper;
 	private final SnapshotDistributionProperties properties;
@@ -160,11 +164,19 @@ public class HttpExplorerSnapshotRemoteSource implements ExplorerSnapshotRemoteS
 			ExplorerSnapshotManifest manifest = new ExplorerSnapshotManifestCodec(objectMapper)
 					.decode(manifestBytes);
 			validateManifest(manifest, expectedBinding);
+			long totalBytes = manifest.chunks().stream()
+					.mapToLong(ExplorerSnapshotChunkDescriptor::uncompressedSize).sum();
+			log.info("EXPLORER SNAPSHOT: Downloading {} chunk(s), {} MiB for CORE height {}",
+					manifest.chunks().size(), formatMebibytes(totalBytes), expectedBinding.checkpointHeight());
 			writeVerified(staging.resolve(ExplorerCheckpointSnapshotExporter.MANIFEST_FILE_NAME), manifestBytes);
-			for (ExplorerSnapshotChunkDescriptor chunk : manifest.chunks()) {
+			long downloadedBytes = 0;
+			for (int index = 0; index < manifest.chunks().size(); index++) {
+				ExplorerSnapshotChunkDescriptor chunk = manifest.chunks().get(index);
 				downloadChunk(source, staging, chunk, chunksPath);
 				ExplorerSnapshotChunkCodec.verifyFormatHeader(
 						Files.readAllBytes(staging.resolve(chunk.fileName())), manifest.formatVersion());
+				downloadedBytes = Math.addExact(downloadedBytes, chunk.uncompressedSize());
+				logDownloadProgress(index + 1, manifest.chunks().size(), downloadedBytes, totalBytes);
 			}
 			return new StagedExplorerSnapshotDownload(staging, manifest);
 		} catch (ExplorerSnapshotException e) {
@@ -322,13 +334,49 @@ public class HttpExplorerSnapshotRemoteSource implements ExplorerSnapshotRemoteS
 	}
 
 	private Response execute(URI uri) throws IOException {
-		Response response = httpClient.newCall(new Request.Builder().url(uri.toString()).get().build()).execute();
-		if (!response.isSuccessful()) {
+		for (int attempt = 1; attempt <= RATE_LIMIT_MAX_ATTEMPTS; attempt++) {
+			Response response = httpClient.newCall(new Request.Builder().url(uri.toString()).get().build()).execute();
+			if (response.isSuccessful()) {
+				return response;
+			}
 			int status = response.code();
+			long retryAfter = retryAfterSeconds(response);
 			response.close();
-			throw failure("Explorer snapshot HTTP request failed with status " + status);
+			if (status != 429 || attempt == RATE_LIMIT_MAX_ATTEMPTS) {
+				throw failure("Explorer snapshot HTTP request failed with status " + status);
+			}
+			try {
+				TimeUnit.SECONDS.sleep(retryAfter);
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw failure("Interrupted while backing off after Explorer snapshot HTTP 429", e);
+			}
 		}
-		return response;
+		throw new IllegalStateException("Unreachable Explorer snapshot HTTP retry state");
+	}
+
+	private long retryAfterSeconds(Response response) {
+		String value = response.header("Retry-After");
+		if (value == null) {
+			return 1;
+		}
+		try {
+			return Math.min(RATE_LIMIT_MAX_DELAY_SECONDS, Math.max(0, Long.parseLong(value.trim())));
+		} catch (NumberFormatException e) {
+			return 1;
+		}
+	}
+
+	private void logDownloadProgress(int completed, int total, long bytes, long totalBytes) {
+		if (completed == total || completed * 10 / total > (completed - 1) * 10 / total) {
+			log.info("EXPLORER SNAPSHOT: Download progress: {}/{} chunks ({}%), {}/{} MiB",
+					completed, total, completed * 100 / total,
+					formatMebibytes(bytes), formatMebibytes(totalBytes));
+		}
+	}
+
+	private String formatMebibytes(long bytes) {
+		return String.format(Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0));
 	}
 
 	private Path createStagingDirectory() throws IOException {

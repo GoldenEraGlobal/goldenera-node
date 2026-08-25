@@ -64,7 +64,9 @@ public class ExIndexerNodeListener {
 			queueService.recordSkippedBatch(List.of(event));
 			return;
 		}
-		queueService.pushConnect(event);
+		if (queueService.pushConnect(event) == ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED) {
+			archiveRebuildTrigger.request();
+		}
 	}
 
 	@EventListener
@@ -93,6 +95,8 @@ public class ExIndexerNodeListener {
 			queueService.recordSkippedDisconnect();
 			return;
 		}
-		queueService.pushDisconnect(event);
+		if (queueService.pushDisconnect(event) == ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED) {
+			archiveRebuildTrigger.request();
+		}
 	}
 }

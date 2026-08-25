@@ -25,14 +25,20 @@ package global.goldenera.node.core.p2p.reputation;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
 import org.springframework.stereotype.Service;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.storage.peers.PeerReputationRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -42,21 +48,32 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @Slf4j
 public class PeerReputationService {
+	static final long MAX_CACHED_PEERS = 10_000;
+	static final Duration CACHE_EXPIRY = Duration.ofHours(6);
 
 	PeerReputationRepository repository;
+	MeterRegistry registry;
 
-	ConcurrentHashMap<Address, PeerReputationRecord> cache = new ConcurrentHashMap<>();
+	Cache<Address, PeerReputationRecord> cache = Caffeine.newBuilder()
+			.maximumSize(MAX_CACHED_PEERS)
+			.expireAfterAccess(CACHE_EXPIRY)
+			.build();
+
+	@PostConstruct
+	public void initMetrics() {
+		registry.gaugeMapSize("p2p.reputation.cache.size", Tags.empty(), cache.asMap());
+	}
 
 	public PeerReputationRecord recordFailure(Address identity) {
-		return update(identity, record -> record.withFailure(Instant.now()));
+		return update(identity, record -> record.withFailure(Instant.now()), true);
 	}
 
 	public PeerReputationRecord recordSuccess(Address identity) {
-		return update(identity, record -> record.withSuccess(Instant.now()));
+		return update(identity, record -> record.withSuccess(Instant.now()), false);
 	}
 
 	public PeerReputationRecord ban(Address identity) {
-		return update(identity, record -> record.banned(Instant.now()));
+		return update(identity, record -> record.banned(Instant.now()), true);
 	}
 
 	public boolean isBanned(Address identity) {
@@ -71,7 +88,7 @@ public class PeerReputationService {
 		if (identity == null) {
 			return PeerReputationRecord.initial();
 		}
-		return cache.compute(identity, (key, current) -> {
+		return cache.asMap().compute(identity, (key, current) -> {
 			PeerReputationRecord record = current;
 			if (record == null) {
 				record = repository.find(key).orElse(PeerReputationRecord.initial());
@@ -86,19 +103,22 @@ public class PeerReputationService {
 	}
 
 	private PeerReputationRecord update(Address identity,
-			Function<PeerReputationRecord, PeerReputationRecord> updater) {
+			Function<PeerReputationRecord, PeerReputationRecord> updater,
+			boolean persistAlways) {
 		if (identity == null) {
 			log.debug("Skipping reputation update for null identity");
 			return PeerReputationRecord.initial();
 		}
-		return cache.compute(identity, (key, current) -> {
+		return cache.asMap().compute(identity, (key, current) -> {
 			PeerReputationRecord base = current != null ? current
 					: repository.find(key)
 							.orElse(PeerReputationRecord.initial());
 			base = base.checkExpiration(Instant.now());
 
 			PeerReputationRecord updated = updater.apply(base);
-			repository.save(key, updated);
+			if (persistAlways || base.failureCount() > 0 || updated.failureCount() > 0) {
+				repository.save(key, updated);
+			}
 			return updated;
 		});
 	}

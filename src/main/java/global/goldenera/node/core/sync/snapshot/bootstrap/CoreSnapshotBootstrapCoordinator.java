@@ -98,8 +98,15 @@ public class CoreSnapshotBootstrapCoordinator {
 		StagedCoreSnapshotArchiveDownload staged = null;
 		PreparedCoreSnapshotImport prepared = null;
 		VerifiedCoreSnapshotArchive verified;
+		long bootstrapStarted = System.nanoTime();
 		try {
+			log.info("CORE SNAPSHOT: Fresh storage eligible; starting trusted HTTP bootstrap");
 			staged = httpClient.stageFullArchiveFromFirstTrustedSource();
+			log.info("CORE SNAPSHOT: Download complete at height {}; verifying {} blocks across {} archive chunk(s)",
+					staged.stateSnapshot().domainManifest().checkpointHeight(),
+					staged.archiveManifest().blockChunks().stream()
+							.mapToLong(chunk -> chunk.blockCount()).sum(),
+					staged.archiveManifest().blockChunks().size());
 			verified = verifier.verify(
 					staged.archiveManifest(),
 					staged.stateSnapshot().domainManifest(),
@@ -109,6 +116,8 @@ public class CoreSnapshotBootstrapCoordinator {
 			if (verified == null || !verified.activationEligible()) {
 				throw new IllegalStateException("Full archive verifier did not grant activation eligibility");
 			}
+			log.info("CORE SNAPSHOT: Full verification complete at height {}; importing prepared RocksDB",
+					verified.checkpointHeight());
 			prepared = importer.prepare(staged, verified);
 			if (prepared == null || prepared.verifiedArchive() != verified) {
 				throw new IllegalStateException("Importer did not preserve the verified archive capability");
@@ -116,15 +125,17 @@ public class CoreSnapshotBootstrapCoordinator {
 		} catch (Exception failure) {
 			closeQuietly(prepared);
 			closeQuietly(staged);
-			log.warn("CORE SNAPSHOT: Download/verification/import preparation failed; using v1 sync: {}",
+			log.warn("CORE SNAPSHOT: Download/verification/import preparation failed; using negotiated P2P sync: {}",
 					failure.getMessage());
 			return Outcome.FALLBACK_INVALID_OR_UNAVAILABLE;
 		}
 
 		try {
+			log.info("CORE SNAPSHOT: Prepared RocksDB import complete; activating verified snapshot");
 			activator.activateCanonical(prepared);
 			chainIdentityPreflight.inspect(expectedIdentity);
-			log.info("CORE SNAPSHOT: Activated verified full archive at height {}", verified.checkpointHeight());
+			log.info("CORE SNAPSHOT: Activated verified full archive at height {} in {}s",
+					verified.checkpointHeight(), elapsedSeconds(bootstrapStarted));
 			return Outcome.ACTIVATED;
 		} catch (Exception failure) {
 			return recoverAfterActivationFailure(failure);
@@ -132,6 +143,10 @@ public class CoreSnapshotBootstrapCoordinator {
 			closeQuietly(prepared);
 			closeQuietly(staged);
 		}
+	}
+
+	private long elapsedSeconds(long startedNanos) {
+		return Math.max(0, System.nanoTime() - startedNanos) / 1_000_000_000L;
 	}
 
 	private boolean recoverBeforeInspection() {
@@ -164,7 +179,7 @@ public class CoreSnapshotBootstrapCoordinator {
 		if (!filesystemActivation.hasRecoveryJournal()) {
 			CoreSnapshotFilesystemActivation.TargetState targetState = inspectTarget();
 			if (targetState.eligible()) {
-				log.warn("CORE SNAPSHOT: Activation failed before the durable journal; using v1 sync: {}",
+				log.warn("CORE SNAPSHOT: Activation failed before the durable journal; using negotiated P2P sync: {}",
 						activationFailure.getMessage());
 				return Outcome.FALLBACK_INVALID_OR_UNAVAILABLE;
 			}
@@ -180,7 +195,7 @@ public class CoreSnapshotBootstrapCoordinator {
 			if (outcome == CoreSnapshotFilesystemActivation.RecoveryOutcome.RESTORED_ORIGINAL
 					&& inspectTarget().eligible()) {
 				log.warn("CORE SNAPSHOT: Activation failed and recovery restored the eligible original target; "
-						+ "using v1 sync");
+						+ "using negotiated P2P sync");
 				return Outcome.FALLBACK_INVALID_OR_UNAVAILABLE;
 			}
 		} catch (Exception recoveryFailure) {

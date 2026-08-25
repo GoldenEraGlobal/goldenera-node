@@ -38,8 +38,10 @@ import global.goldenera.node.core.properties.BlockchainDbProperties;
 import global.goldenera.node.core.storage.blockchain.BlockchainRocksDbFactory;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
 import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotPreOpenInitializer;
-import lombok.AllArgsConstructor;
+import jakarta.annotation.PreDestroy;
+import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import lombok.experimental.NonFinal;
 
 /**
  * RocksDB configuration with production-grade tuning.
@@ -60,23 +62,41 @@ import lombok.experimental.FieldDefaults;
  * </ul>
  */
 @Configuration(proxyBeanMethods = false)
-@AllArgsConstructor
+@RequiredArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class BlockchainDBConfig {
 
 	BlockchainDbProperties props;
+	@NonFinal
+	RocksDB openedDatabase;
+	@NonFinal
+	RocksDbColumnFamilies openedColumnFamilies;
 
 	@Bean
 	public RocksDbColumnFamilies rocksDbColumnFamilies() {
 		return new RocksDbColumnFamilies();
 	}
 
-	@Bean(destroyMethod = "close")
+	@Bean(destroyMethod = "")
 	@Primary
 	public RocksDB blockchainDB(
 			RocksDbColumnFamilies columnFamiliesHolder,
 			CoreSnapshotPreOpenInitializer snapshotPreOpenInitializer)
 			throws RocksDBException, IOException {
-		return new BlockchainRocksDbFactory(props).open(Path.of(props.getPath()), columnFamiliesHolder);
+		openedColumnFamilies = columnFamiliesHolder;
+		openedDatabase = new BlockchainRocksDbFactory(props).open(Path.of(props.getPath()), columnFamiliesHolder);
+		return openedDatabase;
+	}
+
+	@PreDestroy
+	public void close() {
+		if (openedColumnFamilies != null) {
+			openedColumnFamilies.close();
+			openedColumnFamilies = null;
+		}
+		if (openedDatabase != null) {
+			openedDatabase.close();
+			openedDatabase = null;
+		}
 	}
 }

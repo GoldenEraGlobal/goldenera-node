@@ -127,6 +127,7 @@ public class ChainSwitchService {
             boolean saveTipData,
             @NonNull SwitchType switchType) throws Exception {
 
+        List<Object> eventsToPublish = new ArrayList<>();
         masterChainLock.lock();
         try {
             StoredBlock currentBestBlock = chainQueryService.getLatestStoredBlockOrThrow();
@@ -305,18 +306,18 @@ public class ChainSwitchService {
                         newTip.getBlock().getHash().toShortLogString());
             }
 
-            blockDisconnectedEvents.forEach(applicationEventPublisher::publishEvent);
-            blockConnectedEvents.forEach(applicationEventPublisher::publishEvent);
+            eventsToPublish.addAll(blockDisconnectedEvents);
+            eventsToPublish.addAll(blockConnectedEvents);
 
             if (!isReorg && !blockConnectedEvents.isEmpty()) {
-                applicationEventPublisher.publishEvent(new BlockConnectionBatchCompletedEvent(
+                eventsToPublish.add(new BlockConnectionBatchCompletedEvent(
                         this, ConnectedSource.SYNC, blockConnectedEvents));
             }
 
             // Publish BlockReorgEvent for webhook notifications when it's a real reorg
             if (isReorg && !oldChainStored.isEmpty()) {
                 StoredBlock oldTip = oldChainStored.get(0); // First in reversed list is the old tip
-                applicationEventPublisher.publishEvent(new BlockReorgEvent(
+                eventsToPublish.add(new BlockReorgEvent(
                         this,
                         oldTip.getHeight(),
                         oldTip.getHash(),
@@ -326,6 +327,7 @@ public class ChainSwitchService {
         } finally {
             masterChainLock.unlock();
         }
+        eventsToPublish.forEach(applicationEventPublisher::publishEvent);
     }
 
     /**

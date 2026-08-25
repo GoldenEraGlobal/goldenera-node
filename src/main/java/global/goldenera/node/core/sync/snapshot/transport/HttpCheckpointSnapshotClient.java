@@ -46,6 +46,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.bouncycastle.jcajce.provider.digest.Keccak;
 import org.springframework.beans.factory.ObjectProvider;
@@ -81,8 +83,10 @@ import okhttp3.Call;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import lombok.extern.slf4j.Slf4j;
 
 @Service
+@Slf4j
 public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport {
 
 	public static final String MANIFEST_PATH = "/api/core/v1/sync/snapshots/checkpoint/manifest";
@@ -668,10 +672,19 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 	}
 
 	private List<Path> downloadChunks(Path staging, List<ResolvedChunk> chunks, String filePrefix) throws Exception {
+		if (chunks.isEmpty()) {
+			return List.of();
+		}
 		ExecutorService executor = Executors.newFixedThreadPool(properties.getParallelism());
 		Set<Call> activeCalls = ConcurrentHashMap.newKeySet();
+		DownloadProgress progress = new DownloadProgress(downloadLabel(filePrefix), chunks);
+		progress.started();
 		List<Future<Path>> futures = chunks.stream()
-				.map(chunk -> executor.submit(() -> downloadChunk(staging, chunk, filePrefix, activeCalls)))
+				.map(chunk -> executor.submit(() -> {
+					Path downloaded = downloadChunk(staging, chunk, filePrefix, activeCalls);
+					progress.completed(chunk);
+					return downloaded;
+				}))
 				.toList();
 		boolean completed = false;
 		try {
@@ -712,6 +725,15 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 				throw failure("Interrupted while waiting for snapshot download workers", e);
 			}
 		}
+	}
+
+	private String downloadLabel(String filePrefix) {
+		return switch (filePrefix) {
+			case "chunk-" -> "state";
+			case "archive-chunk-" -> "block archive";
+			case "archive-entity-" -> "entity index";
+			default -> "snapshot";
+		};
 	}
 
 	private Path downloadChunk(
@@ -1012,6 +1034,43 @@ public class HttpCheckpointSnapshotClient implements CheckpointSnapshotTransport
 					activeCalls.remove(call);
 				}
 			}
+		}
+	}
+
+	private static final class DownloadProgress {
+
+		private final String label;
+		private final int totalChunks;
+		private final long totalBytes;
+		private final AtomicInteger completedChunks = new AtomicInteger();
+		private final AtomicLong completedBytes = new AtomicLong();
+		private final AtomicInteger reportedDecile = new AtomicInteger();
+
+		private DownloadProgress(String label, List<ResolvedChunk> chunks) {
+			this.label = label;
+			this.totalChunks = chunks.size();
+			this.totalBytes = chunks.stream().mapToLong(ResolvedChunk::encodedByteCount).sum();
+		}
+
+		private void started() {
+			log.info("CORE SNAPSHOT: Downloading {} data: {} chunk(s), {} MiB",
+					label, totalChunks, mebibytes(totalBytes));
+		}
+
+		private void completed(ResolvedChunk chunk) {
+			int chunks = completedChunks.incrementAndGet();
+			long bytes = completedBytes.addAndGet(chunk.encodedByteCount());
+			int percent = totalChunks == 0 ? 100 : Math.min(100, chunks * 100 / totalChunks);
+			int decile = percent / 10;
+			int previous = reportedDecile.get();
+			if ((chunks == totalChunks || decile > previous) && reportedDecile.compareAndSet(previous, decile)) {
+				log.info("CORE SNAPSHOT: Download {} progress: {}/{} chunks ({}%), {}/{} MiB",
+						label, chunks, totalChunks, percent, mebibytes(bytes), mebibytes(totalBytes));
+			}
+		}
+
+		private static String mebibytes(long bytes) {
+			return String.format(Locale.ROOT, "%.1f", bytes / (1024.0 * 1024.0));
 		}
 	}
 

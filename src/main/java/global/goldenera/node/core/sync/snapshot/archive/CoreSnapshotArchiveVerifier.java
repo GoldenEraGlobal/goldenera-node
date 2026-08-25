@@ -48,6 +48,7 @@ import global.goldenera.node.core.sync.snapshot.SnapshotChunkSource;
 import global.goldenera.node.core.sync.snapshot.SnapshotDiskSpaceBudget;
 import global.goldenera.node.core.sync.snapshot.SnapshotVerificationException;
 import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Offline FULL CORE verifier. It first streams every canonical StoredBlock from
@@ -55,6 +56,7 @@ import global.goldenera.node.core.sync.snapshot.SnapshotFormatCompatibility;
  * for isolated checkpoint-state verification, and only then returns an
  * activation capability. It does not open or mutate the production database.
  */
+@Slf4j
 public final class CoreSnapshotArchiveVerifier {
 
 	private final CheckpointSnapshotVerifier stateVerifier;
@@ -146,7 +148,9 @@ public final class CoreSnapshotArchiveVerifier {
 		Hash previousHash = null;
 		BigInteger cumulativeDifficulty = BigInteger.ZERO;
 		long streamedUncompressedBytes = 0;
-		for (CoreSnapshotBlockChunkDescriptor descriptor : archiveManifest.blockChunks()) {
+		List<CoreSnapshotBlockChunkDescriptor> chunks = archiveManifest.blockChunks();
+		for (int chunkIndex = 0; chunkIndex < chunks.size(); chunkIndex++) {
+			CoreSnapshotBlockChunkDescriptor descriptor = chunks.get(chunkIndex);
 			try (InputStream opened = Objects.requireNonNull(
 					blockChunkSource.open(descriptor), "Archive chunk source returned null");
 					CoreSnapshotBlockChunkCodec.Reader reader =
@@ -173,6 +177,7 @@ public final class CoreSnapshotArchiveVerifier {
 			streamedUncompressedBytes = addExact(
 					streamedUncompressedBytes, descriptor.uncompressedByteCount(),
 					"Archive byte count overflow");
+			logProgress("Full archive verification", chunkIndex + 1, chunks.size(), expectedHeight);
 		}
 
 		if (expectedHeight != totals.blockCount()
@@ -195,6 +200,13 @@ public final class CoreSnapshotArchiveVerifier {
 				stateManifest.checkpointHeight(), stateManifest.checkpointHash(),
 				stateManifest.checkpointCumulativeDifficulty(), anchorHeight, anchorHash, anchorDifficulty);
 		return new HistoryVerification(fullHistory, expectedHeight, streamedUncompressedBytes);
+	}
+
+	private void logProgress(String phase, int completed, int total, long blocks) {
+		if (completed == total || completed * 10 / total > (completed - 1) * 10 / total) {
+			log.info("CORE SNAPSHOT: {} progress: {}/{} chunks ({}%), {} blocks",
+					phase, completed, total, completed * 100 / total, blocks);
+		}
 	}
 
 	private void verifyArchiveManifestBinding(

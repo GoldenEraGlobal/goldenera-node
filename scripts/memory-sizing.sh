@@ -3,6 +3,8 @@
 # Memory sizing helpers shared by the production entrypoint and shell tests.
 # This file intentionally does not change shell options because it is sourced.
 
+GE_BLOCKCHAIN_COLUMN_FAMILY_COUNT=11
+
 ge_memory_is_positive_integer() {
   case "${1:-}" in
     ''|*[!0-9]*) return 1 ;;
@@ -65,9 +67,28 @@ ge_memory_cgroup_limit_mb() {
   return 1
 }
 
+ge_memory_cgroup_usage_mb() {
+  local path value usage_mb
+  for path in \
+    "${GOLDENERA_CGROUP_V2_MEMORY_CURRENT_PATH:-/sys/fs/cgroup/memory.current}" \
+    "${GOLDENERA_CGROUP_V1_MEMORY_USAGE_PATH:-/sys/fs/cgroup/memory/memory.usage_in_bytes}"; do
+    [ -r "$path" ] || continue
+    value="$(tr -d '[:space:]' <"$path")"
+    case "$value" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "${#value}" -lt 16 ] || continue
+    usage_mb=$((value / 1024 / 1024))
+    [ "$usage_mb" -ge 0 ] || continue
+    printf '%s' "$usage_mb"
+    return 0
+  done
+  return 1
+}
+
 ge_detect_memory_environment() {
   local meminfo_path mem_total_kb mem_available_kb hugepage_size_kb
-  local hugepages_total hugepages_free cgroup_limit_mb
+  local hugepages_total hugepages_free cgroup_limit_mb cgroup_usage_mb cgroup_available_mb
 
   meminfo_path="${GOLDENERA_MEMINFO_PATH:-/proc/meminfo}"
   mem_total_kb="$(ge_memory_meminfo_kb MemTotal "$meminfo_path")" || return 1
@@ -81,15 +102,28 @@ ge_detect_memory_environment() {
   [ "$GE_MEMORY_AVAILABLE_MB" -gt 0 ] || GE_MEMORY_AVAILABLE_MB="$GE_HOST_MEMORY_MB"
 
   GE_CGROUP_MEMORY_LIMIT_MB=0
+  GE_CGROUP_MEMORY_USAGE_MB=0
   cgroup_limit_mb="$(ge_memory_cgroup_limit_mb || true)"
   if ge_memory_is_positive_integer "$cgroup_limit_mb"; then
     GE_CGROUP_MEMORY_LIMIT_MB="$cgroup_limit_mb"
+  fi
+
+  cgroup_usage_mb="$(ge_memory_cgroup_usage_mb || true)"
+  if [ "$GE_CGROUP_MEMORY_LIMIT_MB" -gt 0 ] && [[ "$cgroup_usage_mb" =~ ^[0-9]+$ ]]; then
+    GE_CGROUP_MEMORY_USAGE_MB="$cgroup_usage_mb"
   fi
 
   GE_EFFECTIVE_MEMORY_MB="$GE_HOST_MEMORY_MB"
   if [ "$GE_CGROUP_MEMORY_LIMIT_MB" -gt 0 ] \
       && [ "$GE_CGROUP_MEMORY_LIMIT_MB" -lt "$GE_EFFECTIVE_MEMORY_MB" ]; then
     GE_EFFECTIVE_MEMORY_MB="$GE_CGROUP_MEMORY_LIMIT_MB"
+  fi
+  if [ "$GE_CGROUP_MEMORY_LIMIT_MB" -gt 0 ]; then
+    cgroup_available_mb=$((GE_CGROUP_MEMORY_LIMIT_MB - GE_CGROUP_MEMORY_USAGE_MB))
+    [ "$cgroup_available_mb" -gt 0 ] || cgroup_available_mb=1
+    if [ "$GE_MEMORY_AVAILABLE_MB" -gt "$cgroup_available_mb" ]; then
+      GE_MEMORY_AVAILABLE_MB="$cgroup_available_mb"
+    fi
   fi
   if [ "$GE_MEMORY_AVAILABLE_MB" -gt "$GE_EFFECTIVE_MEMORY_MB" ]; then
     GE_MEMORY_AVAILABLE_MB="$GE_EFFECTIVE_MEMORY_MB"
@@ -107,13 +141,14 @@ ge_calculate_auto_heap_mb() {
   local mining_enabled="$5" memory_mode="$6" rocks_cache_mb="$7" rocks_write_buffer_mb="$8"
   local rocks_max_write_buffers="$9" postgresql_enabled="${10}" direct_memory_mb="${11:-512}"
   local large_pages_usable="${12:-false}"
+  local huge_pages_outside_budget="${13:-false}"
   local randomx_expected_mb hugepage_coverage_cap_mb hugepage_coverage_mb candidate_mb
 
   ge_memory_is_positive_integer "$total_mb" || return 1
   ge_memory_is_positive_integer "$available_mb" || available_mb="$total_mb"
   ge_memory_is_positive_integer "$rocks_cache_mb" || rocks_cache_mb=512
-  ge_memory_is_positive_integer "$rocks_write_buffer_mb" || rocks_write_buffer_mb=64
-  ge_memory_is_positive_integer "$rocks_max_write_buffers" || rocks_max_write_buffers=4
+  ge_memory_is_positive_integer "$rocks_write_buffer_mb" || rocks_write_buffer_mb=32
+  ge_memory_is_positive_integer "$rocks_max_write_buffers" || rocks_max_write_buffers=2
   ge_memory_is_positive_integer "$direct_memory_mb" || direct_memory_mb=512
   ge_memory_is_positive_integer "$hugepages_total_mb" || hugepages_total_mb=0
   ge_memory_is_positive_integer "$hugepages_free_mb" || hugepages_free_mb=0
@@ -150,13 +185,25 @@ ge_calculate_auto_heap_mb() {
   GE_RANDOMX_PEAK_RESERVE_MB="$randomx_expected_mb"
   GE_RANDOMX_HUGEPAGE_COVERAGE_MB="$hugepage_coverage_mb"
   GE_RANDOMX_UNCOVERED_MB=$((randomx_expected_mb - hugepage_coverage_mb))
-  GE_RANDOMX_HUGEPAGE_RESERVE_MB=$((hugepages_total_mb + GE_RANDOMX_UNCOVERED_MB))
+  GE_HUGEPAGE_HOST_RESERVE_MB="$hugepages_total_mb"
+  if ge_memory_is_true "$huge_pages_outside_budget"; then
+    # Docker normally accounts hugetlb separately from memory.max. The host
+    # reservation is still reported and must be covered by the install profile.
+    GE_RANDOMX_HUGEPAGE_RESERVE_MB="$GE_RANDOMX_UNCOVERED_MB"
+  else
+    GE_RANDOMX_HUGEPAGE_RESERVE_MB=$((hugepages_total_mb + GE_RANDOMX_UNCOVERED_MB))
+  fi
   GE_ROCKSDB_CACHE_RESERVE_MB="$rocks_cache_mb"
-  GE_ROCKSDB_WRITE_RESERVE_MB=$((rocks_write_buffer_mb * rocks_max_write_buffers * 2))
+  # RocksDB owns memtables per column family. All 11 blockchain families use
+  # the configured write-buffer policy, so a single-CF estimate is unsafe.
+  GE_ROCKSDB_WRITE_RESERVE_MB=$((rocks_write_buffer_mb * rocks_max_write_buffers
+    * GE_BLOCKCHAIN_COLUMN_FAMILY_COUNT))
   GE_DIRECT_MEMORY_RESERVE_MB="$direct_memory_mb"
   GE_POSTGRESQL_RESERVE_MB=0
   if ge_memory_is_true "$postgresql_enabled"; then
-    GE_POSTGRESQL_RESERVE_MB=512
+    # shared_buffers is 512MB, but backend processes, maintenance work and
+    # filesystem cache require additional headroom.
+    GE_POSTGRESQL_RESERVE_MB=1024
   fi
   GE_SYSTEM_JVM_RESERVE_MB=1536
   GE_RUNTIME_RESERVE_MB=$((GE_ROCKSDB_CACHE_RESERVE_MB

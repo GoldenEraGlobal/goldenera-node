@@ -212,7 +212,17 @@ public class RandomXManager {
 		this.syncMemoryPolicy = new RandomXSyncMemoryPolicy(properties, Objects.requireNonNull(memoryProbe));
 		registry.gauge("blockchain.randomx.sync_dataset.active", this,
 				manager -> manager.isSyncDatasetMapped() ? 1 : 0);
+		registry.gauge("blockchain.randomx.mining_dataset.active", this,
+				manager -> manager.isDatasetAllocated() ? 1 : 0);
+		registry.gauge("blockchain.randomx.vm.leases", activeVMs, AtomicInteger::get);
+		registry.gauge("blockchain.randomx.historical_epochs", this, RandomXManager::historicalEpochCount);
 		registry.gauge("blockchain.randomx.sync_dataset.bulk_active", syncBulkActiveGauge, AtomicInteger::get);
+	}
+
+	private int historicalEpochCount() {
+		synchronized (epochCacheLock) {
+			return epochResources.size();
+		}
 	}
 
 	public void syncBulkCatchUpStarted(long localHeight, long targetHeight) {

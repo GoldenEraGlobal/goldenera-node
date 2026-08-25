@@ -36,6 +36,7 @@ import org.mockito.InOrder;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
 import global.goldenera.node.explorer.events.ExBlockReorgEvent;
 
@@ -52,7 +53,7 @@ class BridgeExplorerLifecycleListenerTest {
 		List<BlockEvent> events = List.of();
 
 		listener.handleBlockConnected(new ExBlockConnectedEvent(
-				this, block, BigInteger.ONE, Wei.ZERO, Wei.ZERO, events));
+				this, block, BigInteger.ONE, Wei.ZERO, Wei.ZERO, events, ConnectedSource.MINER));
 
 		org.mockito.Mockito.verify(coordinator).confirmedBlock(block, events);
 	}

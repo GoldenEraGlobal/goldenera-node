@@ -14,6 +14,8 @@ APP_JAR="${APP_HOME}/app.jar"
 MEMORY_SIZING_LIB="${GOLDENERA_MEMORY_SIZING_LIB:-/usr/local/lib/goldenera/memory-sizing.sh}"
 MAX_DIRECT_MEMORY_MB=512
 RANDOMX_LARGE_PAGE_WORKING_SET_MB=2560
+JAVA_NMT_LEVEL="${JAVA_NMT_LEVEL:-summary}"
+JAVA_JFR_ENABLE="${JAVA_JFR_ENABLE:-true}"
 
 DATA_DIR="${APP_HOME}/node_data"
 LOG_DIR="${APP_HOME}/node_logs"
@@ -67,6 +69,11 @@ if ge_detect_memory_environment; then
     MEMORY_ENV_DETECTED=true
 fi
 
+HUGEPAGES_OUTSIDE_MEMORY_CGROUP=false
+if [ "${GE_CGROUP_MEMORY_LIMIT_MB:-0}" -gt 0 ]; then
+    HUGEPAGES_OUTSIDE_MEMORY_CGROUP=true
+fi
+
 LARGE_PAGES_USABLE=false
 SETPRIV_CAPABILITY_ARGS=(
     --inh-caps=-all
@@ -92,6 +99,23 @@ if "$FULL_MEMORY_MINING"; then
     fi
 fi
 
+calculate_safe_heap_budget() {
+    ge_calculate_auto_heap_mb \
+        "$GE_EFFECTIVE_MEMORY_MB" \
+        "$1" \
+        "$GE_HUGEPAGES_TOTAL_MB" \
+        "$GE_HUGEPAGES_FREE_MB" \
+        "${MINING_ENABLE:-false}" \
+        "${MINING_MEMORY_MODE:-FULL}" \
+        "${ROCKSDB_BLOCK_CACHE_MB:-512}" \
+        "${ROCKSDB_WRITE_BUFFER_MB:-32}" \
+        "${ROCKSDB_MAX_WRITE_BUFFERS:-2}" \
+        "${POSTGRESQL_ENABLE:-${EXPLORER_ENABLE:-true}}" \
+        "$MAX_DIRECT_MEMORY_MB" \
+        "$LARGE_PAGES_USABLE" \
+        "$HUGEPAGES_OUTSIDE_MEMORY_CGROUP"
+}
+
 if [ -n "${JAVA_HEAP_MB:-}" ]; then
     case "$JAVA_HEAP_MB" in
         *[!0-9]*)
@@ -99,15 +123,27 @@ if [ -n "${JAVA_HEAP_MB:-}" ]; then
             exit 1
             ;;
     esac
-    if [ "$JAVA_HEAP_MB" -lt 512 ]; then
-        echo ">>> [FATAL] JAVA_HEAP_MB must be at least 512 MB."
+    if [ "$JAVA_HEAP_MB" -lt 1024 ]; then
+        echo ">>> [FATAL] JAVA_HEAP_MB must be at least 1024 MB."
+        exit 1
+    fi
+    if ! "$MEMORY_ENV_DETECTED"; then
+        echo ">>> [FATAL] Explicit JAVA_HEAP_MB cannot be safety-checked because memory limits are unavailable."
+        exit 1
+    fi
+    if ! calculate_safe_heap_budget "$GE_EFFECTIVE_MEMORY_MB"; then
+        echo ">>> [FATAL] The configured memory budget cannot safely run this service profile: $GE_MEMORY_ERROR"
+        exit 1
+    fi
+    if [ "$JAVA_HEAP_MB" -gt "$GE_AUTO_HEAP_MB" ]; then
+        echo ">>> [FATAL] JAVA_HEAP_MB=${JAVA_HEAP_MB} exceeds the safe maximum ${GE_AUTO_HEAP_MB} MB for this budget."
         exit 1
     fi
     echo ">>> [INFO] Using explicit JAVA_HEAP_MB: ${JAVA_HEAP_MB} MB"
-    JAVA_MEM_OPTS="-Xms${JAVA_HEAP_MB}m -Xmx${JAVA_HEAP_MB}m"
+    RESOLVED_HEAP_MB="$JAVA_HEAP_MB"
 else
     if ! "$MEMORY_ENV_DETECTED"; then
-        echo ">>> [FATAL] Unable to detect host or container memory limits. Set JAVA_HEAP_MB explicitly."
+        echo ">>> [FATAL] Unable to detect host or container memory limits. Configure a hard container memory limit."
         exit 1
     fi
 
@@ -116,35 +152,37 @@ else
         CGROUP_LIMIT_LABEL="${GE_CGROUP_MEMORY_LIMIT_MB} MB"
     fi
     echo ">>> [INFO] Host Memory: ${GE_HOST_MEMORY_MB} MB; cgroup limit: ${CGROUP_LIMIT_LABEL}"
-    echo ">>> [INFO] Effective Memory: ${GE_EFFECTIVE_MEMORY_MB} MB; currently available: ${GE_MEMORY_AVAILABLE_MB} MB"
+    echo ">>> [INFO] Effective Memory: ${GE_EFFECTIVE_MEMORY_MB} MB; currently available: ${GE_MEMORY_AVAILABLE_MB} MB; cgroup usage: ${GE_CGROUP_MEMORY_USAGE_MB:-0} MB"
     echo ">>> [INFO] Huge Pages: ${GE_HUGEPAGES_TOTAL_MB} MB reserved, ${GE_HUGEPAGES_FREE_MB} MB free"
 
-    if ! ge_calculate_auto_heap_mb \
-        "$GE_EFFECTIVE_MEMORY_MB" \
-        "$GE_MEMORY_AVAILABLE_MB" \
-        "$GE_HUGEPAGES_TOTAL_MB" \
-        "$GE_HUGEPAGES_FREE_MB" \
-        "${MINING_ENABLE:-false}" \
-        "${MINING_MEMORY_MODE:-FULL}" \
-        "${ROCKSDB_BLOCK_CACHE_MB:-512}" \
-        "${ROCKSDB_WRITE_BUFFER_MB:-64}" \
-        "${ROCKSDB_MAX_WRITE_BUFFERS:-4}" \
-        "${POSTGRESQL_ENABLE:-${EXPLORER_ENABLE:-true}}" \
-        "$MAX_DIRECT_MEMORY_MB" \
-        "$LARGE_PAGES_USABLE"; then
+    if ! calculate_safe_heap_budget "$GE_MEMORY_AVAILABLE_MB"; then
         echo ">>> [FATAL] Safe automatic Java heap sizing failed: ${GE_MEMORY_ERROR:-invalid memory configuration}"
         echo ">>> [FATAL] Reserve breakdown: RandomX+huge-pages=${GE_RANDOMX_HUGEPAGE_RESERVE_MB:-unknown} MB, runtime=${GE_RUNTIME_RESERVE_MB:-unknown} MB"
-        echo ">>> [FATAL] Add memory, reduce native caches, disable FULL mining/Explorer, or set JAVA_HEAP_MB explicitly."
+        echo ">>> [FATAL] Increase the container budget, reduce native caches, or disable FULL mining/Explorer."
         exit 1
     fi
 
-    echo ">>> [INFO] Reserve: RandomX rollover peak=${GE_RANDOMX_PEAK_RESERVE_MB} MB, huge-page coverage=${GE_RANDOMX_HUGEPAGE_COVERAGE_MB} MB, total RandomX+huge-pages=${GE_RANDOMX_HUGEPAGE_RESERVE_MB} MB"
+    echo ">>> [INFO] Reserve: RandomX rollover peak=${GE_RANDOMX_PEAK_RESERVE_MB} MB, huge-page coverage=${GE_RANDOMX_HUGEPAGE_COVERAGE_MB} MB, memory-budget RandomX=${GE_RANDOMX_HUGEPAGE_RESERVE_MB} MB, host huge-pages=${GE_HUGEPAGE_HOST_RESERVE_MB} MB"
     echo ">>> [INFO] Reserve: RocksDB cache=${GE_ROCKSDB_CACHE_RESERVE_MB} MB, RocksDB writes=${GE_ROCKSDB_WRITE_RESERVE_MB} MB"
     echo ">>> [INFO] Reserve: direct=${GE_DIRECT_MEMORY_RESERVE_MB} MB, PostgreSQL=${GE_POSTGRESQL_RESERVE_MB} MB, OS+JVM=${GE_SYSTEM_JVM_RESERVE_MB} MB"
     echo ">>> [INFO] Heap limits: total-budget=${GE_HEAP_FROM_TOTAL_MB} MB, available-budget=${GE_HEAP_FROM_AVAILABLE_MB} MB, ${GE_HEAP_PERCENT_CAP}% cap=${GE_HEAP_PERCENT_CAP_MB} MB"
     echo ">>> [INFO] Auto-calculated Java Heap: ${GE_AUTO_HEAP_MB} MB"
-    JAVA_MEM_OPTS="-Xms${GE_AUTO_HEAP_MB}m -Xmx${GE_AUTO_HEAP_MB}m"
+    RESOLVED_HEAP_MB="$GE_AUTO_HEAP_MB"
 fi
+
+JAVA_INITIAL_HEAP_MB="${JAVA_INITIAL_HEAP_MB:-1024}"
+case "$JAVA_INITIAL_HEAP_MB" in
+    ''|*[!0-9]*)
+        echo ">>> [FATAL] JAVA_INITIAL_HEAP_MB must be a positive integer."
+        exit 1
+        ;;
+esac
+if [ "$JAVA_INITIAL_HEAP_MB" -lt 512 ] || [ "$JAVA_INITIAL_HEAP_MB" -gt "$RESOLVED_HEAP_MB" ]; then
+    echo ">>> [FATAL] JAVA_INITIAL_HEAP_MB must be between 512 and ${RESOLVED_HEAP_MB} MB."
+    exit 1
+fi
+JAVA_MEM_OPTS="-Xms${JAVA_INITIAL_HEAP_MB}m -Xmx${RESOLVED_HEAP_MB}m"
+echo ">>> [INFO] Java initial heap: ${JAVA_INITIAL_HEAP_MB} MB; maximum heap: ${RESOLVED_HEAP_MB} MB"
 
 # ==============================================================================
 # RANDOMX JIT COMPILATION
@@ -182,7 +220,9 @@ else
         -DCMAKE_C_FLAGS="-fPIC" \
         -DCMAKE_SHARED_LINKER_FLAGS="-z noexecstack" > /dev/null
     
-    make -j$(nproc) > /dev/null
+    BUILD_JOBS="$(nproc)"
+    [ "$BUILD_JOBS" -le 4 ] || BUILD_JOBS=4
+    make -j"$BUILD_JOBS" > /dev/null
 
     if [ -f "librandomx.so" ]; then
         cp librandomx.so "$FINAL_LIB_PATH"
@@ -205,6 +245,27 @@ echo ">>> [BOOT] Launching Spring Boot..."
 # MaxDirectMemorySize only limits Java DirectByteBuffer (Netty, NIO buffers).
 # 512MB is sufficient for Netty P2P + HTTP server buffers.
 
+case "$JAVA_NMT_LEVEL" in
+  off|summary|detail) ;;
+  *)
+    echo ">>> [FATAL] JAVA_NMT_LEVEL must be off, summary, or detail; got: $JAVA_NMT_LEVEL"
+    exit 1
+    ;;
+esac
+
+JAVA_DIAGNOSTIC_OPTS=(
+  -XX:+HeapDumpOnOutOfMemoryError
+  "-XX:HeapDumpPath=${LOG_DIR}"
+)
+if [ "$JAVA_NMT_LEVEL" != "off" ]; then
+  JAVA_DIAGNOSTIC_OPTS+=("-XX:NativeMemoryTracking=${JAVA_NMT_LEVEL}")
+fi
+if ge_memory_is_true "$JAVA_JFR_ENABLE"; then
+  JAVA_DIAGNOSTIC_OPTS+=(
+    "-XX:StartFlightRecording=filename=${LOG_DIR}/goldenera.jfr,settings=default,dumponexit=true,maxage=6h,maxsize=256m"
+  )
+fi
+
 exec setpriv --reuid=blockchain --regid=blockchain --init-groups \
   "${SETPRIV_CAPABILITY_ARGS[@]}" \
   "$JAVA_BIN" \
@@ -216,6 +277,8 @@ exec setpriv --reuid=blockchain --regid=blockchain --init-groups \
   -XX:+AlwaysPreTouch \
   -XX:+ExitOnOutOfMemoryError \
   -XX:+UseStringDeduplication \
+  --enable-native-access=ALL-UNNAMED \
+  "${JAVA_DIAGNOSTIC_OPTS[@]}" \
   -DAPP_DATA_DIR=$DATA_DIR \
   -Dgoldenera.randomx.large-pages-enabled=$LARGE_PAGES_USABLE \
   -Djava.security.egd=file:/dev/./urandom \

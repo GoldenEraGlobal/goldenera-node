@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -209,11 +210,13 @@ class P2PInboundHandlerChainIdentityTest {
 
 		fixture.channel.writeInbound(new P2PEnvelope(1, messageType, payload));
 
-		assertThat(executor.pending()).isZero();
 		if (messageType == P2PMessageType.STATUS) {
+			assertThat(executor.pending()).isEqualTo(1);
 			assertThat(fixture.channel.isActive()).isTrue();
+			executor.runAll();
 			verify(fixture.publisher).publishEvent(any(P2PHandshakeCompletedEvent.class));
 		} else {
+			assertThat(executor.pending()).isZero();
 			assertThat(fixture.channel.isActive()).isFalse();
 			verify(fixture.publisher, never()).publishEvent(any());
 			verify(fixture.policy, never()).validate(any());
@@ -239,10 +242,10 @@ class P2PInboundHandlerChainIdentityTest {
 		queued.channel.writeInbound(new P2PEnvelope(3, P2PMessageType.GET_MEMPOOL_HASHES, null));
 		assertThat(queuedExecutor.pending()).isEqualTo(1);
 
-		queued.channel.writeInbound(new P2PEnvelope(4, P2PMessageType.STATUS, status));
 		queuedExecutor.runAll();
 
 		verify(queued.publisher, never()).publishEvent(any(P2PMempoolHashesRequestedEvent.class));
+		verify(queued.publisher, never()).publishEvent(any(P2PHandshakeCompletedEvent.class));
 	}
 
 	@Test
@@ -254,7 +257,6 @@ class P2PInboundHandlerChainIdentityTest {
 		fixture.channel.writeInbound(new P2PEnvelope(2, P2PMessageType.PING, null));
 		assertThat(executor.pending()).isEqualTo(1);
 
-		fixture.channel.writeInbound(new P2PEnvelope(3, P2PMessageType.STATUS, status));
 		executor.runAll();
 
 		assertThat(fixture.channel.isActive()).isFalse();
@@ -327,12 +329,14 @@ class P2PInboundHandlerChainIdentityTest {
 		fixture.channel.writeInbound(new P2PEnvelope(41, P2PMessageType.BLOCK_BODIES, bodies));
 
 		verify(fixture.validation, never()).validateTxDto(any());
-		verify(fixture.publisher).publishEvent(any(P2PBlockBodiesReceivedEvent.class));
+		verify(fixture.publisher, timeout(1_000)).publishEvent(any(P2PBlockBodiesReceivedEvent.class));
 	}
 
 	private Fixture fixture(Executor executor) {
 		ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
 		PeerRegistry peerRegistry = mock(PeerRegistry.class);
+		when(peerRegistry.register(any())).thenReturn(true);
+		when(peerRegistry.updateIdentity(any(), any())).thenReturn(true);
 		PeerReputationService reputation = mock(PeerReputationService.class);
 		GeneralProperties generalProperties = mock(GeneralProperties.class);
 		when(generalProperties.getNetwork()).thenReturn(Network.TESTNET);

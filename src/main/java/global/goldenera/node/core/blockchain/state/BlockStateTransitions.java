@@ -121,6 +121,7 @@ public class BlockStateTransitions {
 			StateProcessor.ExecutionResult executionResult,
 			Address receivedFrom,
 			Instant receivedAt) {
+		BlockConnectedEvent eventToPublish = null;
 		masterChainLock.lock();
 		try {
 			long start = System.currentTimeMillis();
@@ -215,8 +216,14 @@ public class BlockStateTransitions {
 
 					Collections.reverse(forkChain); // Now it's Ancestor -> ... -> NewBlock
 
-					// 2. Execute Switch
-					chainSwitchService.executeAtomicReorgSwap(new ValidatedReorgPlan(commonAncestor, forkChain));
+					// 2. Execute Switch. The switch revalidates under the same lock and publishes
+					// events only after releasing it, so drop this outer hold first.
+					masterChainLock.unlock();
+					try {
+						chainSwitchService.executeAtomicReorgSwap(new ValidatedReorgPlan(commonAncestor, forkChain));
+					} finally {
+						masterChainLock.lock();
+					}
 					return; // Done, reorg service handled everything
 
 				} catch (Exception e) {
@@ -263,7 +270,7 @@ public class BlockStateTransitions {
 				Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
 				Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
 
-				BlockConnectedEvent event = new BlockConnectedEvent(
+				eventToPublish = new BlockConnectedEvent(
 						this,
 						source,
 						block,
@@ -285,14 +292,15 @@ public class BlockStateTransitions {
 						blockEvents,
 						receivedFrom,
 						receivedAt);
-
-				applicationEventPublisher.publishEvent(event);
 			} else {
 				log.info("Block {} stored as FORK (TD: {} <= Current Head). No event emitted.",
 						block.getHeight(), cumulativeDifficulty);
 			}
 		} finally {
 			masterChainLock.unlock();
+		}
+		if (eventToPublish != null) {
+			applicationEventPublisher.publishEvent(eventToPublish);
 		}
 	}
 }

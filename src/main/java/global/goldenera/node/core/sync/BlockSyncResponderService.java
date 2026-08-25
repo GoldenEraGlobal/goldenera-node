@@ -115,6 +115,9 @@ public class BlockSyncResponderService {
 	@Async(P2P_SEND_EXECUTOR)
 	public void handleGetBodies(P2PBlockBodiesRequestedEvent event) {
 		long start = System.currentTimeMillis();
+		if (!event.getPeer().canSend()) {
+			return;
+		}
 		List<Hash> hashes = event.getHashes();
 
 		if (hashes.isEmpty()) {

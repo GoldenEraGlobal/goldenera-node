@@ -25,6 +25,7 @@ package global.goldenera.node.shared.services.webhook;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -32,9 +33,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -56,8 +59,45 @@ import global.goldenera.node.shared.events.WebhookUpdateEvent;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import okhttp3.OkHttpClient;
+import okhttp3.Call;
+import okhttp3.Callback;
 
 class WebhookDispatchServiceTest {
+
+	@Test
+	void slowWebhookHasAtMostOneRequestInFlight() {
+		UUID webhookId = UUID.randomUUID();
+		Webhook webhook = webhook(webhookId, WebhookType.BLOCKCHAIN, WebhookEventType.NEW_BLOCK);
+		WebhookCoreService coreService = mock(WebhookCoreService.class);
+		when(coreService.getAllEnabledWebhooksWithEvents()).thenReturn(List.of(webhook));
+		AESGCMComponent encryption = mock(AESGCMComponent.class);
+		when(encryption.decrypt(any(Bytes.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		OkHttpClient client = mock(OkHttpClient.class);
+		Call call = mock(Call.class);
+		when(client.newCall(any())).thenReturn(call);
+		AtomicReference<Callback> callback = new AtomicReference<>();
+		doAnswer(invocation -> {
+			callback.set(invocation.getArgument(0));
+			return null;
+		}).when(call).enqueue(any());
+		WebhookDispatchService dispatch = new WebhookDispatchService(
+				client, new ObjectMapper(), mock(TaskScheduler.class), coreService,
+				new SimpleMeterRegistry(), encryption, mock(BlockchainTxMapper.class),
+				mock(BlockchainBlockHeaderMapper.class));
+		dispatch.init();
+		dispatch.loadIndexOnStartup();
+		dispatch.processNewBlockEvent(mock(Block.class), List.of(), WebhookType.BLOCKCHAIN);
+		dispatch.processNewBlockEvent(mock(Block.class), List.of(), WebhookType.BLOCKCHAIN);
+
+		dispatch.dispatchPendingBatches();
+		dispatch.dispatchPendingBatches();
+		verify(client).newCall(any());
+
+		callback.get().onFailure(call, new IOException("slow endpoint"));
+		dispatch.processNewBlockEvent(mock(Block.class), List.of(), WebhookType.BLOCKCHAIN);
+		dispatch.dispatchPendingBatches();
+		verify(client, times(2)).newCall(any());
+	}
 
 	@Test
 	void blockAndReorgSubscriptionsAreIndexedAndDispatchedIndependently() {
@@ -76,23 +116,20 @@ class WebhookDispatchServiceTest {
 		WebhookDispatchService dispatch = new WebhookDispatchService(
 				mock(OkHttpClient.class), new ObjectMapper(), mock(TaskScheduler.class), coreService,
 				registry, encryption, mock(BlockchainTxMapper.class), mock(BlockchainBlockHeaderMapper.class));
+		dispatch.init();
 		dispatch.loadIndexOnStartup();
 
 		dispatch.processNewBlockEvent(mock(Block.class), List.of(), WebhookType.BLOCKCHAIN);
 
-		assertThat(queueSize(registry, blockWebhookId)).isEqualTo(1.0);
-		assertThat(queueSize(registry, reorgWebhookId)).isNull();
-		assertThat(queueSize(registry, explorerWebhookId)).isNull();
+		assertThat(queueSize(registry)).isEqualTo(1.0);
 
 		dispatch.processReorgEvent(1L, Hash.ZERO, 2L, Hash.ZERO, WebhookType.BLOCKCHAIN);
 
-		assertThat(queueSize(registry, blockWebhookId)).isEqualTo(1.0);
-		assertThat(queueSize(registry, reorgWebhookId)).isEqualTo(1.0);
-		assertThat(queueSize(registry, explorerWebhookId)).isNull();
+		assertThat(queueSize(registry)).isEqualTo(2.0);
 
 		dispatch.processNewBlockEvent(mock(Block.class), List.of(), WebhookType.EXPLORER);
 
-		assertThat(queueSize(registry, explorerWebhookId)).isEqualTo(1.0);
+		assertThat(queueSize(registry)).isEqualTo(3.0);
 		verify(encryption, times(3)).decrypt(blockWebhook.getCreatedByApiKey().getWebhookSecretKey());
 	}
 
@@ -174,10 +211,8 @@ class WebhookDispatchServiceTest {
 		return webhook;
 	}
 
-	private static Double queueSize(SimpleMeterRegistry registry, UUID webhookId) {
-		var gauge = registry.find("webhook.queue.size")
-				.tag("webhookId", webhookId.toString())
-				.gauge();
+	private static Double queueSize(SimpleMeterRegistry registry) {
+		var gauge = registry.find("webhook.queue.size").gauge();
 		return gauge == null ? null : gauge.value();
 	}
 }

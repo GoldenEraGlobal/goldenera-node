@@ -44,6 +44,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
@@ -122,6 +123,25 @@ class BlockSyncManagerRequestCorrelationTest {
 				.count()).isEqualTo(1.0);
 		assertThat(fixture.registry.counter("p2p.sync.responses.rejected", "type", "headers", "reason", "unsolicited")
 				.count()).isEqualTo(1.0);
+	}
+
+	@Test
+	void stopCancelsAndClearsEveryPendingRequestKind() {
+		Fixture fixture = fixture();
+		RemotePeer peer = mock(RemotePeer.class);
+		CompletableFuture<List<BlockHeader>> headers = new CompletableFuture<>();
+		CompletableFuture<List<List<Tx>>> bodies = new CompletableFuture<>();
+		fixture.service.registerHeaderRequest(new BlockSyncManagerService.PeerRequestKey(peer, 1L), headers);
+		fixture.service.registerBodyRequest(new BlockSyncManagerService.PeerRequestKey(peer, 2L), bodies);
+		assertThat(fixture.service.tryTrackBroadcastDownload(Hash.ZERO)).isTrue();
+
+		fixture.service.stop();
+
+		assertThat(headers).isCancelled();
+		assertThat(bodies).isCancelled();
+		assertThat(fixture.service.runtimeSnapshot().pendingHeaderRequests()).isZero();
+		assertThat(fixture.service.runtimeSnapshot().pendingBodyRequests()).isZero();
+		assertThat(fixture.service.runtimeSnapshot().pendingBroadcastDownloads()).isZero();
 	}
 
 	private Fixture fixture() {

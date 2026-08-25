@@ -68,6 +68,11 @@ public class RocksDbColumnFamilies {
 		handles.put(name, handle);
 	}
 
+	public void close() {
+		handles.values().forEach(ColumnFamilyHandle::close);
+		handles.clear();
+	}
+
 	public ColumnFamilyHandle blocks() {
 		return handles.get(CF_BLOCKS);
 	}

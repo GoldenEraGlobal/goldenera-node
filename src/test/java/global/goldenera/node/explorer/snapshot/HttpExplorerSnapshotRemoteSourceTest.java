@@ -114,6 +114,25 @@ class HttpExplorerSnapshotRemoteSourceTest {
 	}
 
 	@Test
+	void retriesRateLimitedExplorerChunkUsingRetryAfter() throws Exception {
+		server.removeContext(HttpExplorerSnapshotRemoteSource.CHUNKS_PATH);
+		server.createContext(HttpExplorerSnapshotRemoteSource.CHUNKS_PATH, exchange -> {
+			if (chunkRequests.incrementAndGet() == 1) {
+				exchange.getResponseHeaders().add("Retry-After", "0");
+				respond(exchange, 429, new byte[0]);
+			} else {
+				respond(exchange, 200, chunk);
+			}
+		});
+
+		try (StagedExplorerSnapshotDownload staged = client(properties(List.of(source)))
+				.stageFromFirstTrustedSource(BINDING)) {
+			assertThat(staged.manifest().checkpointHeight()).isEqualTo(BINDING.checkpointHeight());
+			assertThat(chunkRequests).hasValue(ExplorerSnapshotTable.values().length + 1);
+		}
+	}
+
+	@Test
 	void rejectsManifestBoundToDifferentCoreBeforeDownloadingChunks() {
 		ExplorerSnapshotBinding differentBinding = new ExplorerSnapshotBinding(
 				BINDING.carrierNetworkCode(), BINDING.chainId(), BINDING.genesisHash(), BINDING.checkpointHeight(),

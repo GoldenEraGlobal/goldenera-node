@@ -35,6 +35,7 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoopGroup;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import jakarta.annotation.PreDestroy;
@@ -52,7 +53,12 @@ public class NettyP2PServer {
 
 	@Autowired
 	public NettyP2PServer(P2PChannelInitializer channelInitializer, P2PProperties p2pProperties) {
-		this(channelInitializer, p2pProperties, new NioEventLoopGroup(1), new NioEventLoopGroup());
+		this(channelInitializer, p2pProperties, new NioEventLoopGroup(1),
+				new NioEventLoopGroup(resolveWorkerThreads()));
+	}
+
+	static int resolveWorkerThreads() {
+		return Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 2));
 	}
 
 	NettyP2PServer(P2PChannelInitializer channelInitializer, P2PProperties p2pProperties,
@@ -77,8 +83,10 @@ public class NettyP2PServer {
 				.option(ChannelOption.SO_REUSEADDR, true)
 				.childOption(ChannelOption.SO_KEEPALIVE, true)
 				.childOption(ChannelOption.TCP_NODELAY, true)
-				.childOption(ChannelOption.SO_SNDBUF, 1024 * 1024)
-				.childOption(ChannelOption.SO_RCVBUF, 1024 * 1024);
+				.childOption(ChannelOption.SO_SNDBUF, 256 * 1024)
+				.childOption(ChannelOption.SO_RCVBUF, 256 * 1024)
+				.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+						new WriteBufferWaterMark(1024 * 1024, 4 * 1024 * 1024));
 
 		ChannelFuture bind = bootstrap.bind(configuredPort).awaitUninterruptibly();
 		if (!bind.isSuccess()) {

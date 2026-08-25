@@ -25,11 +25,9 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
@@ -52,7 +50,7 @@ class ExIndexerQueueServiceBackpressureTest {
 		SimpleMeterRegistry registry = new SimpleMeterRegistry();
 		ExIndexerQueueService queue = new ExIndexerQueueService(properties, readiness, registry);
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
-		assertThat(queue.pushConnectBatch(Collections.nCopies(10_000, event)))
+		assertThat(queue.pushConnectBatch(Collections.nCopies(ExIndexerQueueService.MAX_QUEUE_CAPACITY, event)))
 				.isEqualTo(ExIndexerQueueService.BatchAdmission.ENQUEUED);
 
 		long started = System.nanoTime();
@@ -62,30 +60,29 @@ class ExIndexerQueueServiceBackpressureTest {
 		assertThat(admission).isEqualTo(ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED);
 		assertThat(queue.size()).isZero();
 		assertThat(readiness.isReady()).isFalse();
-		assertThat(registry.counter("explorer.queue.overflow_to_rebuild").count()).isEqualTo(1.0);
+		assertThat(registry.find("explorer.queue.overflow_to_rebuild")
+				.tag("source", "sync batch").counter().count()).isEqualTo(1.0);
 	}
 
 	@Test
 	@Timeout(5)
-	void neverExceedsCapacityAndResumesProducerWhenConsumerMakesRoom() throws Exception {
+	void fullLiveQueueSwitchesToRebuildWithoutBlockingConsensusPublisher() {
 		GeneralProperties properties = new GeneralProperties();
 		properties.setExplorerEnable(true);
-		ExplorerRuntimeReadiness readiness = mock(ExplorerRuntimeReadiness.class);
-		when(readiness.isReady()).thenReturn(true);
+		ExplorerRuntimeReadiness readiness = new ExplorerRuntimeReadiness();
+		readiness.ready();
 		ExIndexerQueueService queue = new ExIndexerQueueService(
 				properties, readiness, new SimpleMeterRegistry());
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
-		queue.pushConnectBatch(Collections.nCopies(10_000, event));
+		queue.pushConnectBatch(Collections.nCopies(ExIndexerQueueService.MAX_QUEUE_CAPACITY, event));
 
-		CompletableFuture<Void> producer = CompletableFuture.runAsync(() -> queue.pushConnect(event));
-		Thread.sleep(50);
-		assertThat(producer.isDone()).isFalse();
-		assertThat(queue.size()).isEqualTo(10_000);
+		long started = System.nanoTime();
+		ExIndexerQueueService.BatchAdmission admission = queue.pushConnect(event);
 
-		queue.take();
-
-		producer.get(1, TimeUnit.SECONDS);
-		assertThat(queue.size()).isEqualTo(10_000);
+		assertThat(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)).isLessThan(100L);
+		assertThat(admission).isEqualTo(ExIndexerQueueService.BatchAdmission.REBUILD_REQUIRED);
+		assertThat(queue.size()).isZero();
+		assertThat(readiness.isReady()).isFalse();
 	}
 
 	@Test
