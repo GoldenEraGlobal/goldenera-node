@@ -181,12 +181,6 @@ public class ChainQuery {
      * Uses StoredBlock's transactionIndex for O(1) lookup within the block.
      */
     public Optional<Tx> getTransactionByHash(Hash txHash) {
-        // Check cache first
-        Optional<TxCacheEntry> cached = blockRepository.getCachedTxEntry(txHash);
-        if (cached.isPresent()) {
-            return Optional.of(cached.get().tx());
-        }
-
         return getTransactionEntry(txHash).map(TxCacheEntry::tx);
     }
 

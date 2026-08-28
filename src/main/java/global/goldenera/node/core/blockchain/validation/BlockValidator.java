@@ -263,6 +263,14 @@ public class BlockValidator {
 			@NonNull BlockHeader child,
 			@NonNull BlockHeader parent,
 			@NonNull WorldState worldState) {
+		validateHeaderContext(child, parent, worldState, null);
+	}
+
+	public void validateHeaderContext(
+			@NonNull BlockHeader child,
+			@NonNull BlockHeader parent,
+			@NonNull WorldState worldState,
+			BlockHeader candidateDifficultyAnchor) {
 
 		try {
 			NetworkParamsState params = worldState.getParams();
@@ -282,7 +290,9 @@ public class BlockValidator {
 			chainClock.validateBlockTimestamp(child, parent, allowedDrift);
 
 			// 5. Difficulty
-			BigInteger expectedDifficulty = difficultyService.calculateNextDifficulty(parent, params);
+			BigInteger expectedDifficulty = candidateDifficultyAnchor == null
+					? difficultyService.calculateNextDifficulty(parent, params)
+					: difficultyService.calculateNextDifficulty(parent, params, candidateDifficultyAnchor);
 			checkArgument(child.getDifficulty().equals(expectedDifficulty),
 					"Invalid Difficulty. Expected %s, got %s",
 					expectedDifficulty, child.getDifficulty());

@@ -8,7 +8,7 @@ readonly ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
 # scratchpads. The entrypoint separately budgets standard-memory rollover.
 readonly RANDOMX_DATASET_CACHE_HUGEPAGES=1168
 readonly RANDOMX_HUGEPAGE_MARGIN=64
-readonly RANDOMX_MIN_HUGEPAGES=2000
+readonly RANDOMX_MIN_HUGEPAGES=1280
 readonly RANDOMX_HUGEPAGE_GRANULARITY=16
 
 INSTALL_DIR=""
@@ -312,7 +312,7 @@ select_configuration() {
   CONFIGURE_HUGEPAGES="${GOLDENERA_CONFIGURE_HUGEPAGES:-$(existing_env_value CONFIGURE_RANDOMX_HUGEPAGES false)}"
   if is_true "$MINING_ENABLE" && [ "$(uname -s)" = Linux ]; then
     prompt_yes_no CONFIGURE_HUGEPAGES \
-      "Reserve 2000 huge pages (usually 4GB host RAM) for RandomX" "$CONFIGURE_HUGEPAGES"
+      "Reserve RandomX huge pages (at least 1280 pages, usually 2.5GB host RAM)" "$CONFIGURE_HUGEPAGES"
   else
     CONFIGURE_HUGEPAGES=false
   fi

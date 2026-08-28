@@ -45,4 +45,8 @@ public class BlockReorgs {
 	public void executeAtomicReorgSwap(ValidatedSyncBatch batch) throws Exception {
 		chainSwitchService.executeAtomicSyncSwap(batch.commonAncestor(), batch.blocks());
 	}
+
+	public void stageValidatedForkBatch(ValidatedSyncBatch batch) {
+		chainSwitchService.stageValidatedSyncBatch(batch.commonAncestor(), batch.blocks());
+	}
 }

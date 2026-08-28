@@ -77,6 +77,8 @@ public class EntityIndexRepository {
 
             if (!worldState.isMining()) {
                 // --- VALIDATION MODE (Use Diffs - Optimized) ---
+                Map<Address, StateDiff<AuthorityState>> authorityDiffs = worldState.getAuthorityDiffs();
+                Map<Address, StateDiff<ValidatorState>> validatorDiffs = worldState.getValidatorDiffs();
 
                 // 1. TOKENS
                 for (Map.Entry<Address, StateDiff<TokenState>> entry : worldState.getTokenDiffs().entrySet()) {
@@ -106,8 +108,12 @@ public class EntityIndexRepository {
                     AuthorityState newState = entry.getValue();
                     byte[] key = address.toArray();
 
-                    byte[] oldValueBytes = rocksDBRepository.get(rocksDBRepository.getColumnFamilies().authorities(),
-                            key);
+                    StateDiff<AuthorityState> diff = authorityDiffs.get(address);
+                    if (diff == null) {
+                        throw new IllegalStateException("Missing authority diff for " + address);
+                    }
+                    byte[] oldValueBytes = diff.getOldValue() != null && diff.getOldValue().exists()
+                            ? objectMapper.writeValueAsBytes(diff.getOldValue()) : null;
                     undoLog.add(new UndoAction(UndoType.AUTHORITY, address.toHexString(), oldValueBytes));
 
                     byte[] newValueBytes = objectMapper.writeValueAsBytes(newState);
@@ -133,8 +139,12 @@ public class EntityIndexRepository {
                     ValidatorState newState = entry.getValue();
                     byte[] key = address.toArray();
 
-                    byte[] oldValueBytes = rocksDBRepository.get(rocksDBRepository.getColumnFamilies().validators(),
-                            key);
+                    StateDiff<ValidatorState> diff = validatorDiffs.get(address);
+                    if (diff == null) {
+                        throw new IllegalStateException("Missing validator diff for " + address);
+                    }
+                    byte[] oldValueBytes = diff.getOldValue() != null && diff.getOldValue().exists()
+                            ? objectMapper.writeValueAsBytes(diff.getOldValue()) : null;
                     undoLog.add(new UndoAction(UndoType.VALIDATOR, address.toHexString(), oldValueBytes));
 
                     byte[] newValueBytes = objectMapper.writeValueAsBytes(newState);

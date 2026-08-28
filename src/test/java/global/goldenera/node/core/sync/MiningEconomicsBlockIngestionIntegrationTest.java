@@ -27,7 +27,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
@@ -50,6 +53,7 @@ import org.rocksdb.DBOptions;
 import org.rocksdb.RocksDB;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.mockito.ArgumentCaptor;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 
@@ -80,7 +84,9 @@ import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.merkletrie.MerkleTrie;
 import global.goldenera.node.core.blockchain.checkpoint.CheckpointRegistry;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkHasher;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkProvider;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
@@ -194,6 +200,35 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			assertThat(synced.getMiningWindow().getOrderedValidatorIdentities())
 					.containsExactly(MINER_B, MINER_A);
 			assertThat(synced.calculateRootHash()).isEqualTo(secondTracked.getHeader().getStateRootHash());
+		}
+	}
+
+	@Test
+	void syncHigherWorkForkPublishesTheSameReorgSemanticAsBroadcastIngestion() throws Exception {
+		try (Fixture fixture = new Fixture(databaseDirectory)) {
+			StoredBlock base = fixture.seedLegacyCanonicalBlock();
+			Block canonicalOne = fixture.buildValidChild(base.getBlock(), MINER_A_KEY);
+			Block canonicalTwo = fixture.buildValidChild(canonicalOne, MINER_A_KEY);
+			fixture.ingest(canonicalOne);
+			fixture.ingest(canonicalTwo);
+
+			Block forkOne = fixture.buildValidChild(base.getBlock(), MINER_B_KEY);
+			Block forkTwo = fixture.buildValidChild(forkOne, MINER_B_KEY);
+			Block forkThree = fixture.buildValidChild(forkTwo, MINER_B_KEY);
+			clearInvocations(fixture.events);
+
+			fixture.blockReorgs.executeAtomicReorgSwap(
+					fixture.asSyncBatch(base, List.of(forkOne, forkTwo, forkThree)));
+
+			ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+			verify(fixture.events, atLeastOnce()).publishEvent(published.capture());
+			List<Object> events = published.getAllValues();
+			assertThat(events).anyMatch(BlockReorgEvent.class::isInstance);
+			assertThat(events.stream()
+					.filter(BlockConnectedEvent.class::isInstance)
+					.map(BlockConnectedEvent.class::cast)
+					.map(BlockConnectedEvent::getConnectedSource))
+					.containsOnly(ConnectedSource.REORG);
 		}
 	}
 
@@ -546,6 +581,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 		private final BlockIngestionService ingestionService;
 		private final ChainSwitchService chainSwitchService;
 		private final BlockReorgs blockReorgs;
+		private final ApplicationEventPublisher events;
 
 		private Fixture(Path directory) throws Exception {
 			Files.createDirectories(directory);
@@ -612,6 +648,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			TxValidator txValidator = mock(TxValidator.class);
 			DifficultyCalculator difficulty = mock(DifficultyCalculator.class);
 			when(difficulty.calculateNextDifficulty(any(), any())).thenReturn(BigInteger.ONE);
+			when(difficulty.calculateNextDifficulty(any(), any(), any())).thenReturn(BigInteger.ONE);
 			ProofOfWorkProvider proofOfWorkProvider = mock(ProofOfWorkProvider.class);
 			when(proofOfWorkProvider.openVerificationHasher(anyLong(), any()))
 					.thenAnswer(invocation -> new ProofOfWorkHasher(input -> new byte[32], () -> { }));
@@ -623,7 +660,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					checkpointRegistry,
 					txValidator,
 					policyService);
-			ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+			events = mock(ApplicationEventPublisher.class);
 			EntityIndexRepository entityIndex = mock(EntityIndexRepository.class);
 			ReentrantLock lock = new ReentrantLock();
 			BlockEventExtractor eventExtractor = new BlockEventExtractor();

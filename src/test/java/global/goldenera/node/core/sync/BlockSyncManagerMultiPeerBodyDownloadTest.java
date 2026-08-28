@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -40,6 +41,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -47,6 +49,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
@@ -238,6 +241,48 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 				.isEqualTo(fixture.persistedBatchSizes.size());
 	}
 
+	@Test
+	void deepWinningForkStagesBoundedPrefixThenActivatesTheCompleteCandidate() throws Exception {
+		Fixture fixture = fixtureForHeaderCount(301, 1);
+		StoredBlock competingHead = mock(StoredBlock.class);
+		Hash competingHash = hash(99_999);
+		when(competingHead.getHash()).thenReturn(competingHash);
+		when(competingHead.getHeight()).thenReturn(250L);
+		when(competingHead.getCumulativeDifficulty()).thenReturn(BigInteger.valueOf(350));
+		when(fixture.chainQuery.getLatestStoredBlockOrThrow()).thenReturn(competingHead);
+
+		Map<Hash, StoredBlock> stagedBlocks = new HashMap<>();
+		stagedBlocks.put(fixture.ancestor.getHash(), fixture.ancestor);
+		when(fixture.chainQuery.getCanonicalStoredBlockHeaderByHash(any())).thenAnswer(invocation -> {
+			Hash hash = invocation.getArgument(0);
+			return hash.equals(fixture.ancestor.getHash()) || hash.equals(competingHash)
+					? Optional.of(hash.equals(competingHash) ? competingHead : fixture.ancestor)
+					: Optional.empty();
+		});
+		when(fixture.chainQuery.getStoredBlockByHash(any())).thenAnswer(invocation ->
+				Optional.ofNullable(stagedBlocks.get(invocation.getArgument(0))));
+		doAnswer(invocation -> {
+			ValidatedSyncBatch staged = invocation.getArgument(0);
+			staged.blocks().forEach(block -> stagedBlocks.put(block.getHash(), block));
+			return null;
+		}).when(fixture.blockReorgs).stageValidatedForkBatch(any(ValidatedSyncBatch.class));
+		fixture.respondSuccessfully(fixture.firstPeer);
+		fixture.respondSuccessfully(fixture.secondPeer);
+
+		fixture.service.downloadAndPersistBodiesInBatches(
+				fixture.firstPeer, fixture.headers, fixture.validatedHeaders);
+
+		ArgumentCaptor<ValidatedSyncBatch> staged = ArgumentCaptor.forClass(ValidatedSyncBatch.class);
+		ArgumentCaptor<ValidatedSyncBatch> activated = ArgumentCaptor.forClass(ValidatedSyncBatch.class);
+		verify(fixture.blockReorgs).stageValidatedForkBatch(staged.capture());
+		verify(fixture.blockReorgs).executeAtomicReorgSwap(activated.capture());
+		assertThat(staged.getValue().blocks()).hasSize(250);
+		assertThat(activated.getValue().commonAncestor().getHash()).isEqualTo(fixture.ancestor.getHash());
+		assertThat(activated.getValue().blocks()).hasSize(301);
+		assertThat(activated.getValue().blocks().getLast().getHash())
+				.isEqualTo(fixture.headers.getLast().getHash());
+	}
+
 	private Fixture fixture(int rangeCount) throws Exception {
 		return fixture(rangeCount, 1);
 	}
@@ -271,8 +316,11 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 		Hash parentHash = hash(90_000);
 		StoredBlock ancestor = mock(StoredBlock.class);
 		when(ancestor.getHash()).thenReturn(parentHash);
+		when(ancestor.getHeight()).thenReturn(0L);
 		when(ancestor.getCumulativeDifficulty()).thenReturn(BigInteger.valueOf(100));
 		when(chainQuery.getStoredBlockByHashOrThrow(parentHash)).thenReturn(ancestor);
+		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(ancestor);
+		when(chainQuery.getCanonicalStoredBlockHeaderByHash(any())).thenReturn(Optional.of(ancestor));
 
 		List<BlockHeader> headers = new ArrayList<>();
 		Map<Hash, StatelessValidatedHeader> proofs = new java.util.LinkedHashMap<>();
@@ -308,6 +356,13 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 			when(validated.matches(immutableValidatedBlock)).thenReturn(true);
 			return validated;
 		}).when(validator).validateBlockBody(any(Block.class), any(StatelessValidatedHeader.class));
+		doAnswer(invocation -> {
+			Block block = invocation.getArgument(0);
+			StatelessValidatedBlock validated = mock(StatelessValidatedBlock.class);
+			when(validated.block()).thenReturn(block);
+			when(validated.matches(block)).thenReturn(true);
+			return validated;
+		}).when(validator).validateFullBlock(any(Block.class), anyMap());
 
 		List<Hash> persistedHashes = new ArrayList<>();
 		List<Integer> persistedBatchSizes = new ArrayList<>();
@@ -320,7 +375,8 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 			return null;
 		}).when(blockReorgs).executeAtomicReorgSwap(any(ValidatedSyncBatch.class));
 
-		return new Fixture(service, registry, peers, reputation, firstPeer, secondPeer,
+		return new Fixture(service, registry, peers, reputation, validator, chainQuery, blockReorgs, ancestor,
+				firstPeer, secondPeer,
 				firstIdentity, secondIdentity, headers, Map.copyOf(proofs),
 				rangeSize, new ArrayList<>(), persistedHashes, persistedBatchSizes, persistedBatchBytes);
 	}
@@ -362,6 +418,10 @@ class BlockSyncManagerMultiPeerBodyDownloadTest {
 			SimpleMeterRegistry registry,
 			PeerRegistry peers,
 			PeerReputationService reputation,
+			BlockValidator validator,
+			ChainQuery chainQuery,
+			BlockReorgs blockReorgs,
+			StoredBlock ancestor,
 			RemotePeer firstPeer,
 			RemotePeer secondPeer,
 			Address firstIdentity,

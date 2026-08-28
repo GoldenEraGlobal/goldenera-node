@@ -684,6 +684,14 @@ public class WorldState {
 		return computeDiff(dirtyTokens, initialTokens, TokenStateImpl.ZERO);
 	}
 
+	public Map<Address, StateDiff<AuthorityState>> getAuthorityDiffs() {
+		return computeDiff(dirtyAuthorities, initialAuthorities, AuthorityStateImpl.ZERO);
+	}
+
+	public Map<Address, StateDiff<ValidatorState>> getValidatorDiffs() {
+		return computeDiff(dirtyValidators, initialValidators, ValidatorStateImpl.ZERO);
+	}
+
 	public Map<Hash, StateDiff<BipState>> getBipDiffs() {
 		return computeDiff(dirtyBipStates, initialBipStates, BipStateImpl.ZERO);
 	}

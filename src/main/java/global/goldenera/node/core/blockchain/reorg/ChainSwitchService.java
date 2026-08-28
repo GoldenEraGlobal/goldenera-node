@@ -29,15 +29,19 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.units.ethereum.Wei;
+import org.rocksdb.WriteBatch;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
@@ -67,15 +71,6 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ChainSwitchService {
-
-    /**
-     * Distinguishes between sync (catching up to chain tip) and reorg (switching to
-     * a better fork).
-     */
-    public enum SwitchType {
-        SYNC, // Catching up to the chain tip, no blocks being disconnected
-        REORG // Switching to a different fork, blocks being disconnected
-    }
 
     ChainQuery chainQueryService;
     BlockRepository blockRepository;
@@ -114,18 +109,37 @@ public class ChainSwitchService {
     void executeAtomicSyncSwap(
             @NonNull StoredBlock commonAncestor,
             @NonNull List<StoredBlock> newChainHeaders) throws Exception {
-        executeAtomicReorgSwap(commonAncestor, newChainHeaders, false, SwitchType.SYNC);
+        executeAtomicReorgSwap(commonAncestor, newChainHeaders, false);
+    }
+
+    void stageValidatedSyncBatch(
+            @NonNull StoredBlock branchParent,
+            @NonNull List<StoredBlock> blocks) {
+        masterChainLock.lock();
+        try {
+            StoredBlock storedParent = chainQueryService.getStoredBlockByHash(branchParent.getHash())
+                    .orElseThrow(() -> new GEFailedException(
+                            "Sync staging parent is not stored: " + branchParent.getHash()));
+            validateCandidateMetadata(storedParent, blocks);
+            blockRepository.executeAtomicBatch(batch -> stageCandidateBlocks(batch, storedParent, blocks));
+        } catch (RuntimeException e) {
+            if (e.getCause() instanceof GEFailedException failure) {
+                throw failure;
+            }
+            throw new GEFailedException("SYNC fork staging failed: " + e.getMessage(), e);
+        } finally {
+            masterChainLock.unlock();
+        }
     }
 
     public void executeAtomicReorgSwap(@NonNull ValidatedReorgPlan plan) throws Exception {
-        executeAtomicReorgSwap(plan.commonAncestor(), plan.blocks(), true, SwitchType.REORG);
+        executeAtomicReorgSwap(plan.commonAncestor(), plan.blocks(), true);
     }
 
     private void executeAtomicReorgSwap(
             @NonNull StoredBlock commonAncestor,
             @NonNull List<StoredBlock> newChainHeaders,
-            boolean saveTipData,
-            @NonNull SwitchType switchType) throws Exception {
+            boolean saveTipData) throws Exception {
 
         List<Object> eventsToPublish = new ArrayList<>();
         masterChainLock.lock();
@@ -143,8 +157,8 @@ public class ChainSwitchService {
             List<BlockDisconnectedEvent> blockDisconnectedEvents = new ArrayList<>();
             List<BlockConnectedEvent> blockConnectedEvents = new ArrayList<>();
 
-            String opName = switchType == SwitchType.REORG ? "REORG" : "SYNC";
-            boolean isReorg = switchType == SwitchType.REORG;
+            boolean isReorg = !oldChainStored.isEmpty();
+            String opName = isReorg ? "REORG" : "SYNC";
 
             if (isReorg || oldChainStored.size() > 0) {
                 log.info("{} STARTING: disconnecting {} blocks, connecting {} blocks (common ancestor at height {})",
@@ -174,6 +188,8 @@ public class ChainSwitchService {
 
                     WorldState worldState = worldStateFactory
                             .createForValidation(previousBlock.getHeader().getStateRootHash());
+                    Map<Long, BlockHeader> branchHeaders = new HashMap<>();
+                    branchHeaders.put(canonicalAncestor.getHeight(), previousBlock.getHeader());
 
                     long batchStart = System.currentTimeMillis();
                     int progressInterval = Math.max(50, newChainHeaders.size() / 10); // Log every 10% or 50 blocks
@@ -182,10 +198,12 @@ public class ChainSwitchService {
                         StoredBlock storedBlockToConnect = newChainHeaders.get(i);
                         Block blockToConnect = storedBlockToConnect.getBlock();
                         NetworkParamsState params = worldState.getParams();
+                        BlockHeader difficultyAnchor = resolveDifficultyAnchor(
+                                params.getAsertAnchorHeight(), canonicalAncestor, branchHeaders);
 
                         try {
                             blockValidationService.validateHeaderContext(
-                                    blockToConnect.getHeader(), previousBlock.getHeader(), worldState);
+                                    blockToConnect.getHeader(), previousBlock.getHeader(), worldState, difficultyAnchor);
                         } catch (Exception e) {
                             throw new GEFailedException(
                                     "Reorg failed: Block " + blockToConnect.getHeight() + " invalid: " + e.getMessage(),
@@ -273,6 +291,7 @@ public class ChainSwitchService {
                         blockConnectedEvents.add(event);
                         worldState.prepareForNextBlock();
                         previousBlock = blockToConnect;
+                        branchHeaders.put(blockToConnect.getHeight(), blockToConnect.getHeader());
 
                         // Progress logging (only for large batches)
                         if (newChainHeaders.size() >= 50
@@ -303,7 +322,7 @@ public class ChainSwitchService {
                 log.info("{} COMPLETE: {} blocks ({} txs) connected, new tip at height {} ({})",
                         opName, newChainHeaders.size(), totalTxCount,
                         newTip.getBlock().getHeight(),
-                        newTip.getBlock().getHash().toShortLogString());
+                        newTip.getHash().toShortLogString());
             }
 
             eventsToPublish.addAll(blockDisconnectedEvents);
@@ -330,6 +349,89 @@ public class ChainSwitchService {
         eventsToPublish.forEach(applicationEventPublisher::publishEvent);
     }
 
+    private void stageCandidateBlocks(
+            WriteBatch batch,
+            StoredBlock branchParent,
+            List<StoredBlock> blocks) throws Exception {
+        Block previousBlock = branchParent.getBlock();
+        WorldState worldState = worldStateFactory
+                .createForValidation(previousBlock.getHeader().getStateRootHash());
+        Map<Long, BlockHeader> branchHeaders = new HashMap<>();
+        branchHeaders.put(branchParent.getHeight(), previousBlock.getHeader());
+
+        for (StoredBlock candidate : blocks) {
+            Block block = candidate.getBlock();
+            NetworkParamsState params = worldState.getParams();
+            BlockHeader difficultyAnchor = resolveDifficultyAnchor(
+                    params.getAsertAnchorHeight(), branchParent, branchHeaders);
+            blockValidationService.validateHeaderContext(
+                    block.getHeader(), previousBlock.getHeader(), worldState, difficultyAnchor);
+
+            ExecutionResult result = stateProcessor.executeTransactions(
+                    worldState, new SimpleBlock(block), block.getTxs(), params);
+            if (!worldState.calculateRootHash().equals(block.getHeader().getStateRootHash())) {
+                throw new GEFailedException("SYNC staging failed: Invalid StateRoot for " + block.getHash());
+            }
+
+            Wei totalFees = result.getTotalFeesCollected();
+            Wei actualRewardPaid = result.getMinerActualRewardPaid();
+            List<BlockEvent> blockEvents = blockEventExtractor.extractEvents(
+                    actualRewardPaid.subtract(totalFees),
+                    totalFees,
+                    block.getHeader().getCoinbase(),
+                    result.getMinerRewardPoolAddress(),
+                    result.getMinerRewardUnlockBlockHeight(),
+                    worldState.getBipDiffs(),
+                    worldState.getTokenDiffs(),
+                    result.getActualBurnAmounts(),
+                    worldState.getParamsDiff());
+
+            StoredBlock staged = candidate.toBuilder().events(blockEvents).build();
+            worldState.persistToBatch(batch);
+            blockRepository.saveForkBlockDataToBatch(batch, staged);
+            worldState.prepareForNextBlock();
+            previousBlock = block;
+            branchHeaders.put(block.getHeight(), block.getHeader());
+        }
+    }
+
+    private BlockHeader resolveDifficultyAnchor(
+            long anchorHeight,
+            StoredBlock branchParent,
+            Map<Long, BlockHeader> branchHeaders) {
+        BlockHeader candidateAnchor = branchHeaders.get(anchorHeight);
+        if (candidateAnchor != null) {
+            return candidateAnchor;
+        }
+        if (anchorHeight < 0 || anchorHeight > branchParent.getHeight()) {
+            throw new GEFailedException("Candidate branch is missing ASERT anchor at height " + anchorHeight);
+        }
+
+        if (chainQueryService.getCanonicalStoredBlockHeaderByHash(branchParent.getHash()).isPresent()) {
+            BlockHeader canonicalAnchor = chainQueryService.getStoredBlockHeaderByHeight(anchorHeight)
+                    .map(storedBlock -> storedBlock.getBlock().getHeader())
+                    .orElse(null);
+            if (canonicalAnchor == null) {
+                // Let the validator's canonical resolver fail closed in production. Some
+                // isolated consensus fixtures deliberately omit pre-ancestor history.
+                return null;
+            }
+            branchHeaders.put(anchorHeight, canonicalAnchor);
+            return canonicalAnchor;
+        }
+
+        BlockHeader cursor = branchParent.getBlock().getHeader();
+        while (cursor.getHeight() > anchorHeight) {
+            long missingHeight = cursor.getHeight() - 1;
+            cursor = chainQueryService.getStoredBlockHeaderByHash(cursor.getPreviousHash())
+                    .map(storedBlock -> storedBlock.getBlock().getHeader())
+                    .orElseThrow(() -> new GEFailedException(
+                            "Staged candidate branch is missing block " + missingHeight));
+        }
+        branchHeaders.put(anchorHeight, cursor);
+        return cursor;
+    }
+
     /**
      * Recomputes the candidate's cumulative work from canonical data while the
      * master-chain lock is held. Advertised peer difficulty and caller-provided
@@ -349,8 +451,22 @@ public class ChainSwitchService {
                         "Chain switch ancestor is no longer canonical: " + requestedAncestor.getHash()));
 
         BigInteger currentWork = requireCumulativeDifficulty(currentBestBlock, "current head");
-        BigInteger candidateWork = requireCumulativeDifficulty(canonicalAncestor, "common ancestor");
-        StoredBlock previous = canonicalAncestor;
+        BigInteger candidateWork = validateCandidateMetadata(canonicalAncestor, candidateBlocks);
+
+        if (candidateWork.compareTo(currentWork) <= 0) {
+            throw new GEFailedException(
+                    "Chain switch candidate does not have more cumulative difficulty than current head"
+                            + " (candidate: " + candidateWork + ", current: " + currentWork + ")");
+        }
+        return canonicalAncestor;
+    }
+
+    private BigInteger validateCandidateMetadata(StoredBlock branchParent, List<StoredBlock> candidateBlocks) {
+        if (candidateBlocks.isEmpty()) {
+            throw new GEFailedException("Chain switch candidate must contain at least one block");
+        }
+        BigInteger candidateWork = requireCumulativeDifficulty(branchParent, "candidate branch parent");
+        StoredBlock previous = branchParent;
 
         for (StoredBlock candidate : candidateBlocks) {
             Block block = candidate.getBlock();
@@ -372,13 +488,7 @@ public class ChainSwitchService {
             }
             previous = candidate;
         }
-
-        if (candidateWork.compareTo(currentWork) <= 0) {
-            throw new GEFailedException(
-                    "Chain switch candidate does not have more cumulative difficulty than current head"
-                            + " (candidate: " + candidateWork + ", current: " + currentWork + ")");
-        }
-        return canonicalAncestor;
+        return candidateWork;
     }
 
     private BigInteger requireCumulativeDifficulty(StoredBlock block, String description) {

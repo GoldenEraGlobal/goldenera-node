@@ -243,7 +243,7 @@ public class BlockStateTransitions {
 						blockRepository.addBlockToBatch(batch, storedBlockToSave);
 					} else {
 						try {
-							blockRepository.saveBlockDataToBatch(batch, storedBlockToSave);
+							blockRepository.saveForkBlockDataToBatch(batch, storedBlockToSave);
 						} catch (Exception e) {
 							throw new RuntimeException(e);
 						}

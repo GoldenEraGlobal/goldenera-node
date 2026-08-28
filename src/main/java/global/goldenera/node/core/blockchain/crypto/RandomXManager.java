@@ -79,6 +79,7 @@ public class RandomXManager {
 
 	private static final int MAX_CACHED_EPOCHS = 3;
 	private static final int MAX_CIRCUIT_BROKEN_SEEDS = 32;
+	private static final long CURRENT_RESOURCE_RETIRE_TIMEOUT_SECONDS = 60;
 	private static final Bytes SYNC_PARITY_DOMAIN = Bytes.wrap(
 			"goldenera-sync-randomx-parity-v1".getBytes(StandardCharsets.US_ASCII));
 
@@ -289,7 +290,7 @@ public class RandomXManager {
 				"reason", reason).increment();
 	}
 
-	private long saturatingAdd(long value, long increment) {
+	private static long saturatingAdd(long value, long increment) {
 		return increment > 0 && value > Long.MAX_VALUE - increment ? Long.MAX_VALUE : value + increment;
 	}
 
@@ -337,7 +338,7 @@ public class RandomXManager {
 				return;
 			}
 			log.info("RandomX epoch switch detected at height {}. Initializing replacement resources...", height);
-			replaceCurrentResources(requiredSeed, miningRequested);
+			replaceCurrentResources(height, requiredSeed, miningRequested);
 		} finally {
 			lifecycleLock.writeLock().unlock();
 		}
@@ -692,12 +693,19 @@ public class RandomXManager {
 		}
 	}
 
-	private void replaceCurrentResources(byte[] requiredSeed, boolean miningRequested) {
+	private void replaceCurrentResources(long height, byte[] requiredSeed, boolean miningRequested) {
 		initializationInProgress.set(true);
 		try {
 			long startedAt = System.currentTimeMillis();
-			EpochResources replacement = allocateCurrent(requiredSeed, miningRequested);
 			EpochResources previous = currentResources;
+			if (previous != null && previous.dataset() != null && fullMiningRequested(miningRequested)) {
+				currentResources = null;
+				currentSeed = null;
+				retireCurrentDatasetBeforeReplacement(previous);
+			}
+			EpochResources replacement = allocateCanonicalReplacement(height, requiredSeed, miningRequested);
+			requiredSeed = replacement.seed();
+			previous = currentResources;
 			currentResources = replacement;
 			currentSeed = requiredSeed.clone();
 			if (previous != null) {
@@ -710,11 +718,48 @@ public class RandomXManager {
 		}
 	}
 
-	private EpochResources allocateCurrent(byte[] seed, boolean miningRequested) {
-		boolean miningEnabled = Boolean.TRUE.equals(miningProperties.getEnable());
-		boolean fullMining = (miningEnabled || miningRequested)
+	private EpochResources allocateCanonicalReplacement(long height, byte[] requestedSeed, boolean miningRequested) {
+		byte[] candidateSeed = requestedSeed.clone();
+		while (true) {
+			assertRunning();
+			EpochResources candidate = allocateCurrent(candidateSeed, miningRequested);
+			byte[] canonicalSeed;
+			try {
+				canonicalSeed = calculateSeedForHeight(height);
+			} catch (RuntimeException | LinkageError failure) {
+				candidate.retire();
+				throw failure;
+			}
+			if (Arrays.equals(candidateSeed, canonicalSeed)) {
+				return candidate;
+			}
+			candidate.retire();
+			log.info("Canonical RandomX seed changed while building resources for height {}; rebuilding", height);
+			candidateSeed = canonicalSeed;
+		}
+	}
+
+	private void retireCurrentDatasetBeforeReplacement(EpochResources previous) {
+		log.info("Retiring current FULL RandomX resources before allocating the replacement dataset");
+		try {
+			if (!previous.retireAndAwaitClose(CURRENT_RESOURCE_RETIRE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+				throw new RandomXInitializationException(
+						"Timed out waiting for active RandomX VM leases before replacing the mining dataset", null);
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new RandomXInitializationException(
+					"Interrupted while waiting for active RandomX VM leases before replacing the mining dataset", e);
+		}
+	}
+
+	private boolean fullMiningRequested(boolean miningRequested) {
+		return (Boolean.TRUE.equals(miningProperties.getEnable()) || miningRequested)
 				&& miningProperties.getMemoryMode() == RandomXMiningMemoryMode.FULL;
-		if (!fullMining) {
+	}
+
+	private EpochResources allocateCurrent(byte[] seed, boolean miningRequested) {
+		if (!fullMiningRequested(miningRequested)) {
 			return allocateCacheOnly(seed);
 		}
 
@@ -937,6 +982,10 @@ public class RandomXManager {
 			return dataset;
 		}
 
+		private byte[] seed() {
+			return seed.clone();
+		}
+
 		private synchronized RandomXVmLease acquire(RandomXResourceFactory factory,
 				AtomicInteger totalLeases) {
 			return acquire(factory, totalLeases, flags, dataset);
@@ -992,6 +1041,18 @@ public class RandomXManager {
 			closeIfRetiredAndUnused();
 		}
 
+		private synchronized boolean retireAndAwaitClose(long timeout, TimeUnit unit) throws InterruptedException {
+			retired = true;
+			closeIfRetiredAndUnused();
+			long remainingNanos = unit.toNanos(timeout);
+			long deadline = saturatingAdd(System.nanoTime(), remainingNanos);
+			while (!closed && remainingNanos > 0) {
+				TimeUnit.NANOSECONDS.timedWait(this, remainingNanos);
+				remainingNanos = deadline - System.nanoTime();
+			}
+			return closed;
+		}
+
 		private synchronized boolean isRetired() {
 			return retired;
 		}
@@ -1017,6 +1078,7 @@ public class RandomXManager {
 			} catch (RuntimeException | LinkageError e) {
 				log.warn("Failed to release retired RandomX cache", e);
 			}
+			notifyAll();
 		}
 	}
 }

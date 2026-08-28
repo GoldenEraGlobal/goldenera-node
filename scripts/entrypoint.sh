@@ -166,7 +166,7 @@ else
         exit 1
     fi
 
-    echo ">>> [INFO] Reserve: RandomX rollover peak=${GE_RANDOMX_PEAK_RESERVE_MB} MB, huge-page coverage=${GE_RANDOMX_HUGEPAGE_COVERAGE_MB} MB, memory-budget RandomX=${GE_RANDOMX_HUGEPAGE_RESERVE_MB} MB, host huge-pages=${GE_HUGEPAGE_HOST_RESERVE_MB} MB"
+    echo ">>> [INFO] Reserve: RandomX FULL peak=${GE_RANDOMX_PEAK_RESERVE_MB} MB, huge-page coverage=${GE_RANDOMX_HUGEPAGE_COVERAGE_MB} MB, memory-budget RandomX=${GE_RANDOMX_HUGEPAGE_RESERVE_MB} MB, host huge-pages=${GE_HUGEPAGE_HOST_RESERVE_MB} MB"
     echo ">>> [INFO] Reserve: RocksDB cache=${GE_ROCKSDB_CACHE_RESERVE_MB} MB, RocksDB writes=${GE_ROCKSDB_WRITE_RESERVE_MB} MB"
     echo ">>> [INFO] Reserve: direct=${GE_DIRECT_MEMORY_RESERVE_MB} MB, PostgreSQL=${GE_POSTGRESQL_RESERVE_MB} MB, OS+JVM=${GE_SYSTEM_JVM_RESERVE_MB} MB"
     echo ">>> [INFO] Heap limits: total-budget=${GE_HEAP_FROM_TOTAL_MB} MB, available-budget=${GE_HEAP_FROM_AVAILABLE_MB} MB, ${GE_HEAP_PERCENT_CAP}% cap=${GE_HEAP_PERCENT_CAP_MB} MB"

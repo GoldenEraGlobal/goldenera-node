@@ -14,7 +14,7 @@ To run a node successfully, your system **must** meet the following minimum requ
 
 > **Note on Memory:** The node uses multiple memory pools:
 > - **RandomX steady state:** ~2.5 GB (required for `FULL` mining)
-> - **RandomX epoch rollover peak:** ~6 GB while old/new resources overlap
+> - **RandomX FULL peak reserve:** ~6 GB including optional sync acceleration and verification caches
 > - **Java Heap:** Configurable via `JAVA_HEAP_MB`
 > - **RocksDB Cache:** Configurable via `ROCKSDB_BLOCK_CACHE_MB` (off-heap)
 > - **RocksDB writes, direct buffers, PostgreSQL, JVM native memory, and OS:** additional native memory
@@ -133,11 +133,11 @@ memory for RandomX's fallback instead.
     ```
 2.  Add the following line to the end of the file:
     ```properties
-    vm.nr_hugepages=2000
+    vm.nr_hugepages=1280
     ```
 3.  Apply the changes immediately:
     ```bash
-    sudo sysctl -w vm.nr_hugepages=2000
+    sudo sysctl -w vm.nr_hugepages=1280
     ```
 
 ### 2. Project Setup
@@ -245,7 +245,7 @@ PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
 #   - Java Heap (JAVA_HEAP_MB):     JVM memory for application (configurable)
 #   - RocksDB Block Cache:          Native memory for disk cache (configurable)
 #   - RandomX steady state:         ~2.5 GB (required for FULL mining)
-#   - RandomX epoch rollover peak:  ~6 GB (auto-sizing accounts for overlap)
+#   - RandomX FULL peak:            ~6 GB including optional sync acceleration
 #   - RocksDB writes, direct buffers, PostgreSQL, JVM native memory, and OS
 #
 # Conservative container profiles:
@@ -417,7 +417,7 @@ Before running the node, you must adjust specific `.env` variables to match your
 | **`JAVA_HEAP_MB`** | Java heap size in MB. Leave empty for cgroup-, huge-page-, and service-aware auto-calculation. |
 | **`NODE_MEMORY_LIMIT_MB`** | Hard node-container budget. Default `8192`; use at least `12288` for FULL mining without huge pages. |
 | **`POSTGRESQL_MEMORY_LIMIT_MB`** | Hard PostgreSQL-container budget. Default `1024`. |
-| **`CONFIGURE_RANDOMX_HUGEPAGES`** | Linux installer opt-in for `vm.nr_hugepages=2000`; this globally reserves about 4GB host RAM. |
+| **`CONFIGURE_RANDOMX_HUGEPAGES`** | Linux installer opt-in for a worker-aware pool of at least 1280 huge pages; this globally reserves about 2.5GB host RAM. |
 | **`ROCKSDB_BLOCK_CACHE_MB`** | RocksDB read cache (off-heap). Default `512`. See memory examples above. |
 | **`LISTEN_PORT`** | The port for the Explorer/Admin API (exposed via Docker). Default is `8080`. |
 | **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |

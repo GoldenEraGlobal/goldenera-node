@@ -32,6 +32,7 @@ import static lombok.AccessLevel.PRIVATE;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -648,6 +649,12 @@ public class BlockSyncManagerService {
 				cancelAndDrainSpeculativeValidation(speculativeValidation);
 				validatedAheadHeaders = 0;
 			}
+			StoredBlock verifiedHead = chainQueryService.getLatestStoredBlockOrThrow();
+			if (verifiedHead.getCumulativeDifficulty()
+					.compareTo(localBestStored.getCumulativeDifficulty()) <= 0) {
+				throw new GEValidationException(
+						"Downloaded chain did not exceed the local canonical cumulative difficulty");
+			}
 			long totalNanos = elapsedNanos(cycleStart);
 			long committedHeight = chainQueryService.getLatestBlockHeight().orElse(-1L);
 			long blocksAdvanced = forwardProgress(localBestStored.getHeight(), committedHeight);
@@ -1145,7 +1152,17 @@ public class BlockSyncManagerService {
 		long stageStart = nanoTime();
 		try {
 			long start = nanoTime();
-			blockReorgService.executeAtomicReorgSwap(new ValidatedSyncBatch(commonAncestor, blocks));
+			StoredBlock currentHead = chainQueryService.getLatestStoredBlockOrThrow();
+			StoredBlock candidateTip = blocks.getLast().storedBlock();
+			if (candidateTip.getCumulativeDifficulty().compareTo(currentHead.getCumulativeDifficulty()) <= 0) {
+				blockReorgService.stageValidatedForkBatch(new ValidatedSyncBatch(commonAncestor, blocks));
+				log.info("Staged validated fork batch of {} blocks through height {} (TD {} <= canonical TD {})",
+						blocks.size(), candidateTip.getHeight(), candidateTip.getCumulativeDifficulty(),
+						currentHead.getCumulativeDifficulty());
+			} else {
+				ValidatedSyncBatch winningCandidate = reconstructWinningCandidate(commonAncestor, blocks);
+				blockReorgService.executeAtomicReorgSwap(winningCandidate);
+			}
 			long elapsed = nanosToMillis(elapsedNanos(start));
 			log.info("Persisted batch of {} blocks (heights {}-{}) in {}ms",
 					blocks.size(),
@@ -1159,6 +1176,41 @@ public class BlockSyncManagerService {
 			recordStageDuration("state_execution_db_commit", stageStart);
 			masterChainLock.unlock();
 		}
+	}
+
+	private ValidatedSyncBatch reconstructWinningCandidate(
+			StoredBlock branchParent,
+			List<ValidatedSyncBlock> currentBlocks) {
+		List<StoredBlock> stagedPrefixReversed = new ArrayList<>();
+		StoredBlock cursor = branchParent;
+		while (chainQueryService.getCanonicalStoredBlockHeaderByHash(cursor.getHash()).isEmpty()) {
+			stagedPrefixReversed.add(cursor);
+			Hash parentHash = cursor.getBlock().getHeader().getPreviousHash();
+			cursor = chainQueryService.getStoredBlockByHash(parentHash)
+					.orElseThrow(() -> new GEFailedException(
+							"Staged sync branch is missing parent " + parentHash));
+		}
+		Collections.reverse(stagedPrefixReversed);
+
+		Map<Long, Hash> branchHashes = new HashMap<>();
+		branchHashes.put(cursor.getHeight(), cursor.getHash());
+		stagedPrefixReversed.forEach(block -> branchHashes.put(block.getHeight(), block.getHash()));
+		currentBlocks.forEach(block -> branchHashes.put(
+				block.storedBlock().getHeight(), block.storedBlock().getHash()));
+
+		List<ValidatedSyncBlock> revalidated = new ArrayList<>(
+				stagedPrefixReversed.size() + currentBlocks.size());
+		for (StoredBlock staged : stagedPrefixReversed) {
+			StatelessValidatedBlock validation = blockValidationService.validateFullBlock(
+					staged.getBlock(), branchHashes);
+			StoredBlock normalized = staged.toBuilder()
+					.block(validation.block())
+					.computeIndexes()
+					.build();
+			revalidated.add(new ValidatedSyncBlock(normalized, validation));
+		}
+		revalidated.addAll(currentBlocks);
+		return new ValidatedSyncBatch(cursor, revalidated);
 	}
 
 	static int calculateHeaderPrefetchDepth(
@@ -1413,7 +1465,10 @@ public class BlockSyncManagerService {
 	void assertCommittedWindow(HeaderWindow window) {
 		BlockHeader expected = window.headers().getLast();
 		StoredBlock committed = chainQueryService.getLatestStoredBlockOrThrow();
-		if (!matchesCommittedWindow(expected.getHeight(), expected.getHash(), committed)) {
+		boolean staged = chainQueryService.getStoredBlockHeaderByHash(expected.getHash())
+				.filter(block -> block.getHeight() == expected.getHeight())
+				.isPresent();
+		if (!matchesCommittedWindow(expected.getHeight(), expected.getHash(), committed) && !staged) {
 			recordDiscardedPrefetch("reorg", window.headers().size());
 			throw new StaleHeaderPrefetchException("Canonical head changed while a header suffix was prefetched");
 		}

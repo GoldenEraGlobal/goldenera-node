@@ -161,9 +161,10 @@ ge_calculate_auto_heap_mb() {
   fi
 
   if "$GE_FULL_MEMORY_MINING"; then
-    # RandomX builds replacement epoch resources before retiring the previous
-    # dataset and can retain four cache-only epochs during eviction. Budget the
-    # rollover peak; the persistent huge-page pool covers one FULL working set.
+    # Mining epoch switches retire the current dataset before allocating its
+    # replacement, so they do not overlap two mining datasets. Keep the broader
+    # peak reserve for one huge-page-backed mining working set plus a temporary
+    # sync-owned FULL dataset and retained cache-only verification epochs.
     randomx_expected_mb=6144
     hugepage_coverage_cap_mb=2560
     GE_HEAP_PERCENT_CAP=50

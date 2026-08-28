@@ -15,11 +15,11 @@ assert_eq "$GE_AUTO_HEAP_MB" 3072 "16GB VM with an oversized legacy huge-page po
 
 ge_calculate_auto_heap_mb 15990 12500 2560 2560 true FULL 512 32 2 true 512 true
 assert_eq "$GE_AUTO_HEAP_MB" 4608 "16GB VM with right-sized huge pages"
-assert_eq "$GE_RANDOMX_PEAK_RESERVE_MB" 6144 "FULL RandomX epoch-rollover reserve"
+assert_eq "$GE_RANDOMX_PEAK_RESERVE_MB" 6144 "FULL RandomX mining/sync peak reserve"
 
-ge_calculate_auto_heap_mb 9216 9216 4000 4000 true FULL 512 32 2 true 512 true true
-assert_eq "$GE_AUTO_HEAP_MB" 1280 "9GB mining cgroup with 2000 host huge pages and Explorer"
-assert_eq "$GE_HUGEPAGE_HOST_RESERVE_MB" 4000 "host huge-page reservation remains visible"
+ge_calculate_auto_heap_mb 9216 9216 2560 2560 true FULL 512 32 2 true 512 true true
+assert_eq "$GE_AUTO_HEAP_MB" 1280 "9GB mining cgroup with one host huge-page working set and Explorer"
+assert_eq "$GE_HUGEPAGE_HOST_RESERVE_MB" 2560 "host huge-page reservation remains visible"
 assert_eq "$GE_RANDOMX_HUGEPAGE_RESERVE_MB" 3584 "cgroup budget excludes separately accounted huge pages"
 
 if ge_calculate_auto_heap_mb 8192 5000 2560 2560 true FULL 512 32 2 true 512 true; then
@@ -91,8 +91,8 @@ assert_eq "$GE_EFFECTIVE_MEMORY_MB" 4096 "effective cgroup v1 memory limit"
   . "$ROOT_DIR/scripts/install.sh"
   assert_eq "$(resolve_mining_workers -1 16)" 14 "automatic mining worker count"
   assert_eq "$(resolve_mining_workers 8 16)" 8 "explicit mining worker count"
-  assert_eq "$(calculate_randomx_hugepages 14)" 2000 "typical RandomX huge-page target"
-  assert_eq "$(calculate_randomx_hugepages 64)" 2000 "large-worker RandomX huge-page target"
+	assert_eq "$(calculate_randomx_hugepages 14)" 1280 "typical RandomX huge-page target"
+	assert_eq "$(calculate_randomx_hugepages 64)" 1296 "large-worker RandomX huge-page target"
   assert_eq "$(read_linux_hugepage_count HugePages_Total "$fixture_dir/meminfo")" 1280 \
     "installer huge-page total verification"
   assert_eq "$(read_linux_hugepage_count HugePages_Free "$fixture_dir/meminfo")" 1200 \

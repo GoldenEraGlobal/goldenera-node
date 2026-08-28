@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -47,9 +48,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.Network;
@@ -134,6 +138,142 @@ class RandomXManagerTest {
 
 		manager.close();
 		verify(factory.caches.get(1), times(1)).close();
+	}
+
+	@Test
+	void fullEpochSwitchReleasesPreviousDatasetBeforeAllocatingReplacement() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset previous = factory.datasets.getFirst();
+
+		manager.ensureInitializedForHeight(2L);
+
+		RandomXDataset replacement = factory.datasets.getLast();
+		InOrder releaseBeforeAllocation = inOrder(previous, replacement);
+		releaseBeforeAllocation.verify(previous).close();
+		releaseBeforeAllocation.verify(replacement).init(any());
+		manager.close();
+	}
+
+	@Test
+	void fullEpochSwitchWaitsForActiveLeaseBeforeReleasingAndAllocatingReplacement() throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset previous = factory.datasets.getFirst();
+		RandomXVmLease lease = manager.createMiningVM();
+
+		try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+			Future<?> epochSwitch = executor.submit(() -> manager.ensureInitializedForHeight(2L));
+			Thread.sleep(50);
+			assertThat(epochSwitch.isDone()).isFalse();
+			assertThat(factory.datasets).containsExactly(previous);
+			verify(previous, never()).close();
+
+			lease.close();
+			epochSwitch.get(1, TimeUnit.SECONDS);
+		}
+
+		verify(previous, times(1)).close();
+		assertThat(factory.datasets).hasSize(2);
+		manager.close();
+	}
+
+	@Test
+	void failedFullReplacementLeavesNoRetiredDatasetPublishedAsCurrent() {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		manager.ensureInitializedForHeight(1L);
+		RandomXDataset previous = factory.datasets.getFirst();
+		factory.failDatasetInitialization = true;
+
+		assertThatThrownBy(() -> manager.ensureInitializedForHeight(2L))
+				.isInstanceOf(RandomXInitializationException.class)
+				.hasMessageContaining("FULL");
+
+		verify(previous, times(1)).close();
+		assertThatThrownBy(manager::createMiningVM)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("not initialized");
+		manager.close();
+	}
+
+	@Test
+	void canonicalSeedReorgRebuildsFullDatasetWhenBranchMovesForwardAndBack() {
+		RecordingFactory factory = new RecordingFactory();
+		AtomicReference<byte[]> canonicalSeed = new AtomicReference<>(new byte[] { 1, 42 });
+		RandomXManager manager = new RandomXManager(
+				properties(true, RandomXMiningMemoryMode.FULL), mock(ChainQuery.class), productionContext(), factory,
+				height -> canonicalSeed.get(),
+				() -> new RandomXLargePageSupport.Availability(false, "standard-memory test"));
+
+		manager.ensureInitializedForHeight(10L);
+		RandomXDataset firstBranch = factory.datasets.getFirst();
+		canonicalSeed.set(new byte[] { 2, 42 });
+		manager.ensureInitializedForHeight(10L);
+		RandomXDataset secondBranch = factory.datasets.getLast();
+		canonicalSeed.set(new byte[] { 1, 42 });
+		manager.ensureInitializedForHeight(10L);
+
+		assertThat(factory.datasets).hasSize(3);
+		verify(firstBranch, times(1)).close();
+		verify(secondBranch, times(1)).close();
+		try (RandomXVmLease lease = manager.createMiningVM()) {
+			assertThat(lease.calculateHash(new byte[] { 7 })).hasSize(32);
+		}
+		manager.close();
+	}
+
+	@Test
+	void canonicalSeedChangingDuringBuildDiscardsStaleCandidateBeforePublication() throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		factory.blockDatasetInitialization = true;
+		AtomicReference<byte[]> canonicalSeed = new AtomicReference<>(new byte[] { 1, 42 });
+		RandomXManager manager = new RandomXManager(
+				properties(true, RandomXMiningMemoryMode.FULL), mock(ChainQuery.class), productionContext(), factory,
+				height -> canonicalSeed.get(),
+				() -> new RandomXLargePageSupport.Availability(false, "standard-memory test"));
+
+		try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+			Future<?> initialization = executor.submit(() -> manager.ensureInitializedForHeight(10L));
+			assertThat(factory.datasetInitStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			canonicalSeed.set(new byte[] { 2, 42 });
+			factory.releaseDatasetInit.countDown();
+			initialization.get(1, TimeUnit.SECONDS);
+		}
+
+		assertThat(factory.datasets).hasSize(2);
+		verify(factory.datasets.getFirst(), times(1)).close();
+		manager.ensureInitializedForHeight(10L);
+		assertThat(factory.datasets).hasSize(2);
+		manager.close();
+	}
+
+	@Test
+	void canonicalSeedRecheckFailureRetiresUnpublishedCandidate() {
+		RecordingFactory factory = new RecordingFactory();
+		AtomicInteger seedReads = new AtomicInteger();
+		RandomXManager manager = new RandomXManager(
+				properties(true, RandomXMiningMemoryMode.FULL), mock(ChainQuery.class), productionContext(), factory,
+				height -> {
+					if (seedReads.incrementAndGet() == 1) {
+						return new byte[] { 1, 42 };
+					}
+					throw new IllegalStateException("canonical seed unavailable");
+				},
+				() -> new RandomXLargePageSupport.Availability(false, "standard-memory test"));
+
+		assertThatThrownBy(() -> manager.ensureInitializedForHeight(10L))
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("canonical seed unavailable");
+
+		assertThat(factory.datasets).hasSize(1);
+		verify(factory.datasets.getFirst(), times(1)).close();
+		assertThatThrownBy(manager::createMiningVM)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessageContaining("not initialized");
+		manager.close();
 	}
 
 	@Test
@@ -565,9 +705,11 @@ class RandomXManagerTest {
 
 			factory.releaseVerificationVmCreation.countDown();
 			RandomXVerificationVmLease lease = acquisition.get(1, TimeUnit.SECONDS);
-			epochSwitch.get(1, TimeUnit.SECONDS);
+			Thread.sleep(50);
+			assertThat(epochSwitch.isDone()).isFalse();
 			verify(firstDataset, never()).close();
 			lease.close();
+			epochSwitch.get(1, TimeUnit.SECONDS);
 			verify(firstDataset, times(1)).close();
 		}
 		manager.close();
@@ -635,13 +777,15 @@ class RandomXManagerTest {
 					}
 				});
 				start.countDown();
-				epochSwitch.get(1, TimeUnit.SECONDS);
 				terminal.get(1, TimeUnit.SECONDS);
+				Thread.sleep(50);
+				assertThat(epochSwitch.isDone()).isFalse();
+				verify(oldDataset, never()).close();
+				assertThat(borrowed.vm().calculateHash(new byte[] { 4 })).hasSize(32);
+				borrowed.close();
+				epochSwitch.get(1, TimeUnit.SECONDS);
 			}
 
-			verify(oldDataset, never()).close();
-			assertThat(borrowed.vm().calculateHash(new byte[] { 4 })).hasSize(32);
-			borrowed.close();
 			verify(oldDataset, times(1)).close();
 			manager.close();
 		}
@@ -784,7 +928,7 @@ class RandomXManagerTest {
 		ArgumentCaptor<byte[]> seed = ArgumentCaptor.forClass(byte[].class);
 		verify(factory.caches.getFirst()).init(seed.capture());
 		assertThat(seed.getValue()).containsExactly(genesisBlockHash.toArray());
-		verify(chainQuery).getBlockHashByHeight(0L);
+		verify(chainQuery, times(2)).getBlockHashByHeight(0L);
 		manager.close();
 	}
 
