@@ -23,29 +23,25 @@
  */
 package global.goldenera.node.explorer.api.v1.common;
 
-import java.time.Instant;
 import java.util.Set;
 
-import org.springframework.data.domain.Sort;
+import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.utils.PaginationUtil;
 
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
+final class BulkPageRequestValidator {
+	static final int MAX_FILTER_VALUES = 100;
 
-/**
- * Bulk request DTO for validator page queries.
- * Allows filtering by multiple addresses.
- */
-public record BulkValidatorPageRequestV1(
-        int pageNumber,
-        int pageSize,
-        Sort.Direction direction,
-        Set<Address> addresses,
-        Hash originTxHash,
-        Long createdAtBlockHeightFrom,
-			Long createdAtBlockHeightTo,
-			Instant createdAtTimestampFrom,
-			Instant createdAtTimestampTo) {
-	public BulkValidatorPageRequestV1 {
-		BulkPageRequestValidator.validate(pageNumber, pageSize, addresses);
+	private BulkPageRequestValidator() {
+	}
+
+	@SafeVarargs
+	static void validate(int pageNumber, int pageSize, Set<?>... filters) {
+		PaginationUtil.validatePageRequest(pageNumber, pageSize);
+		for (Set<?> filter : filters) {
+			if (filter != null && filter.size() > MAX_FILTER_VALUES) {
+				throw new GEValidationException(
+						String.format("Bulk filters support at most %d values each", MAX_FILTER_VALUES));
+			}
+		}
 	}
 }

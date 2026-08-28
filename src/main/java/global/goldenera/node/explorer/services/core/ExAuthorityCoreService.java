@@ -84,7 +84,7 @@ public class ExAuthorityCoreService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         return authorityRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+				PaginationUtil.stableSort(direction, "createdAtTimestamp", "address")));
     }
 
     /**
@@ -106,7 +106,7 @@ public class ExAuthorityCoreService {
         Specification<ExAuthority> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (addresses != null && !addresses.isEmpty()) {
-                predicates.add(root.get("nodeIdentity").in(addresses));
+                predicates.add(root.get("address").in(addresses));
             }
             if (originTxHash != null) {
                 predicates.add(cb.equal(root.get("originTxHash"), originTxHash));
@@ -126,7 +126,7 @@ public class ExAuthorityCoreService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         return authorityRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+				PaginationUtil.stableSort(direction, "createdAtTimestamp", "address")));
     }
 
     @Transactional(readOnly = true)

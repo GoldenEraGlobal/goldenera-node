@@ -122,7 +122,7 @@ public class ExTransferCoreService {
                         return cb.and(predicates.toArray(new Predicate[0]));
                 };
                 PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-                                direction != null ? Sort.by(direction, "timestamp") : Sort.by("timestamp"));
+                                PaginationUtil.stableSort(direction, "timestamp", "blockHeight", "txIndex", "id"));
                 return exTransferRepository.findAll(spec, pageable);
         }
 
@@ -185,7 +185,7 @@ public class ExTransferCoreService {
                         return cb.and(predicates.toArray(new Predicate[0]));
                 };
                 PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-                                direction != null ? Sort.by(direction, "timestamp") : Sort.by("timestamp"));
+                                PaginationUtil.stableSort(direction, "timestamp", "blockHeight", "txIndex", "id"));
                 return exTransferRepository.findAll(spec, pageable);
         }
 

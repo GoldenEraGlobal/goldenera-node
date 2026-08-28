@@ -28,6 +28,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
 import global.goldenera.node.explorer.events.ExBlockReorgEvent;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +47,9 @@ public class BridgeExplorerLifecycleListener {
 
 	@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
 	public void handleBlockConnected(ExBlockConnectedEvent event) {
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			return;
+		}
 		coordinator.confirmedBlock(event.getBlock(), event.getEvents());
 	}
 

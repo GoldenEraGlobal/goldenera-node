@@ -23,6 +23,7 @@
  */
 package global.goldenera.node.explorer.repositories;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -71,6 +72,25 @@ public interface ExTxRepository
             """, nativeQuery = true)
     Optional<Long> findConfirmationsByHash(@Param("hash") byte[] hash);
 
+    @Query(value = """
+            SELECT MIN(activity.block_timestamp) AS "firstActivity",
+                   MAX(activity.block_timestamp) AS "lastActivity"
+            FROM (
+                SELECT h.timestamp AS block_timestamp
+                FROM explorer_tx tx
+                JOIN explorer_block_header h
+                  ON h.hash = tx.block_hash AND h.height = tx.block_height
+                WHERE tx.sender = :address OR tx.recipient = :address
+                UNION ALL
+                SELECT h.timestamp AS block_timestamp
+                FROM explorer_transfer tr
+                JOIN explorer_block_header h
+                  ON h.hash = tr.block_hash AND h.height = tr.block_height
+                WHERE tr.from_address = :address OR tr.to_address = :address
+            ) activity
+            """, nativeQuery = true)
+    Optional<AccountActivityRange> findAccountActivityRange(@Param("address") byte[] address);
+
     long countBySender(Address address);
 
     long countByRecipient(Address address);
@@ -78,4 +98,10 @@ public interface ExTxRepository
     @Modifying
     @Query(value = "DELETE FROM explorer_tx WHERE block_hash = :blockHash", nativeQuery = true)
     void deleteAllByBlockHash(@Param("blockHash") byte[] blockHash);
+
+    interface AccountActivityRange {
+        Instant getFirstActivity();
+
+        Instant getLastActivity();
+    }
 }

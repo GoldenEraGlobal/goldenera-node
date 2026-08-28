@@ -89,9 +89,45 @@ public class ExIndexerService {
 		if (events == null || events.isEmpty()) {
 			return;
 		}
+		if (isStrictlyContinuousBatch(events)) {
+			for (BlockConnectedEvent event : events) {
+				Timer.Sample sample = Timer.start(registry);
+				processBlock(event.getBlock(), event, false, false);
+				sample.stop(registry.timer("explorer.block.index_time"));
+			}
+			exStatusCoreService.updateStatus(events.getLast().getBlock().getHeader());
+			registry.counter("explorer.batch.fast_path.blocks").increment(events.size());
+			registry.counter("explorer.batch.fast_path.batches").increment();
+			return;
+		}
 		for (BlockConnectedEvent event : events) {
 			handleBlockConnectedInCurrentTransaction(event, false);
 		}
+	}
+
+	private boolean isStrictlyContinuousBatch(List<BlockConnectedEvent> events) {
+		Block first = events.getFirst().getBlock();
+		ExStatus status = exStatusCoreService.getStatus().orElse(null);
+		if (first.getHeight() == 0L) {
+			if (status != null) {
+				return false;
+			}
+		} else if (status == null
+				|| first.getHeight() != status.getSyncedBlockHeight() + 1L
+				|| !first.getHeader().getPreviousHash().equals(status.getSyncedBlockHash())) {
+			return false;
+		}
+
+		Block previous = first;
+		for (int index = 1; index < events.size(); index++) {
+			Block current = events.get(index).getBlock();
+			if (current.getHeight() != previous.getHeight() + 1L
+					|| !current.getHeader().getPreviousHash().equals(previous.getHash())) {
+				return false;
+			}
+			previous = current;
+		}
+		return true;
 	}
 
 	private void handleBlockConnectedInCurrentTransaction(BlockConnectedEvent event, boolean logBlockProgress) {
@@ -130,11 +166,15 @@ public class ExIndexerService {
 			}
 		}
 
-		processBlock(block, event, logBlockProgress);
+		processBlock(block, event, logBlockProgress, true);
 		sample.stop(registry.timer("explorer.block.index_time"));
 	}
 
-	private void processBlock(Block block, BlockConnectedEvent event, boolean logBlockProgress) {
+	private void processBlock(
+			Block block,
+			BlockConnectedEvent event,
+			boolean logBlockProgress,
+			boolean updateStatus) {
 		long start = System.currentTimeMillis();
 		if (block.getHeight() % 10000 == 0) {
 			postgrePartitionService.ensurePartitionsExist(block.getHeight());
@@ -154,10 +194,13 @@ public class ExIndexerService {
 					event.getValidatorsToRemove());
 
 			exBlockDataCoreService.insertBlockHeader(block, event.getCumulativeDifficulty(),
-					event.getMinerTotalFees().toBigInteger(), event.getMinerActualRewardPaid().toBigInteger());
+					event.getMinerTotalFees().toBigInteger(),
+					event.getMinerActualRewardPaid().subtract(event.getMinerTotalFees()).toBigInteger());
 			exBlockDataCoreService.insertTransactions(block.getTxs(), block.getHeight(), block.getHash());
 			exBlockDataCoreService.insertTransfers(txToTransferMapper.map(event));
-			exStatusCoreService.updateStatus(block.getHeader());
+				if (updateStatus) {
+					exStatusCoreService.updateStatus(block.getHeader());
+				}
 
 			// Publish explorer block connected event for webhook notifications
 			eventPublisher.publishEvent(new ExBlockConnectedEvent(
@@ -299,7 +342,7 @@ public class ExIndexerService {
 						.orElseThrow(() -> new GEFailedException("Missing block in chain query: " + currentHeight));
 
 				BlockConnectedEvent event = eventReconstructionService.reconstructEvent(storedBlock);
-				processBlock(storedBlock.getBlock(), event, true);
+					processBlock(storedBlock.getBlock(), event, true, true);
 			} catch (Exception e) {
 				throw new GEFailedException("Failed to heal gap at block " + h, e);
 			}

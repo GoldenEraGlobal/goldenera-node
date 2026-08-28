@@ -30,6 +30,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
@@ -45,11 +47,15 @@ import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.explorer.entities.ExMemTransfer;
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerMempoolCoreService;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessListener;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessState;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessStatus;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.AccessLevel;
 import lombok.Value;
 import lombok.experimental.FieldDefaults;
@@ -58,7 +64,7 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-public class ExIndexerMempoolService {
+public class ExIndexerMempoolService implements ExplorerReadinessListener {
 	private static final int MAX_FLUSH_ACTIONS = 1_000;
 
 	GeneralProperties generalProperties;
@@ -79,6 +85,8 @@ public class ExIndexerMempoolService {
 	}
 
 	Map<Hash, PendingAction> buffer = new ConcurrentHashMap<>();
+	AtomicBoolean flushScheduled = new AtomicBoolean();
+	AtomicReference<ExplorerReadinessState> observedReadiness = new AtomicReference<>();
 
 	private enum ActionType {
 		ADD, REMOVE
@@ -92,7 +100,7 @@ public class ExIndexerMempoolService {
 
 	@PostConstruct
 	public void init() {
-		if (!enabled()) {
+		if (!generalProperties.isExplorerEnable() || !flushScheduled.compareAndSet(false, true)) {
 			return;
 		}
 		// Schedule the flushBuffer task to run every 3 seconds using
@@ -100,8 +108,27 @@ public class ExIndexerMempoolService {
 		explorerScheduler.scheduleWithFixedDelay(
 				this::flushBuffer,
 				Duration.ofMillis(3000));
+		explorerReadiness.registerListener(this);
 		log.info("ExMempoolService: Scheduled flushBuffer on explorerTaskScheduler every 3s");
 		registry.gaugeMapSize("explorer.mempool.pending_actions", Tags.empty(), buffer);
+	}
+
+	@PreDestroy
+	public void destroy() {
+		explorerReadiness.unregisterListener(this);
+	}
+
+	@Override
+	public void onReadinessChanged(ExplorerReadinessStatus status) {
+		ExplorerReadinessState previous = observedReadiness.getAndSet(status.state());
+		if (!status.ready()) {
+			buffer.clear();
+			return;
+		}
+		if (previous != ExplorerReadinessState.READY) {
+			exMempoolCoreService.truncate();
+			registry.counter("explorer.mempool.readiness_resets").increment();
+		}
 	}
 
 	// --------------------------------------------------------

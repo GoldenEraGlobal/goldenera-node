@@ -24,13 +24,19 @@
 package global.goldenera.node.explorer.storage.chainidentity;
 
 import java.time.Instant;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 public final class ExplorerRuntimeReadiness {
+	private static final Logger log = LoggerFactory.getLogger(ExplorerRuntimeReadiness.class);
 
 	private final AtomicReference<ExplorerReadinessStatus> status = new AtomicReference<>(
 			new ExplorerReadinessStatus(ExplorerReadinessState.STARTING,
 					"Explorer database identity has not been verified", Instant.now()));
+	private final CopyOnWriteArrayList<ExplorerReadinessListener> listeners = new CopyOnWriteArrayList<>();
 
 	public ExplorerReadinessStatus status() {
 		return status.get();
@@ -38,6 +44,15 @@ public final class ExplorerRuntimeReadiness {
 
 	public boolean isReady() {
 		return status().ready();
+	}
+
+	public void registerListener(ExplorerReadinessListener listener) {
+		listeners.addIfAbsent(listener);
+		listener.onReadinessChanged(status());
+	}
+
+	public void unregisterListener(ExplorerReadinessListener listener) {
+		listeners.remove(listener);
 	}
 
 	public void ready() {
@@ -57,6 +72,14 @@ public final class ExplorerRuntimeReadiness {
 	}
 
 	private void update(ExplorerReadinessState state, String detail) {
-		status.set(new ExplorerReadinessStatus(state, detail, Instant.now()));
+		ExplorerReadinessStatus updated = new ExplorerReadinessStatus(state, detail, Instant.now());
+		status.set(updated);
+		for (ExplorerReadinessListener listener : listeners) {
+			try {
+				listener.onReadinessChanged(updated);
+			} catch (RuntimeException failure) {
+				log.error("Explorer readiness listener failed while entering {}", state, failure);
+			}
+		}
 	}
 }

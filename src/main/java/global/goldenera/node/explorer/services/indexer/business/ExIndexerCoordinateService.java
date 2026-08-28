@@ -25,12 +25,17 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.stereotype.Service;
 
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessListener;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessStatus;
 import global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -45,7 +50,7 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE)
-public class ExIndexerCoordinateService {
+public class ExIndexerCoordinateService implements ExplorerReadinessListener {
 
 	private static final int MAX_RETRIES = 5;
 	private static final long BASE_DELAY_MS = 1000;
@@ -59,44 +64,71 @@ public class ExIndexerCoordinateService {
 	final ExplorerIndexingExecutionGate executionGate;
 	final ExplorerArchiveRebuildTrigger archiveRebuildTrigger;
 
-	final Thread worker = new Thread(this::processQueue, "Explorer-Coordinator");
-	final AtomicBoolean running = new AtomicBoolean(true);
+	final AtomicReference<WorkerControl> activeWorker = new AtomicReference<>();
 	final AtomicBoolean panicMode = new AtomicBoolean(false);
+	final AtomicBoolean shuttingDown = new AtomicBoolean();
 
 	@PostConstruct
 	public void start() {
-		if (!generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
-			return;
-		}
-		worker.setUncaughtExceptionHandler((t, e) -> log.error("Uncaught exception in Explorer Coordinator", e));
-		worker.start();
+		shuttingDown.set(false);
+		explorerReadiness.registerListener(this);
 	}
 
 	@PreDestroy
 	public void stop() {
-		if (!generalProperties.isExplorerEnable() || !worker.isAlive()) {
+		shuttingDown.set(true);
+		explorerReadiness.unregisterListener(this);
+		WorkerControl worker = activeWorker.getAndSet(null);
+		if (worker == null) {
 			return;
 		}
-		running.set(false);
-		worker.interrupt();
+		worker.running().set(false);
+		worker.thread().interrupt();
 		try {
-			worker.join(5000);
+			worker.thread().join(5000);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			log.warn("Explorer Coordinator forced stop.");
 		}
 	}
 
-	private void processQueue() {
-		log.info("Explorer Coordinator started.");
-		while (running.get()) {
-			if (panicMode.get()) {
-				log.error("Explorer is in PANIC MODE due to previous fatal errors. Processing suspended.");
-				sleep(5000);
-				continue;
-			}
+	@Override
+	public void onReadinessChanged(ExplorerReadinessStatus status) {
+		if (status.ready()) {
+			startWorkerIfNeeded();
+		}
+	}
 
-			try {
+	private void startWorkerIfNeeded() {
+		if (shuttingDown.get() || !generalProperties.isExplorerEnable() || !explorerReadiness.isReady()) {
+			return;
+		}
+		while (true) {
+			WorkerControl current = activeWorker.get();
+			if (current != null && current.running().get() && current.thread().isAlive()) {
+				return;
+			}
+			WorkerControl replacement = new WorkerControl();
+			replacement.thread().setUncaughtExceptionHandler(
+					(t, failure) -> log.error("Uncaught exception in Explorer Coordinator", failure));
+			if (activeWorker.compareAndSet(current, replacement)) {
+				panicMode.set(false);
+				replacement.thread().start();
+				return;
+			}
+		}
+	}
+
+	private void processQueue(WorkerControl worker) {
+		log.info("Explorer Coordinator started.");
+		try {
+			while (worker.running().get()) {
+				if (panicMode.get()) {
+					log.error("Explorer is in PANIC MODE due to previous fatal errors. Processing suspended.");
+					sleep(5000);
+					continue;
+				}
+
 				// Blocking call, waits for a task
 				ExIndexerTask task = queueService.take();
 
@@ -106,25 +138,33 @@ public class ExIndexerCoordinateService {
 				if (!explorerReadiness.isReady()) {
 					continue;
 				}
-				boolean success = processTaskWithRetryStrategy(task);
+				boolean success = processTaskWithRetryStrategy(task, worker.running());
 				if (!success) {
-					triggerPanicMode(task);
+					triggerPanicMode(task, worker.running());
 				}
 
 				logQueueStatus();
 
-			} catch (InterruptedException e) {
-				Thread.currentThread().interrupt();
+			}
+		} catch (InterruptedException e) {
+			if (!shuttingDown.get()) {
+				log.warn("Explorer Coordinator exited after an unexpected interrupt");
+			} else {
 				log.info("Explorer Coordinator interrupted, stopping.");
-				break;
-			} catch (Exception e) {
-				log.error("Unexpected error in Explorer Coordinator loop", e);
+			}
+			Thread.currentThread().interrupt();
+		} catch (Exception e) {
+			log.error("Unexpected error in Explorer Coordinator loop", e);
+		} finally {
+			activeWorker.compareAndSet(worker, null);
+			log.info("Explorer Coordinator stopped.");
+			if (!shuttingDown.get() && worker.running().get() && explorerReadiness.isReady()) {
+				startWorkerIfNeeded();
 			}
 		}
-		log.info("Explorer Coordinator stopped.");
 	}
 
-	private boolean processTaskWithRetryStrategy(ExIndexerTask task) {
+	private boolean processTaskWithRetryStrategy(ExIndexerTask task, AtomicBoolean running) {
 		int attempt = 0;
 		long currentDelay = BASE_DELAY_MS;
 
@@ -157,16 +197,29 @@ public class ExIndexerCoordinateService {
 			}
 			if (task instanceof ExIndexerTask.ConnectTask ct) {
 				indexer.handleBlockConnected(ct.getEvent());
+			} else if (task instanceof ExIndexerTask.ConnectBatchTask batchTask) {
+				processConnectBatch(batchTask);
 			} else if (task instanceof ExIndexerTask.DisconnectTask dt) {
 				indexer.handleBlockDisconnected(dt.getEvent());
 			} else {
 				throw new IllegalArgumentException("Unknown task type: " + task.getClass().getName());
 			}
-			queueService.markTaskProcessed();
+			if (!(task instanceof ExIndexerTask.ConnectBatchTask)) {
+				queueService.markTaskProcessed();
+			}
 		});
 	}
 
-	private void triggerPanicMode(ExIndexerTask task) {
+	private void processConnectBatch(ExIndexerTask.ConnectBatchTask task) {
+		List<BlockConnectedEvent> events = task.getEvents();
+		for (int start = 0; start < events.size(); start += ExIndexerSyncService.CATCH_UP_BATCH_SIZE) {
+			int end = Math.min(start + ExIndexerSyncService.CATCH_UP_BATCH_SIZE, events.size());
+			indexer.handleBlockConnectedBatch(events.subList(start, end));
+		}
+		queueService.markTasksProcessed(events.size());
+	}
+
+	private void triggerPanicMode(ExIndexerTask task, AtomicBoolean running) {
 		panicMode.set(true);
 		running.set(false);
 		queueService.discardForRebuild("coordinator panic");
@@ -181,6 +234,19 @@ public class ExIndexerCoordinateService {
 		log.error("Manual intervention required. Check logs, fix the issue, and restart.");
 		log.error("################################################################");
 		throw new GEFailedException("Explorer entered PANIC MODE at block " + task.getHeight());
+	}
+
+	private final class WorkerControl {
+		private final AtomicBoolean running = new AtomicBoolean(true);
+		private final Thread thread = new Thread(() -> processQueue(this), "Explorer-Coordinator");
+
+		Thread thread() {
+			return thread;
+		}
+
+		AtomicBoolean running() {
+			return running;
+		}
 	}
 
 	private void logQueueStatus() {

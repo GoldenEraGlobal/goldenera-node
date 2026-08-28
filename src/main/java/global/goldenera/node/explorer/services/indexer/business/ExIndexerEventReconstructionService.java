@@ -82,7 +82,7 @@ public class ExIndexerEventReconstructionService {
                 long height = block.getHeight();
                 Address receivedFrom = storedBlock.getReceivedFrom();
                 Instant receivedAt = storedBlock.getReceivedAt();
-                ConnectedSource connectedSource = storedBlock.getConnectedSource();
+				ConnectedSource connectedSource = ConnectedSource.SYNC;
 
                 // --- GENESIS BLOCK: Special handling ---
                 // Genesis has no transactions, state is set explicitly in GenesisInitializer.

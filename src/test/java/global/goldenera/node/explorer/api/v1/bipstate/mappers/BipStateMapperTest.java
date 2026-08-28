@@ -21,31 +21,25 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.explorer.api.v1.common;
+package global.goldenera.node.explorer.api.v1.bipstate.mappers;
 
-import java.time.Instant;
-import java.util.Set;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
-import org.springframework.data.domain.Sort;
+import org.junit.jupiter.api.Test;
 
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.explorer.api.v1.tx.mappers.TxMapper;
+import global.goldenera.node.explorer.entities.ExBipState;
 
-/**
- * Bulk request DTO for validator page queries.
- * Allows filtering by multiple addresses.
- */
-public record BulkValidatorPageRequestV1(
-        int pageNumber,
-        int pageSize,
-        Sort.Direction direction,
-        Set<Address> addresses,
-        Hash originTxHash,
-        Long createdAtBlockHeightFrom,
-			Long createdAtBlockHeightTo,
-			Instant createdAtTimestampFrom,
-			Instant createdAtTimestampTo) {
-	public BulkValidatorPageRequestV1 {
-		BulkPageRequestValidator.validate(pageNumber, pageSize, addresses);
+class BipStateMapperTest {
+
+	@Test
+	void mapsLegacyStateWithoutMetadata() {
+		ExBipState state = mock(ExBipState.class);
+		when(state.getMetadata()).thenReturn(null);
+		BipStateMapper mapper = new BipStateMapper(mock(TxMapper.class));
+
+		assertThat(mapper.mapMetadata(state)).isNull();
 	}
 }

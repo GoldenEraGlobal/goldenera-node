@@ -85,4 +85,8 @@ public class ExIndexerStatusCoreService {
 		jdbcTemplate.update(sql, blockHeader.getHeight(), blockHeader.getHash().toArray(),
 				Timestamp.from(Instant.now()));
 	}
+
+	public void clearStatus() {
+		jdbcTemplate.update("DELETE FROM explorer_status WHERE id = 1");
+	}
 }

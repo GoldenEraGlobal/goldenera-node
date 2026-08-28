@@ -88,6 +88,9 @@ public class BipStateMapper {
     }
 
     public BipStateMetadataDtoV1 mapMetadata(@NonNull ExBipState bipState) {
+		if (bipState.getMetadata() == null) {
+			return null;
+		}
         return new BipStateMetadataDtoV1(
                 bipState.getMetadata().getVersion(),
                 bipState.getMetadata().getTxVersion(),

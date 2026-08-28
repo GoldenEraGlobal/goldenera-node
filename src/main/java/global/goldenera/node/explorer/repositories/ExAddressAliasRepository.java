@@ -50,7 +50,7 @@ public interface ExAddressAliasRepository
                         """)
         List<ExAddressAlias> findByAddress(@NonNull Address address);
 
-        @Query(value = "SELECT * FROM explorer_address_alias WHERE alias ILIKE :alias LIMIT 1", nativeQuery = true)
+        @Query(value = "SELECT * FROM explorer_address_alias WHERE LOWER(alias) = LOWER(:alias) LIMIT 1", nativeQuery = true)
         Optional<ExAddressAlias> findByAliasIgnoreCase(@Param("alias") String alias);
 
 }

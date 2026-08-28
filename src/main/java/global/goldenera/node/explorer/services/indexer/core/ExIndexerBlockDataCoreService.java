@@ -59,7 +59,7 @@ public class ExIndexerBlockDataCoreService {
 			Block block,
 			BigInteger cumulativeDifficulty,
 			BigInteger minerTotalFees,
-			BigInteger minerActualRewardPaid) {
+			BigInteger minerBlockReward) {
 		BlockHeader header = block.getHeader();
 		String sql = """
 				    INSERT INTO explorer_block_header (
@@ -86,7 +86,7 @@ public class ExIndexerBlockDataCoreService {
 				new BigDecimal(cumulativeDifficulty),
 				block.getTxs().size(),
 				new BigDecimal(minerTotalFees),
-				new BigDecimal(minerActualRewardPaid));
+				new BigDecimal(minerBlockReward));
 	}
 
 	public void insertTransactions(List<Tx> txs, long blockHeight, Hash blockHash) {

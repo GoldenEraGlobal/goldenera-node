@@ -25,15 +25,25 @@ package global.goldenera.node.explorer.services.core;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.explorer.config.ExplorerAsyncConfig;
 import global.goldenera.node.explorer.entities.ExAccountBalance;
 import global.goldenera.node.explorer.entities.ExAddressAlias;
 import global.goldenera.node.explorer.entities.ExAuthority;
@@ -52,19 +62,22 @@ import global.goldenera.node.explorer.repositories.ExTokenRepository;
 import global.goldenera.node.explorer.repositories.ExTxRepository;
 import global.goldenera.node.explorer.repositories.ExValidatorRepository;
 import global.goldenera.node.shared.exceptions.GEFailedException;
+import global.goldenera.node.shared.exceptions.GEValidationException;
 import lombok.AccessLevel;
 import lombok.Builder;
 import lombok.NonNull;
-import lombok.RequiredArgsConstructor;
 import lombok.Value;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
-@RequiredArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 @Slf4j
 public class ExCommonCoreService {
+	static final int MAX_QUERY_LENGTH = 256;
+	static final int MIN_TEXT_QUERY_LENGTH = 2;
+	static final int MAX_TEXT_SEARCH_RESULTS = 25;
+	static final long SEARCH_TIMEOUT_MILLIS = 3_000L;
 
     ExBlockHeaderRepository blockHeaderRepository;
     ExTxRepository txRepository;
@@ -74,16 +87,50 @@ public class ExCommonCoreService {
     ExValidatorRepository validatorRepository;
     ExAuthorityRepository authorityRepository;
     ExMemTransferRepository memTransferRepository;
+	Executor searchExecutor;
+	long searchTimeoutMillis;
+
+		@Autowired
+		public ExCommonCoreService(
+			ExBlockHeaderRepository blockHeaderRepository,
+			ExTxRepository txRepository,
+			ExAccountBalanceRepository accountBalanceRepository,
+			ExTokenRepository tokenRepository,
+			ExAddressAliasRepository addressAliasRepository,
+			ExValidatorRepository validatorRepository,
+			ExAuthorityRepository authorityRepository,
+			ExMemTransferRepository memTransferRepository,
+			@Qualifier(ExplorerAsyncConfig.EXPLORER_SEARCH_EXECUTOR) Executor searchExecutor) {
+		this(blockHeaderRepository, txRepository, accountBalanceRepository, tokenRepository,
+				addressAliasRepository, validatorRepository, authorityRepository, memTransferRepository,
+				searchExecutor, SEARCH_TIMEOUT_MILLIS);
+	}
+
+	ExCommonCoreService(
+			ExBlockHeaderRepository blockHeaderRepository,
+			ExTxRepository txRepository,
+			ExAccountBalanceRepository accountBalanceRepository,
+			ExTokenRepository tokenRepository,
+			ExAddressAliasRepository addressAliasRepository,
+			ExValidatorRepository validatorRepository,
+			ExAuthorityRepository authorityRepository,
+			ExMemTransferRepository memTransferRepository,
+			Executor searchExecutor,
+			long searchTimeoutMillis) {
+		this.blockHeaderRepository = blockHeaderRepository;
+		this.txRepository = txRepository;
+		this.accountBalanceRepository = accountBalanceRepository;
+		this.tokenRepository = tokenRepository;
+		this.addressAliasRepository = addressAliasRepository;
+		this.validatorRepository = validatorRepository;
+		this.authorityRepository = authorityRepository;
+		this.memTransferRepository = memTransferRepository;
+		this.searchExecutor = searchExecutor;
+		this.searchTimeoutMillis = searchTimeoutMillis;
+	}
 
     public ExSearchResult search(@NonNull String query, Set<ExSearchEntityType> searchIn) {
-        query = query.trim().toLowerCase();
-        if (query.isEmpty() || query.isBlank() || query.length() > 256 || query.length() < 1) {
-            if (!query.matches("\\d+")) {
-                return ExSearchResult.builder().build();
-            }
-        }
-
-        String q = query.trim();
+		String q = validateAndNormalizeQuery(query);
         if (searchIn == null || searchIn.isEmpty()) {
             searchIn = Set.of(ExSearchEntityType.values());
         }
@@ -107,11 +154,12 @@ public class ExCommonCoreService {
         boolean isHash32 = isHash32(q);
         boolean isAddress = isAddress(q);
         boolean isNumber = isNumber(q);
+		boolean isTextQuery = !isHash32 && !isAddress;
 
         // 1. Search Blocks
-        if (searchIn.contains(ExSearchEntityType.BLOCK)) {
-            blocksFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExBlockHeader> results = new java.util.HashSet<>();
+        if (searchIn.contains(ExSearchEntityType.BLOCK) && (isNumber || isHash32)) {
+            blocksFuture = async(() -> {
+                Set<ExBlockHeader> results = new HashSet<>();
                 if (isNumber) {
                     try {
                         long height = Long.parseLong(q);
@@ -133,9 +181,9 @@ public class ExCommonCoreService {
         }
 
         // 2. Search Transactions (Confirmed)
-        if (searchIn.contains(ExSearchEntityType.TRANSACTION)) {
-            txsFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExTx> results = new java.util.HashSet<>();
+        if (searchIn.contains(ExSearchEntityType.TRANSACTION) && isHash32) {
+            txsFuture = async(() -> {
+                Set<ExTx> results = new HashSet<>();
                 if (isHash32) {
                     try {
                         Hash hash = Hash.fromHexString(q);
@@ -148,9 +196,9 @@ public class ExCommonCoreService {
         }
 
         // 3. Search Mempool
-        if (searchIn.contains(ExSearchEntityType.MEMPOOL)) {
-            mempoolFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExMemTransfer> results = new java.util.HashSet<>();
+        if (searchIn.contains(ExSearchEntityType.MEMPOOL) && isHash32) {
+            mempoolFuture = async(() -> {
+                Set<ExMemTransfer> results = new HashSet<>();
                 if (isHash32) {
                     try {
                         Hash hash = Hash.fromHexString(q);
@@ -164,8 +212,8 @@ public class ExCommonCoreService {
 
         // 4. Search Tokens
         if (searchIn.contains(ExSearchEntityType.TOKEN)) {
-            tokensFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExToken> results = new java.util.HashSet<>();
+            tokensFuture = async(() -> {
+                Set<ExToken> results = new HashSet<>();
                 if (isAddress) {
                     try {
                         Address addr = Address.fromHexString(q);
@@ -173,43 +221,48 @@ public class ExCommonCoreService {
                     } catch (Exception e) {
                     }
                 }
-                results.addAll(tokenRepository.searchTokens(q)); // NATIVE QUERY
+				if (isTextQuery && q.length() >= MIN_TEXT_QUERY_LENGTH) {
+					results.addAll(tokenRepository.searchTokens(escapeLikePattern(q), MAX_TEXT_SEARCH_RESULTS));
+				}
                 return new ArrayList<>(results);
             });
         }
 
         // 5. Search Accounts & Aliases & Validators & Authorities
         if (searchIn.contains(ExSearchEntityType.ACCOUNT)) {
-            accountsFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExAccountBalance> results = new java.util.HashSet<>();
-                if (isAddress) {
-                    try {
-                        Address addr = Address.fromHexString(q);
-                        // Fetch all accounts by address (native query in repo)
-                        results.addAll(accountBalanceRepository.findByAddress(addr.toArray()));
-                    } catch (Exception e) {
-                    }
-                }
-                return new ArrayList<>(results);
-            });
+			if (isAddress) {
+				accountsFuture = async(() -> {
+					Set<ExAccountBalance> results = new HashSet<>();
+					try {
+						Address addr = Address.fromHexString(q);
+						results.addAll(accountBalanceRepository.findByAddress(addr.toArray()));
+					} catch (Exception e) {
+					}
+					return new ArrayList<>(results);
+				});
+			}
 
-            aliasesFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExAddressAlias> results = new java.util.HashSet<>();
-                if (isAddress) {
-                    try {
-                        Address addr = Address.fromHexString(q);
-                        results.addAll(addressAliasRepository.findByAddress(addr));
-                    } catch (Exception e) {
-                    }
-                }
-                addressAliasRepository.findByAliasIgnoreCase(q).ifPresent(results::add);
-                return new ArrayList<>(results);
-            });
+			if (isAddress || isTextQuery) {
+				aliasesFuture = async(() -> {
+					Set<ExAddressAlias> results = new HashSet<>();
+					if (isAddress) {
+						try {
+							Address addr = Address.fromHexString(q);
+							results.addAll(addressAliasRepository.findByAddress(addr));
+						} catch (Exception e) {
+						}
+					}
+					if (isTextQuery && q.length() >= MIN_TEXT_QUERY_LENGTH) {
+						addressAliasRepository.findByAliasIgnoreCase(q).ifPresent(results::add);
+					}
+					return new ArrayList<>(results);
+				});
+			}
         }
 
-        if (searchIn.contains(ExSearchEntityType.VALIDATOR)) {
-            validatorsFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExValidator> results = new java.util.HashSet<>();
+        if (searchIn.contains(ExSearchEntityType.VALIDATOR) && isAddress) {
+            validatorsFuture = async(() -> {
+                Set<ExValidator> results = new HashSet<>();
                 if (isAddress) {
                     try {
                         Address addr = Address.fromHexString(q);
@@ -221,9 +274,9 @@ public class ExCommonCoreService {
             });
         }
 
-        if (searchIn.contains(ExSearchEntityType.AUTHORITY)) {
-            authoritiesFuture = CompletableFuture.supplyAsync(() -> {
-                Set<ExAuthority> results = new java.util.HashSet<>();
+        if (searchIn.contains(ExSearchEntityType.AUTHORITY) && isAddress) {
+            authoritiesFuture = async(() -> {
+                Set<ExAuthority> results = new HashSet<>();
                 if (isAddress) {
                     try {
                         Address addr = Address.fromHexString(q);
@@ -235,7 +288,12 @@ public class ExCommonCoreService {
             });
         }
 
-        try {
+		List<CompletableFuture<?>> futures = List.of(
+				blocksFuture, txsFuture, mempoolFuture, tokensFuture,
+				accountsFuture, aliasesFuture, validatorsFuture, authoritiesFuture);
+		try {
+			CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
+					.get(searchTimeoutMillis, TimeUnit.MILLISECONDS);
             List<ExBlockHeader> blocks = blocksFuture.get();
             List<ExTx> transactions = txsFuture.get();
             List<ExMemTransfer> mempoolTransactions = mempoolFuture.get();
@@ -259,12 +317,54 @@ public class ExCommonCoreService {
                     .authorities(authorities)
                     .count(count)
                     .build();
-        } catch (InterruptedException | ExecutionException e) {
+		} catch (InterruptedException e) {
+			cancel(futures);
+			Thread.currentThread().interrupt();
+			throw new GEFailedException("Search interrupted", e);
+		} catch (TimeoutException e) {
+			cancel(futures);
+			log.warn("Explorer search timed out after {} ms", searchTimeoutMillis);
+			throw new GEFailedException("Search timed out", e);
+		} catch (ExecutionException e) {
+			cancel(futures);
             log.error("Error executing search", e);
-            Thread.currentThread().interrupt();
             throw new GEFailedException("Search failed", e);
         }
     }
+
+	private String validateAndNormalizeQuery(String query) {
+		String normalized = query.trim().toLowerCase(Locale.ROOT);
+		if (normalized.isEmpty()) {
+			throw new GEValidationException("Search query must not be blank");
+		}
+		if (normalized.length() > MAX_QUERY_LENGTH) {
+			throw new GEValidationException(
+					String.format("Search query exceeds the maximum length (%d)", MAX_QUERY_LENGTH));
+		}
+		if (normalized.length() < MIN_TEXT_QUERY_LENGTH && !isNumber(normalized)) {
+			throw new GEValidationException(
+					String.format("Text search query must contain at least %d characters", MIN_TEXT_QUERY_LENGTH));
+		}
+		return normalized;
+	}
+
+	private String escapeLikePattern(String value) {
+		return value.replace("\\", "\\\\")
+				.replace("%", "\\%")
+				.replace("_", "\\_");
+	}
+
+	private <T> CompletableFuture<T> async(Supplier<T> supplier) {
+		try {
+			return CompletableFuture.supplyAsync(supplier, searchExecutor);
+		} catch (RejectedExecutionException e) {
+			throw new GEFailedException("Search capacity exhausted", e);
+		}
+	}
+
+	private void cancel(List<CompletableFuture<?>> futures) {
+		futures.forEach(future -> future.cancel(true));
+	}
 
     private boolean isHash32(String q) {
         return (q.length() == 64 || (q.startsWith("0x") && q.length() == 66)) && isHex(q);

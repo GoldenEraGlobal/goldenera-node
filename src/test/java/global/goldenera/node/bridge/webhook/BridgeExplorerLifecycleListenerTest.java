@@ -25,6 +25,8 @@ package global.goldenera.node.bridge.webhook;
 
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 import java.math.BigInteger;
 import java.util.List;
@@ -56,6 +58,17 @@ class BridgeExplorerLifecycleListenerTest {
 				this, block, BigInteger.ONE, Wei.ZERO, Wei.ZERO, events, ConnectedSource.MINER));
 
 		org.mockito.Mockito.verify(coordinator).confirmedBlock(block, events);
+	}
+
+	@Test
+	void historicalSyncBlockDoesNotCreateBridgeDelivery() {
+		Block block = mock(Block.class);
+		List<BlockEvent> events = List.of();
+
+		listener.handleBlockConnected(new ExBlockConnectedEvent(
+				this, block, BigInteger.ONE, Wei.ZERO, Wei.ZERO, events, ConnectedSource.SYNC));
+
+		verify(coordinator, never()).confirmedBlock(block, events);
 	}
 
 	@Test

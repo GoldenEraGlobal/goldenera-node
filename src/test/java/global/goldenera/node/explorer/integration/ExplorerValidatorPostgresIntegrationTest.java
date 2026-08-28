@@ -25,12 +25,14 @@ package global.goldenera.node.explorer.integration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Map;
 
+import org.apache.tuweni.bytes.Bytes;
 import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -50,13 +52,19 @@ import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.MiningLimitMode;
+import global.goldenera.cryptoj.enums.state.BipStateVersion;
+import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.BipType;
 import global.goldenera.cryptoj.enums.state.AccountBalanceStateVersion;
+import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.explorer.enums.EntityType;
 import global.goldenera.node.explorer.enums.OperationType;
 import global.goldenera.node.explorer.services.indexer.business.ExIndexerRevertService;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerConsensusCoreService;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BalanceRevertDto;
+import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.BipRevertDto;
+import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.TokenRevertDto;
 import global.goldenera.node.explorer.services.indexer.core.data.ExIndexerRevertDtos.ValidatorRevertDto;
 import liquibase.Liquibase;
 import liquibase.database.Database;
@@ -72,13 +80,17 @@ class ExplorerValidatorPostgresIntegrationTest {
 			Address.fromHexString("0x1111111111111111111111111111111111111111");
 	private static final Instant CREATED_AT = Instant.parse("2026-01-01T00:00:00Z");
 	private static final Hash ORIGIN_TX = hash(1);
+	private static final Address TOKEN =
+			Address.fromHexString("0x2222222222222222222222222222222222222222");
+	private static final Hash BIP_HASH = hash(30);
 
 	@Container
 	private static final PostgreSQLContainer<?> POSTGRES =
 			new PostgreSQLContainer<>("postgres:17-alpine")
 					.withDatabaseName("goldenera")
 					.withUsername("goldenera")
-					.withPassword("goldenera");
+					.withPassword("goldenera")
+					.withCommand("postgres", "-c", "timezone=Europe/Prague");
 
 	private static JdbcTemplate jdbcTemplate;
 	private static ExIndexerConsensusCoreService consensusService;
@@ -157,7 +169,7 @@ class ExplorerValidatorPostgresIntegrationTest {
 				Address.NATIVE_TOKEN.toArray(),
 				JSON.writeValueAsString(previous));
 
-		ReflectionTestUtils.invokeMethod(revertService, "revertBalances", blockHash.toArray());
+		ReflectionTestUtils.invokeMethod(revertService, "revertBalances", blockHash.toArray(), 20L);
 
 		Map<String, Object> row = jdbcTemplate.queryForMap("""
 				SELECT balance, locked_mining_reward, pending_mining_reward_cancellation,
@@ -171,6 +183,81 @@ class ExplorerValidatorPostgresIntegrationTest {
 		assertThat(((Number) row.get("updated_at_block_height")).longValue()).isEqualTo(11);
 		assertThat(((Number) row.get("account_balance_version")).intValue())
 				.isEqualTo(AccountBalanceStateVersion.V2.getCode());
+	}
+
+	@Test
+	void tokenRevertRestoresEveryMutableFieldIncludingNullMetadata() throws Exception {
+		Hash blockHash = hash(21);
+		Hash branchUpdateTx = hash(22);
+		Hash previousUpdateTx = hash(23);
+		jdbcTemplate.update("""
+				INSERT INTO explorer_token
+				(address, name, smallest_unit_name, number_of_decimals, website_url, logo_url,
+				 max_supply, total_supply, origin_tx_hash, updated_by_tx_hash,
+				 created_at_block_height, created_at_timestamp, updated_at_block_height,
+				 updated_at_timestamp, user_burnable, token_state_version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				TOKEN.toArray(), "Branch Name", "BRANCH", 8, "https://branch.example", "branch-logo",
+				1_000, 90, ORIGIN_TX.toArray(), branchUpdateTx.toArray(),
+				1, Timestamp.from(CREATED_AT), 21, Timestamp.from(CREATED_AT.plusSeconds(21)),
+				true, TokenStateVersion.V1.getCode());
+		TokenRevertDto previous = TokenRevertDto.from(
+				Wei.valueOf(70), 11, CREATED_AT.plusSeconds(11), "Canonical Name", "CAN",
+				null, null, previousUpdateTx, TokenStateVersion.V1);
+		insertRevertLog(blockHash, 21, EntityType.TOKEN, TOKEN.toArray(), null, previous);
+
+		ReflectionTestUtils.invokeMethod(revertService, "revertTokens", blockHash.toArray(), 21L);
+
+		Map<String, Object> row = jdbcTemplate.queryForMap(
+				"SELECT * FROM explorer_token WHERE address = ?", TOKEN.toArray());
+		assertThat(row.get("name")).isEqualTo("Canonical Name");
+		assertThat(row.get("smallest_unit_name")).isEqualTo("CAN");
+		assertThat(row.get("logo_url")).isNull();
+		assertThat(row.get("website_url")).isNull();
+		assertThat(row.get("updated_by_tx_hash")).isEqualTo(previousUpdateTx.toArray());
+		assertThat((Number) row.get("total_supply")).hasToString("70");
+		assertThat(((Number) row.get("updated_at_block_height")).longValue()).isEqualTo(11);
+		assertTimestamp("explorer_token", "address", TOKEN.toArray(), "updated_at_timestamp",
+				CREATED_AT.plusSeconds(11));
+	}
+
+	@Test
+	void bipRevertRestoresExecutionStateAndTimestampInNonUtcDatabase() throws Exception {
+		Hash blockHash = hash(31);
+		Hash branchUpdateTx = hash(32);
+		Hash previousUpdateTx = hash(33);
+		jdbcTemplate.update("""
+				INSERT INTO explorer_bip_state
+				(bip_hash, bip_state_version, status, is_action_executed, type,
+				 number_of_required_votes, approvers, disapprovers, expiration_timestamp,
+				 executed_at_timestamp, origin_tx_hash, updated_by_tx_hash,
+				 created_at_block_height, created_at_timestamp, updated_at_block_height,
+				 updated_at_timestamp)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				""",
+				BIP_HASH.toArray(), BipStateVersion.V1.getCode(), BipStatus.APPROVED.getCode(), true,
+				BipType.TOKEN_BURN.getCode(), 1, Bytes.EMPTY.toArray(), Bytes.EMPTY.toArray(),
+				Timestamp.from(CREATED_AT.plusSeconds(3_600)), Timestamp.from(CREATED_AT.plusSeconds(20)),
+				ORIGIN_TX.toArray(), branchUpdateTx.toArray(), 1, Timestamp.from(CREATED_AT),
+				31, Timestamp.from(CREATED_AT.plusSeconds(31)));
+		BipRevertDto previous = new BipRevertDto(
+				BipStatus.PENDING.getCode(), 11, CREATED_AT.plusSeconds(11),
+				previousUpdateTx.toHexString(), Bytes.EMPTY.toHexString(), Bytes.EMPTY.toHexString(),
+				false, null, BipStateVersion.V1.getCode());
+		insertRevertLog(blockHash, 31, EntityType.BIP, BIP_HASH.toArray(), null, previous);
+
+		ReflectionTestUtils.invokeMethod(revertService, "revertBips", blockHash.toArray(), 31L);
+
+		Map<String, Object> row = jdbcTemplate.queryForMap(
+				"SELECT * FROM explorer_bip_state WHERE bip_hash = ?", BIP_HASH.toArray());
+		assertThat(((Number) row.get("status")).intValue()).isEqualTo(BipStatus.PENDING.getCode());
+		assertThat(row.get("is_action_executed")).isEqualTo(false);
+		assertThat(row.get("executed_at_timestamp")).isNull();
+		assertThat(row.get("updated_by_tx_hash")).isEqualTo(previousUpdateTx.toArray());
+		assertThat(((Number) row.get("updated_at_block_height")).longValue()).isEqualTo(11);
+		assertTimestamp("explorer_bip_state", "bip_hash", BIP_HASH.toArray(), "updated_at_timestamp",
+				CREATED_AT.plusSeconds(11));
 	}
 
 	private void applyBranchAndRecordLegacySnapshot(
@@ -191,7 +278,33 @@ class ExplorerValidatorPostgresIntegrationTest {
 	}
 
 	private void revertValidatorUpdate(Hash blockHash) {
-		ReflectionTestUtils.invokeMethod(revertService, "revertValidators", blockHash.toArray());
+		ReflectionTestUtils.invokeMethod(revertService, "revertValidators", blockHash.toArray(), 10L);
+	}
+
+	private void insertRevertLog(
+			Hash blockHash, long blockHeight, EntityType entityType, byte[] refKey1, byte[] refKey2, Object previous)
+			throws Exception {
+		jdbcTemplate.update("""
+				INSERT INTO explorer_revert_log
+				(block_height, block_hash, entity_type, operation_type, ref_key_1, ref_key_2, old_value)
+				VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
+				""",
+				blockHeight,
+				blockHash.toArray(),
+				entityType.getCode(),
+				OperationType.UPDATE.getCode(),
+				refKey1,
+				refKey2,
+				JSON.writeValueAsString(previous));
+	}
+
+	private void assertTimestamp(
+			String table, String keyColumn, byte[] key, String timestampColumn, Instant expected) {
+		BigDecimal epoch = jdbcTemplate.queryForObject(
+				"SELECT EXTRACT(EPOCH FROM " + timestampColumn + ") FROM " + table + " WHERE " + keyColumn + " = ?",
+				BigDecimal.class,
+				key);
+		assertThat(epoch).isEqualByComparingTo(BigDecimal.valueOf(expected.getEpochSecond()));
 	}
 
 	private void assertLegacyRow() {

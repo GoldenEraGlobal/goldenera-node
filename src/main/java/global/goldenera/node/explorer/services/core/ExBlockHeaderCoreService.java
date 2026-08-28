@@ -23,6 +23,7 @@
  */
 package global.goldenera.node.explorer.services.core;
 
+import java.math.BigInteger;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -142,10 +143,10 @@ public class ExBlockHeaderCoreService {
         Specification<ExBlockHeader> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
             if (coinbase != null) {
-                predicates.add(cb.equal(root.get("coinbase"), coinbase.toArray()));
+                predicates.add(cb.equal(root.get("coinbase"), coinbase));
             }
             if (identity != null) {
-                predicates.add(cb.equal(root.get("identity"), identity.toArray()));
+                predicates.add(cb.equal(root.get("identity"), identity));
             }
             if (timestampFrom != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("timestamp"), timestampFrom));
@@ -175,13 +176,13 @@ public class ExBlockHeaderCoreService {
     }
 
     @Transactional(readOnly = true)
-    public long getCumulativeDifficultyByHash(@NonNull Hash hash) {
+    public BigInteger getCumulativeDifficultyByHash(@NonNull Hash hash) {
         return getCumulativeDifficultyByHashOptional(hash)
                 .orElseThrow(() -> new GENotFoundException("Block with hash not found"));
     }
 
     @Transactional(readOnly = true)
-    public Optional<Long> getCumulativeDifficultyByHashOptional(@NonNull Hash hash) {
+    public Optional<BigInteger> getCumulativeDifficultyByHashOptional(@NonNull Hash hash) {
         return exBlockHeaderRepository.findCumulativeDifficultyByHash(hash.toArray());
     }
 
@@ -199,10 +200,10 @@ public class ExBlockHeaderCoreService {
             predicates.add(cb.between(root.get("height"), fromHeight, toHeight));
 
             if (coinbase != null) {
-                predicates.add(cb.equal(root.get("coinbase"), coinbase.toArray()));
+                predicates.add(cb.equal(root.get("coinbase"), coinbase));
             }
             if (identity != null) {
-                predicates.add(cb.equal(root.get("identity"), identity.toArray()));
+                predicates.add(cb.equal(root.get("identity"), identity));
             }
             if (minNumberOfTxs != null) {
                 predicates.add(cb.greaterThanOrEqualTo(root.get("numberOfTxs"), minNumberOfTxs));

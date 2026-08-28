@@ -87,7 +87,7 @@ public class ExValidatorCoreService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         return validatorRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+                PaginationUtil.stableSort(direction, "createdAtTimestamp", "address")));
     }
 
     /**
@@ -129,12 +129,12 @@ public class ExValidatorCoreService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         return validatorRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+                PaginationUtil.stableSort(direction, "createdAtTimestamp", "address")));
     }
 
     @Transactional(readOnly = true)
     public List<ExValidator> getAll() {
-        return validatorRepository.findAll(Sort.by("createdAtTimestamp"));
+        return validatorRepository.findAll(Sort.by("createdAtTimestamp", "address"));
     }
 
     @Transactional(readOnly = true)

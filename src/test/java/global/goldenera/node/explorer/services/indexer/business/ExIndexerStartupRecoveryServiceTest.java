@@ -21,31 +21,34 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.explorer.api.v1.common;
+package global.goldenera.node.explorer.services.indexer.business;
 
-import java.time.Instant;
-import java.util.Set;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import org.springframework.data.domain.Sort;
+import java.util.Optional;
 
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
+import org.junit.jupiter.api.Test;
 
-/**
- * Bulk request DTO for validator page queries.
- * Allows filtering by multiple addresses.
- */
-public record BulkValidatorPageRequestV1(
-        int pageNumber,
-        int pageSize,
-        Sort.Direction direction,
-        Set<Address> addresses,
-        Hash originTxHash,
-        Long createdAtBlockHeightFrom,
-			Long createdAtBlockHeightTo,
-			Instant createdAtTimestampFrom,
-			Instant createdAtTimestampTo) {
-	public BulkValidatorPageRequestV1 {
-		BulkPageRequestValidator.validate(pageNumber, pageSize, addresses);
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.explorer.repositories.ExBlockHeaderRepository;
+import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
+
+class ExIndexerStartupRecoveryServiceTest {
+
+	@Test
+	void emptyBlockTableClearsStaleStatusBeforeGenesisCatchUp() {
+		ExBlockHeaderRepository headers = mock(ExBlockHeaderRepository.class);
+		when(headers.findLatest()).thenReturn(Optional.empty());
+		ExIndexerStatusCoreService status = mock(ExIndexerStatusCoreService.class);
+		ExIndexerStartupRecoveryService service = new ExIndexerStartupRecoveryService(
+				headers, status, mock(ExIndexerRevertService.class), mock(ChainQuery.class));
+
+		long height = service.reconcileCanonicalHead();
+
+		assertThat(height).isEqualTo(-1L);
+		verify(status).clearStatus();
 	}
 }

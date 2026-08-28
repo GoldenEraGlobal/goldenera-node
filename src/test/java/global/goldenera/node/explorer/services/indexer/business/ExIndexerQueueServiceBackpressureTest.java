@@ -50,8 +50,10 @@ class ExIndexerQueueServiceBackpressureTest {
 		SimpleMeterRegistry registry = new SimpleMeterRegistry();
 		ExIndexerQueueService queue = new ExIndexerQueueService(properties, readiness, registry);
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
-		assertThat(queue.pushConnectBatch(Collections.nCopies(ExIndexerQueueService.MAX_QUEUE_CAPACITY, event)))
-				.isEqualTo(ExIndexerQueueService.BatchAdmission.ENQUEUED);
+		for (int index = 0; index < ExIndexerQueueService.MAX_QUEUE_CAPACITY; index++) {
+			assertThat(queue.pushConnectBatch(List.of(event)))
+					.isEqualTo(ExIndexerQueueService.BatchAdmission.ENQUEUED);
+		}
 
 		long started = System.nanoTime();
 		ExIndexerQueueService.BatchAdmission admission = queue.pushConnectBatch(List.of(event));
@@ -74,7 +76,9 @@ class ExIndexerQueueServiceBackpressureTest {
 		ExIndexerQueueService queue = new ExIndexerQueueService(
 				properties, readiness, new SimpleMeterRegistry());
 		BlockConnectedEvent event = mock(BlockConnectedEvent.class);
-		queue.pushConnectBatch(Collections.nCopies(ExIndexerQueueService.MAX_QUEUE_CAPACITY, event));
+		for (int index = 0; index < ExIndexerQueueService.MAX_QUEUE_CAPACITY; index++) {
+			queue.pushConnectBatch(List.of(event));
+		}
 
 		long started = System.nanoTime();
 		ExIndexerQueueService.BatchAdmission admission = queue.pushConnect(event);
@@ -100,8 +104,9 @@ class ExIndexerQueueServiceBackpressureTest {
 		assertThat(queue.pushConnectBatch(List.of(first, second, third)))
 				.isEqualTo(ExIndexerQueueService.BatchAdmission.ENQUEUED);
 
-		assertThat(queue.take().getEvent()).isSameAs(first);
-		assertThat(queue.take().getEvent()).isSameAs(second);
-		assertThat(queue.take().getEvent()).isSameAs(third);
+		ExIndexerTask task = queue.take();
+		assertThat(task).isInstanceOf(ExIndexerTask.ConnectBatchTask.class);
+		assertThat(((ExIndexerTask.ConnectBatchTask) task).getEvents())
+				.containsExactly(first, second, third);
 	}
 }

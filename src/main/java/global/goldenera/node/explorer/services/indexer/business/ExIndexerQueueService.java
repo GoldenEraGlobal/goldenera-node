@@ -116,10 +116,10 @@ public class ExIndexerQueueService {
 		}
 		lock.lock();
 		try {
-			if (events.size() > MAX_QUEUE_CAPACITY || queue.size() + events.size() > MAX_QUEUE_CAPACITY) {
+			if (queue.size() >= MAX_QUEUE_CAPACITY) {
 				return overflowToRebuild(events.size(), "sync batch");
 			}
-			events.forEach(event -> queue.addLast(new ExIndexerTask.ConnectTask(event)));
+			queue.addLast(new ExIndexerTask.ConnectBatchTask(events));
 			catchUpLagBlocks.addAndGet(events.size());
 			notEmpty.signalAll();
 			return BatchAdmission.ENQUEUED;
@@ -194,7 +194,11 @@ public class ExIndexerQueueService {
 	}
 
 	public void markTaskProcessed() {
-		catchUpLagBlocks.updateAndGet(current -> Math.max(0L, current - 1L));
+		markTasksProcessed(1);
+	}
+
+	public void markTasksProcessed(int processedBlocks) {
+		catchUpLagBlocks.updateAndGet(current -> Math.max(0L, current - processedBlocks));
 	}
 
 	public void markRebuildComplete() {

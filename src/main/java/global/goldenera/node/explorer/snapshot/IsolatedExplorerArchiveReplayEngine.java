@@ -233,15 +233,8 @@ public final class IsolatedExplorerArchiveReplayEngine implements ExplorerArchiv
 	}
 
 	private StoredBlock canonical(long height) {
-		StoredBlock block = chainQuery.getStoredBlockByHeight(height)
+		return chainQuery.getStoredBlockByHeight(height)
 				.orElseThrow(() -> new ExplorerSnapshotException("Missing canonical block " + height));
-		Hash indexed = chainQuery.getBlockHashByHeight(height)
-				.orElseThrow(() -> new ExplorerSnapshotException("Missing canonical height index " + height));
-		if (!indexed.equals(block.getHash())) {
-			throw new ExplorerCanonicalArchiveChangedException(
-					"Canonical block changed during explorer rebuild at " + height);
-		}
-		return block;
 	}
 
 	private BlockConnectedEvent executeGenesis(WorldState state, StoredBlock stored) {

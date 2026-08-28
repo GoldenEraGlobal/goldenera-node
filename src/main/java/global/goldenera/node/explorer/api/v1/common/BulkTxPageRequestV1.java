@@ -48,7 +48,11 @@ public record BulkTxPageRequestV1(
         TxType type,
         Hash blockHash,
         Set<Address> senders,
-        Set<Address> recipients,
-        Set<Address> tokenAddresses,
-        Hash referenceHash) {
+			Set<Address> recipients,
+			Set<Address> tokenAddresses,
+			Hash referenceHash) {
+	public BulkTxPageRequestV1 {
+		BulkPageRequestValidator.validate(
+				pageNumber, pageSize, addresses, senders, recipients, tokenAddresses);
+	}
 }

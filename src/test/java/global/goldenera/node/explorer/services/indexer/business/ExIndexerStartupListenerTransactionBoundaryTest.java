@@ -59,16 +59,16 @@ class ExIndexerStartupListenerTransactionBoundaryTest {
 		try (AnnotationConfigApplicationContext context =
 				new AnnotationConfigApplicationContext(TestConfiguration.class)) {
 			ExIndexerMempoolService mempoolWorker = context.getBean(ExIndexerMempoolService.class);
-			ExIndexerSyncService syncWorker = context.getBean(ExIndexerSyncService.class);
+			ExIndexerStartupRecoveryService recoveryWorker = context.getBean(ExIndexerStartupRecoveryService.class);
 			assertThat(AopUtils.isAopProxy(mempoolWorker)).isTrue();
-			assertThat(AopUtils.isAopProxy(syncWorker)).isTrue();
+			assertThat(AopUtils.isAopProxy(recoveryWorker)).isTrue();
 
 			context.publishEvent(new CoreDbReadyEvent(this));
 
 			assertThatThrownBy(mempoolWorker::resetOnCoreReady)
 					.isInstanceOf(CannotCreateTransactionException.class)
 					.hasMessageContaining("Could not open JDBC Connection");
-			assertThatThrownBy(syncWorker::syncExplorerOnStartup)
+			assertThatThrownBy(recoveryWorker::reconcileCanonicalHead)
 					.isInstanceOf(CannotCreateTransactionException.class)
 					.hasMessageContaining("Could not open JDBC Connection");
 		}
@@ -120,15 +120,33 @@ class ExIndexerStartupListenerTransactionBoundaryTest {
 		}
 
 		@Bean
-		ExIndexerSyncService syncWorker() {
-			return new ExIndexerSyncService(
+		ExIndexerStartupRecoveryService recoveryWorker(ChainQuery chainQuery) {
+			return new ExIndexerStartupRecoveryService(
 					mock(ExBlockHeaderRepository.class),
 					mock(ExIndexerStatusCoreService.class),
-					mock(ExIndexerQueueService.class),
 					mock(ExIndexerRevertService.class),
-					mock(global.goldenera.node.explorer.snapshot.ExplorerArchiveRebuildTrigger.class),
-					mock(ChainQuery.class),
-					mock(ExIndexerEventReconstructionService.class));
+					chainQuery);
+		}
+
+		@Bean
+		ChainQuery chainQuery() {
+			return mock(ChainQuery.class);
+		}
+
+		@Bean
+		ExIndexerSyncService syncWorker(
+				ExIndexerStartupRecoveryService recoveryWorker,
+				ChainQuery chainQuery,
+				ExplorerRuntimeReadiness readiness,
+				MeterRegistry meterRegistry) {
+			return new ExIndexerSyncService(
+					recoveryWorker,
+					chainQuery,
+					mock(ExIndexerEventReconstructionService.class),
+					mock(ExIndexerService.class),
+					mock(ExplorerIndexingExecutionGate.class),
+					readiness,
+					meterRegistry);
 		}
 
 		@Bean

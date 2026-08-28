@@ -120,7 +120,7 @@ public class ExMemTransferCoreService {
 			return cb.and(predicates.toArray(new Predicate[0]));
 		};
 		PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-				direction != null ? Sort.by(direction, "addedAt") : Sort.by("addedAt"));
+				PaginationUtil.stableSort(direction, "addedAt", "hash"));
 		return exMemTransferRepository.findAll(spec, pageable);
 	}
 
@@ -179,7 +179,7 @@ public class ExMemTransferCoreService {
 			return cb.and(predicates.toArray(new Predicate[0]));
 		};
 		PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-				direction != null ? Sort.by(direction, "addedAt") : Sort.by("addedAt"));
+				PaginationUtil.stableSort(direction, "addedAt", "hash"));
 		return exMemTransferRepository.findAll(spec, pageable);
 	}
 

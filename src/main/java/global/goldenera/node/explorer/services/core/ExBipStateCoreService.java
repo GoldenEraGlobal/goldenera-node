@@ -162,9 +162,7 @@ public class ExBipStateCoreService {
 			return cb.and(predicates.toArray(new Predicate[0]));
 		};
 
-		return exBipStateRepository
-				.findAll(spec, PageRequest.of(pageNumber, pageSize,
-						direction != null ? Sort.by(direction, "expirationTimestamp")
-								: Sort.by("expirationTimestamp")));
+		return exBipStateRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
+				PaginationUtil.stableSort(direction, "expirationTimestamp", "bipHash")));
 	}
 }

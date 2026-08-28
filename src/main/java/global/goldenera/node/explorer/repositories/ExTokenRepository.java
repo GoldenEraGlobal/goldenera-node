@@ -41,7 +41,14 @@ public interface ExTokenRepository
 		ListPagingAndSortingRepository<ExToken, ExToken.ExTokenPK>,
 		JpaSpecificationExecutor<ExToken> {
 
-	@Query(value = "SELECT * FROM explorer_token WHERE name ILIKE '%' || :query || '%' OR smallest_unit_name ILIKE '%' || :query || '%'", nativeQuery = true)
-	List<ExToken> searchTokens(@Param("query") String query);
+	@Query(value = """
+			SELECT *
+			FROM explorer_token
+			WHERE name ILIKE ('%' || :query || '%') ESCAPE '\\'
+			OR smallest_unit_name ILIKE ('%' || :query || '%') ESCAPE '\\'
+			ORDER BY name, address
+			LIMIT :limit
+			""", nativeQuery = true)
+	List<ExToken> searchTokens(@Param("query") String query, @Param("limit") int limit);
 
 }

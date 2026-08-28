@@ -21,31 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.explorer.api.v1.common;
+package global.goldenera.node.explorer.storage.chainidentity;
 
-import java.time.Instant;
-import java.util.Set;
+@FunctionalInterface
+public interface ExplorerReadinessListener {
 
-import org.springframework.data.domain.Sort;
-
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.datatypes.Hash;
-
-/**
- * Bulk request DTO for validator page queries.
- * Allows filtering by multiple addresses.
- */
-public record BulkValidatorPageRequestV1(
-        int pageNumber,
-        int pageSize,
-        Sort.Direction direction,
-        Set<Address> addresses,
-        Hash originTxHash,
-        Long createdAtBlockHeightFrom,
-			Long createdAtBlockHeightTo,
-			Instant createdAtTimestampFrom,
-			Instant createdAtTimestampTo) {
-	public BulkValidatorPageRequestV1 {
-		BulkPageRequestValidator.validate(pageNumber, pageSize, addresses);
-	}
+	void onReadinessChanged(ExplorerReadinessStatus status);
 }
