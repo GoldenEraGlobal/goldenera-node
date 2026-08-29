@@ -76,12 +76,12 @@ class ValidatorMiningPolicyServiceTest {
 		WorldState atBoundary = parent(limited(4_000), windowWith(VALIDATOR, 39), 100);
 		WorldState aboveBoundary = parent(limited(4_000), windowWith(VALIDATOR, 40), 100);
 
-		assertThatCode(() -> service.validateCandidate(atBoundary, VALIDATOR, 731_543))
+		assertThatCode(() -> service.validateCandidate(atBoundary, VALIDATOR, 754_036))
 				.doesNotThrowAnyException();
-		assertThatThrownBy(() -> service.validateCandidate(aboveBoundary, VALIDATOR, 731_544))
+		assertThatThrownBy(() -> service.validateCandidate(aboveBoundary, VALIDATOR, 754_037))
 				.isInstanceOf(IllegalArgumentException.class)
 				.hasMessageContaining("candidate count 41 exceeds maximum 40");
-		assertThat(service.isCandidateEligible(aboveBoundary, 731_544, VALIDATOR)).isFalse();
+		assertThat(service.isCandidateEligible(aboveBoundary, 754_037, VALIDATOR)).isFalse();
 	}
 
 	@Test

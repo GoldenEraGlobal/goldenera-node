@@ -30,6 +30,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookCreateInDtoV1;
@@ -51,7 +53,6 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @Slf4j
 public class WebhookService {
@@ -59,6 +60,23 @@ public class WebhookService {
 	private static final int DTO_VERSION = 1;
 	WebhookCoreService webhookCoreService;
 	GeneralProperties generalProperties;
+	ObjectProvider<UniversalWebhookActivationService> activationService;
+
+	@Autowired
+	public WebhookService(
+			WebhookCoreService webhookCoreService,
+			GeneralProperties generalProperties,
+			ObjectProvider<UniversalWebhookActivationService> activationService) {
+		this.webhookCoreService = webhookCoreService;
+		this.generalProperties = generalProperties;
+		this.activationService = activationService;
+	}
+
+	WebhookService(WebhookCoreService webhookCoreService, GeneralProperties generalProperties) {
+		this.webhookCoreService = webhookCoreService;
+		this.generalProperties = generalProperties;
+		this.activationService = null;
+	}
 
 	@Transactional(rollbackFor = Exception.class)
 	public CreatedWebhook createWebhook(
@@ -180,7 +198,12 @@ public class WebhookService {
 			throw new GEFailedException("You do not have permission to update the enabled status of this webhook");
 		}
 		webhook.setEnabled(enabled);
-		return webhookCoreService.update(webhook);
+		Webhook updated = webhookCoreService.update(webhook);
+		UniversalWebhookActivationService activator = activationService == null ? null : activationService.getIfAvailable();
+		if (enabled && activator != null) {
+			activator.resetAfterReEnable(updated);
+		}
+		return updated;
 	}
 
 	private void requirePublicWebhook(Webhook webhook) {

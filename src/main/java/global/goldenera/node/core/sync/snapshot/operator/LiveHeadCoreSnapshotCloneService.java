@@ -57,6 +57,8 @@ import global.goldenera.node.core.storage.blockchain.BlockchainRocksDbFactory;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository.UndoAction;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository.UndoType;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStorageLayout;
+import global.goldenera.node.core.storage.blockchain.mempool.MempoolStorageLayout;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.blockchain.serialization.StoredBlockDecoder;
 import global.goldenera.node.core.storage.chainidentity.RocksChainIdentityStore;
@@ -132,6 +134,7 @@ public final class LiveHeadCoreSnapshotCloneService {
 			if (!selected.equals(rewound)) {
 				throw new IllegalStateException("Isolated RocksDB clone did not reach the selected snapshot anchor");
 			}
+			clearOperationalState(cloneDatabase, cloneFamilies);
 			if (!selected.stateRoot().equals(MerkleTrie.EMPTY_TRIE_NODE_HASH)
 					&& cloneDatabase.get(cloneFamilies.stateTrie(), selected.stateRoot().toArray()) == null) {
 				throw new IllegalStateException("RocksDB checkpoint is missing its captured state root");
@@ -240,6 +243,15 @@ public final class LiveHeadCoreSnapshotCloneService {
 		try (WriteOptions options = new WriteOptions().setSync(true); WriteBatch metadata = new WriteBatch()) {
 			metadata.put(families.metadata(), RocksDbColumnFamilies.KEY_LATEST_BLOCK_HASH, selected.hash().toArray());
 			database.write(options, metadata);
+		}
+	}
+
+	private void clearOperationalState(
+			RocksDB database, RocksDbColumnFamilies families) throws RocksDBException {
+		try (WriteOptions options = new WriteOptions().setSync(true); WriteBatch batch = new WriteBatch()) {
+			LifecycleJournalStorageLayout.clearForHistoricalSnapshot(batch, families);
+			MempoolStorageLayout.clearForHistoricalSnapshot(batch, families);
+			database.write(options, batch);
 		}
 	}
 

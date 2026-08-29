@@ -34,7 +34,7 @@ import global.goldenera.node.shared.config.WebhookHttpConfig;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
 		prefix = "ge.general",
-		name = "webhook-enable",
+		name = { "postgresql-enable", "webhook-enable" },
 		havingValue = "true",
 		matchIfMissing = true)
 @ComponentScan(basePackages = {

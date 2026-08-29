@@ -150,7 +150,7 @@ class P2PChainIdentityPolicyTest {
 	}
 
 	@ParameterizedTest
-	@CsvSource({ "MAINNET,731503", "TESTNET,716824" })
+	@CsvSource({ "MAINNET,753996", "TESTNET,716824" })
 	void productionRequiresMiningEconomicsCapabilityExactlyAtEachNetworkActivation(
 			Network network, long activationHeight) {
 		initializeProductionNetwork(network);
@@ -186,11 +186,11 @@ class P2PChainIdentityPolicyTest {
 				ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty());
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		StoredBlock localHead = mock(StoredBlock.class);
-		when(localHead.getHeight()).thenReturn(731_503L);
+		when(localHead.getHeight()).thenReturn(753_996L);
 		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(localHead);
 
 		assertThatThrownBy(() -> policy(runtime, identity, chainQuery)
-				.validate(status(NOT_ALLOWLISTED, List.of(), 731_502)))
+				.validate(status(NOT_ALLOWLISTED, List.of(), 753_995)))
 				.hasMessageContaining("mining-economics-v1");
 	}
 

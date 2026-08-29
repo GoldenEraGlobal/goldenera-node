@@ -23,94 +23,58 @@
  */
 package global.goldenera.node.explorer.services.webhook;
 
-import static global.goldenera.node.core.config.CoreAsyncConfig.WEBHOOK_EVENT_EXECUTOR;
-import static lombok.AccessLevel.PRIVATE;
-
-import java.util.concurrent.Executor;
-
-import org.springframework.beans.factory.ObjectFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
 import global.goldenera.cryptoj.common.Tx;
-import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.explorer.events.ExBlockConnectedEvent;
 import global.goldenera.node.explorer.events.ExBlockReorgEvent;
-import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
-import global.goldenera.node.shared.services.webhook.WebhookDispatchService;
-import lombok.experimental.FieldDefaults;
-import lombok.extern.slf4j.Slf4j;
+import global.goldenera.node.shared.services.webhook.UniversalWebhookEventSink;
+import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStore;
+import lombok.RequiredArgsConstructor;
 
-@Slf4j
 @Service
+@RequiredArgsConstructor
 @ConditionalOnProperty(
 		prefix = "ge.general",
-		name = "webhook-enable",
+		name = { "postgresql-enable", "webhook-enable" },
 		havingValue = "true",
 		matchIfMissing = true)
-@FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExplorerWebhookListenerService {
+	private final UniversalWebhookEventSink webhookEventSink;
+	private final DurableUniversalWebhookStore durableStore;
 
-	WebhookDispatchService webhookDispatchService;
-	ExplorerRuntimeReadiness explorerReadiness;
-	ObjectFactory<Executor> webhookEventExecutor;
-
-	public ExplorerWebhookListenerService(
-			WebhookDispatchService webhookDispatchService,
-			ExplorerRuntimeReadiness explorerReadiness,
-			@Qualifier(WEBHOOK_EVENT_EXECUTOR) ObjectFactory<Executor> webhookEventExecutor) {
-		this.webhookDispatchService = webhookDispatchService;
-		this.explorerReadiness = explorerReadiness;
-		this.webhookEventExecutor = webhookEventExecutor;
-	}
-
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
 	public void handleExBlockConnected(ExBlockConnectedEvent event) {
-		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+		boolean historicalCatchup = event.getConnectedSource() == ConnectedSource.SYNC;
+		boolean eligible = historicalCatchup
+				? durableStore.hasEligibleExplorerRules(event.getBlock().getHeight())
+				: durableStore.hasEligibleRules(WebhookType.EXPLORER, null, null, null);
+		if (!eligible) {
 			return;
 		}
-		submitWebhookEvent("explorer block connected", () -> {
-			log.debug("Processing ExBlockConnectedEvent: {}", event.getBlock().getHash());
-			webhookDispatchService.processNewBlockEvent(
-					event.getBlock(), event.getEvents(), WebhookType.EXPLORER);
-			int index = 0;
-			for (Tx tx : event.getBlock().getTxs()) {
-				webhookDispatchService.processAddressActivityEvent(
-						event.getBlock(), tx, WebhookTxStatus.CONFIRMED, index++, WebhookType.EXPLORER);
-			}
-		});
+		webhookEventSink.processNewBlockEvent(
+				event.getBlock(), event.getEvents(), WebhookType.EXPLORER, historicalCatchup);
+		int index = 0;
+		for (Tx tx : event.getBlock().getTxs()) {
+			webhookEventSink.processAddressActivityEvent(
+					event.getBlock(), tx, WebhookTxStatus.CONFIRMED, index++, WebhookType.EXPLORER,
+					historicalCatchup);
+		}
 	}
 
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	@TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
 	public void handleExBlockReorg(ExBlockReorgEvent event) {
-		submitWebhookEvent("explorer block reorg", () -> {
-			log.debug("Processing ExBlockReorgEvent: old=#{} -> new=#{}",
-					event.getOldHeight(), event.getNewHeight());
-			webhookDispatchService.processReorgEvent(
-					event.getOldHeight(), event.getOldHash(),
-					event.getNewHeight(), event.getNewHash(),
-					WebhookType.EXPLORER);
-		});
-	}
-
-	private void submitWebhookEvent(String eventType, Runnable action) {
-		if (!explorerReadiness.isReady()) {
+		if (!durableStore.hasEligibleRules(WebhookType.EXPLORER, null, null, null)) {
 			return;
 		}
-		webhookEventExecutor.getObject().execute(() -> {
-			if (!explorerReadiness.isReady()) {
-				return;
-			}
-			try {
-				action.run();
-			} catch (RuntimeException exception) {
-				log.error("Failed to process {} webhook event", eventType, exception);
-			}
-		});
+		webhookEventSink.processReorgEvent(
+				event.getOldHeight(), event.getOldHash(), event.getNewHeight(), event.getNewHash(),
+				WebhookType.EXPLORER);
 	}
 }

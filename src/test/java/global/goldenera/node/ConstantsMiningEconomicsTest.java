@@ -46,7 +46,7 @@ class ConstantsMiningEconomicsTest {
 	@Test
 	void mainnetActivatesFiveDaysAfterReferenceBlock() {
 		assertThat(Constants.getConsensusSettings(Network.MAINNET, "prod").forkActivationBlocks())
-				.containsEntry(ForkName.MINING_ECONOMICS, 731_503L);
+				.containsEntry(ForkName.MINING_ECONOMICS, 753_996L);
 	}
 
 	@Test

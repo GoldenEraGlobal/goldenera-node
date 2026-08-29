@@ -99,10 +99,10 @@ class BlockValidatorMiningPolicyTest {
 		}
 
 		when(parent.getHash()).thenReturn(parentHash);
-		when(parent.getHeight()).thenReturn(731_503L);
+		when(parent.getHeight()).thenReturn(753_996L);
 		when(parent.getTimestamp()).thenReturn(TIME);
 		when(child.getPreviousHash()).thenReturn(parentHash);
-		when(child.getHeight()).thenReturn(731_504L);
+		when(child.getHeight()).thenReturn(753_997L);
 		when(child.getTimestamp()).thenReturn(TIME.plusSeconds(1));
 		when(child.getDifficulty()).thenReturn(BigInteger.ONE);
 		when(child.getIdentity()).thenReturn(IDENTITY);

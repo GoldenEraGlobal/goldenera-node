@@ -29,9 +29,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -88,6 +89,7 @@ public class ExCommonCoreService {
     ExAuthorityRepository authorityRepository;
     ExMemTransferRepository memTransferRepository;
 	Executor searchExecutor;
+	ExplorerSearchQueryPlan searchQueryPlan;
 	long searchTimeoutMillis;
 
 		@Autowired
@@ -100,10 +102,11 @@ public class ExCommonCoreService {
 			ExValidatorRepository validatorRepository,
 			ExAuthorityRepository authorityRepository,
 			ExMemTransferRepository memTransferRepository,
+			ExplorerSearchQueryPlan searchQueryPlan,
 			@Qualifier(ExplorerAsyncConfig.EXPLORER_SEARCH_EXECUTOR) Executor searchExecutor) {
 		this(blockHeaderRepository, txRepository, accountBalanceRepository, tokenRepository,
 				addressAliasRepository, validatorRepository, authorityRepository, memTransferRepository,
-				searchExecutor, SEARCH_TIMEOUT_MILLIS);
+				searchQueryPlan, searchExecutor, SEARCH_TIMEOUT_MILLIS);
 	}
 
 	ExCommonCoreService(
@@ -115,6 +118,7 @@ public class ExCommonCoreService {
 			ExValidatorRepository validatorRepository,
 			ExAuthorityRepository authorityRepository,
 			ExMemTransferRepository memTransferRepository,
+			ExplorerSearchQueryPlan searchQueryPlan,
 			Executor searchExecutor,
 			long searchTimeoutMillis) {
 		this.blockHeaderRepository = blockHeaderRepository;
@@ -125,6 +129,7 @@ public class ExCommonCoreService {
 		this.validatorRepository = validatorRepository;
 		this.authorityRepository = authorityRepository;
 		this.memTransferRepository = memTransferRepository;
+		this.searchQueryPlan = searchQueryPlan;
 		this.searchExecutor = searchExecutor;
 		this.searchTimeoutMillis = searchTimeoutMillis;
 	}
@@ -135,21 +140,15 @@ public class ExCommonCoreService {
             searchIn = Set.of(ExSearchEntityType.values());
         }
 
-        // Futures
-        CompletableFuture<List<ExBlockHeader>> blocksFuture = CompletableFuture
-                .completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExTx>> txsFuture = CompletableFuture.completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExMemTransfer>> mempoolFuture = CompletableFuture
-                .completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExToken>> tokensFuture = CompletableFuture.completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExAccountBalance>> accountsFuture = CompletableFuture
-                .completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExAddressAlias>> aliasesFuture = CompletableFuture
-                .completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExValidator>> validatorsFuture = CompletableFuture
-                .completedFuture(Collections.emptyList());
-        CompletableFuture<List<ExAuthority>> authoritiesFuture = CompletableFuture
-                .completedFuture(Collections.emptyList());
+		List<Future<?>> submitted = new ArrayList<>();
+		Future<List<ExBlockHeader>> blocksFuture = completed(Collections.emptyList());
+		Future<List<ExTx>> txsFuture = completed(Collections.emptyList());
+		Future<List<ExMemTransfer>> mempoolFuture = completed(Collections.emptyList());
+		Future<List<ExToken>> tokensFuture = completed(Collections.emptyList());
+		Future<List<ExAccountBalance>> accountsFuture = completed(Collections.emptyList());
+		Future<List<ExAddressAlias>> aliasesFuture = completed(Collections.emptyList());
+		Future<List<ExValidator>> validatorsFuture = completed(Collections.emptyList());
+		Future<List<ExAuthority>> authoritiesFuture = completed(Collections.emptyList());
 
         boolean isHash32 = isHash32(q);
         boolean isAddress = isAddress(q);
@@ -158,7 +157,7 @@ public class ExCommonCoreService {
 
         // 1. Search Blocks
         if (searchIn.contains(ExSearchEntityType.BLOCK) && (isNumber || isHash32)) {
-            blocksFuture = async(() -> {
+			blocksFuture = async(submitted, () -> {
                 Set<ExBlockHeader> results = new HashSet<>();
                 if (isNumber) {
                     try {
@@ -182,7 +181,7 @@ public class ExCommonCoreService {
 
         // 2. Search Transactions (Confirmed)
         if (searchIn.contains(ExSearchEntityType.TRANSACTION) && isHash32) {
-            txsFuture = async(() -> {
+			txsFuture = async(submitted, () -> {
                 Set<ExTx> results = new HashSet<>();
                 if (isHash32) {
                     try {
@@ -197,7 +196,7 @@ public class ExCommonCoreService {
 
         // 3. Search Mempool
         if (searchIn.contains(ExSearchEntityType.MEMPOOL) && isHash32) {
-            mempoolFuture = async(() -> {
+			mempoolFuture = async(submitted, () -> {
                 Set<ExMemTransfer> results = new HashSet<>();
                 if (isHash32) {
                     try {
@@ -212,7 +211,7 @@ public class ExCommonCoreService {
 
         // 4. Search Tokens
         if (searchIn.contains(ExSearchEntityType.TOKEN)) {
-            tokensFuture = async(() -> {
+			tokensFuture = async(submitted, () -> {
                 Set<ExToken> results = new HashSet<>();
                 if (isAddress) {
                     try {
@@ -231,7 +230,7 @@ public class ExCommonCoreService {
         // 5. Search Accounts & Aliases & Validators & Authorities
         if (searchIn.contains(ExSearchEntityType.ACCOUNT)) {
 			if (isAddress) {
-				accountsFuture = async(() -> {
+				accountsFuture = async(submitted, () -> {
 					Set<ExAccountBalance> results = new HashSet<>();
 					try {
 						Address addr = Address.fromHexString(q);
@@ -243,7 +242,7 @@ public class ExCommonCoreService {
 			}
 
 			if (isAddress || isTextQuery) {
-				aliasesFuture = async(() -> {
+				aliasesFuture = async(submitted, () -> {
 					Set<ExAddressAlias> results = new HashSet<>();
 					if (isAddress) {
 						try {
@@ -261,7 +260,7 @@ public class ExCommonCoreService {
         }
 
         if (searchIn.contains(ExSearchEntityType.VALIDATOR) && isAddress) {
-            validatorsFuture = async(() -> {
+			validatorsFuture = async(submitted, () -> {
                 Set<ExValidator> results = new HashSet<>();
                 if (isAddress) {
                     try {
@@ -275,7 +274,7 @@ public class ExCommonCoreService {
         }
 
         if (searchIn.contains(ExSearchEntityType.AUTHORITY) && isAddress) {
-            authoritiesFuture = async(() -> {
+			authoritiesFuture = async(submitted, () -> {
                 Set<ExAuthority> results = new HashSet<>();
                 if (isAddress) {
                     try {
@@ -288,20 +287,19 @@ public class ExCommonCoreService {
             });
         }
 
-		List<CompletableFuture<?>> futures = List.of(
+		List<Future<?>> futures = List.of(
 				blocksFuture, txsFuture, mempoolFuture, tokensFuture,
 				accountsFuture, aliasesFuture, validatorsFuture, authoritiesFuture);
 		try {
-			CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new))
-					.get(searchTimeoutMillis, TimeUnit.MILLISECONDS);
-            List<ExBlockHeader> blocks = blocksFuture.get();
-            List<ExTx> transactions = txsFuture.get();
-            List<ExMemTransfer> mempoolTransactions = mempoolFuture.get();
-            List<ExToken> tokens = tokensFuture.get();
-            List<ExAccountBalance> accounts = accountsFuture.get();
-            List<ExAddressAlias> aliases = aliasesFuture.get();
-            List<ExValidator> validators = validatorsFuture.get();
-            List<ExAuthority> authorities = authoritiesFuture.get();
+			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(searchTimeoutMillis);
+			List<ExBlockHeader> blocks = await(blocksFuture, deadline);
+			List<ExTx> transactions = await(txsFuture, deadline);
+			List<ExMemTransfer> mempoolTransactions = await(mempoolFuture, deadline);
+			List<ExToken> tokens = await(tokensFuture, deadline);
+			List<ExAccountBalance> accounts = await(accountsFuture, deadline);
+			List<ExAddressAlias> aliases = await(aliasesFuture, deadline);
+			List<ExValidator> validators = await(validatorsFuture, deadline);
+			List<ExAuthority> authorities = await(authoritiesFuture, deadline);
 
             long count = (long) blocks.size() + transactions.size() + mempoolTransactions.size() + tokens.size()
                     + accounts.size() + aliases.size() + validators.size() + authorities.size();
@@ -354,15 +352,35 @@ public class ExCommonCoreService {
 				.replace("_", "\\_");
 	}
 
-	private <T> CompletableFuture<T> async(Supplier<T> supplier) {
+	private <T> Future<T> async(List<Future<?>> submitted, Supplier<T> supplier) {
+		FutureTask<T> task = new FutureTask<>(() -> searchQueryPlan.execute(searchTimeoutMillis, supplier));
 		try {
-			return CompletableFuture.supplyAsync(supplier, searchExecutor);
+			searchExecutor.execute(task);
+			submitted.add(task);
+			return task;
 		} catch (RejectedExecutionException e) {
+			task.cancel(true);
+			cancel(submitted);
 			throw new GEFailedException("Search capacity exhausted", e);
 		}
 	}
 
-	private void cancel(List<CompletableFuture<?>> futures) {
+	private <T> Future<T> completed(T value) {
+		FutureTask<T> task = new FutureTask<>(() -> value);
+		task.run();
+		return task;
+	}
+
+	private <T> T await(Future<T> future, long deadline)
+			throws InterruptedException, ExecutionException, TimeoutException {
+		long remaining = deadline - System.nanoTime();
+		if (remaining <= 0L) {
+			throw new TimeoutException("Search deadline elapsed");
+		}
+		return future.get(remaining, TimeUnit.NANOSECONDS);
+	}
+
+	private void cancel(List<? extends Future<?>> futures) {
 		futures.forEach(future -> future.cancel(true));
 	}
 

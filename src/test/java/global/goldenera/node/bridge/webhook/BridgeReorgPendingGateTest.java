@@ -25,6 +25,7 @@ package global.goldenera.node.bridge.webhook;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -36,23 +37,27 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
+import global.goldenera.node.bridge.webhook.BridgeReorgPendingStore.ReadyReadd;
 
 class BridgeReorgPendingGateTest {
 
 	private final BridgeLifecycleCoordinator coordinator = mock(BridgeLifecycleCoordinator.class);
-	private final BridgeReorgPendingGate gate = new BridgeReorgPendingGate(coordinator);
+	private final BridgeReorgPendingStore store = mock(BridgeReorgPendingStore.class);
+	private final BridgeReorgPendingGate gate = new BridgeReorgPendingGate(coordinator, store);
+	private final BridgeSourcePosition live = BridgeSourcePosition.live(Long.MAX_VALUE);
 
 	@Test
 	void coreFirstWaitsUntilExplorerCommit() {
 		Hash hash = hash(1);
 		MempoolEntry entry = entry(hash);
 		Block orphan = orphan(hash);
+		when(store.markCanonicalReverted(hash, Long.MAX_VALUE)).thenReturn(new ReadyReadd(entry, live));
 
 		gate.coreReadded(entry);
 		verifyNoInteractions(coordinator);
-		gate.explorerRevertCommitted(orphan);
+		gate.canonicalRevertCommitted(orphan);
 
-		org.mockito.Mockito.verify(coordinator).pendingAfterReorg(entry);
+		verify(coordinator).pendingAfterReorg(entry, live);
 	}
 
 	@Test
@@ -60,12 +65,13 @@ class BridgeReorgPendingGateTest {
 		Hash hash = hash(2);
 		MempoolEntry entry = entry(hash);
 		Block orphan = orphan(hash);
+		when(store.markReadded(entry, live)).thenReturn(new ReadyReadd(entry, live));
 
-		gate.explorerRevertCommitted(orphan);
+		gate.canonicalRevertCommitted(orphan);
 		verifyNoInteractions(coordinator);
 		gate.coreReadded(entry);
 
-		org.mockito.Mockito.verify(coordinator).pendingAfterReorg(entry);
+		verify(coordinator).pendingAfterReorg(entry, live);
 	}
 
 	@Test
@@ -73,12 +79,13 @@ class BridgeReorgPendingGateTest {
 		Hash hash = hash(3);
 		MempoolEntry entry = entry(hash);
 		Block orphan = orphan(hash);
+		when(store.markCanonicalReverted(hash, Long.MAX_VALUE)).thenReturn(new ReadyReadd(entry, live));
 
 		gate.coreReadded(entry);
-		gate.explorerRevertCommitted(orphan);
+		gate.canonicalRevertCommitted(orphan);
 		gate.coreReadded(entry);
 
-		org.mockito.Mockito.verify(coordinator, times(1)).pendingAfterReorg(entry);
+		verify(coordinator, times(1)).pendingAfterReorg(entry, live);
 	}
 
 	private MempoolEntry entry(Hash hash) {

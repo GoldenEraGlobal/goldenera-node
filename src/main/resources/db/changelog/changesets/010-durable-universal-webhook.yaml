@@ -1,0 +1,121 @@
+databaseChangeLog:
+  - changeSet:
+      id: 010-durable-universal-webhook
+      author: goldenera
+      dbms: postgresql
+      comment: Durable BLOCKCHAIN and EXPLORER webhook source journal and FIFO delivery outbox.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE SEQUENCE universal_webhook_event_seq CACHE 1000;
+              CREATE SEQUENCE universal_webhook_delivery_seq CACHE 1000;
+
+              CREATE TABLE universal_webhook_source_cursor (
+                  source INTEGER PRIMARY KEY,
+                  last_source_sequence BIGINT NOT NULL DEFAULT 0,
+                  updated_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  CONSTRAINT ck_universal_webhook_cursor_source CHECK (source IN (0, 1))
+              );
+              INSERT INTO universal_webhook_source_cursor (source, last_source_sequence, updated_at)
+              VALUES (0, 0, now()), (1, 0, now());
+
+              CREATE TABLE universal_webhook_journal_cursor (
+                  consumer_source INTEGER NOT NULL,
+                  journal_stream INTEGER NOT NULL,
+                  journal_epoch UUID,
+                  last_sequence BIGINT NOT NULL DEFAULT 0,
+                  updated_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  PRIMARY KEY (consumer_source, journal_stream),
+                  CONSTRAINT ck_universal_webhook_journal_consumer CHECK (consumer_source IN (0, 1)),
+                  CONSTRAINT ck_universal_webhook_journal_stream CHECK (journal_stream IN (0, 1))
+              );
+              INSERT INTO universal_webhook_journal_cursor
+                  (consumer_source, journal_stream, journal_epoch, last_sequence, updated_at)
+              VALUES (0, 0, NULL, 0, now()), (0, 1, NULL, 0, now()), (1, 0, NULL, 0, now());
+
+              CREATE TABLE universal_webhook_source_event (
+                  id BIGINT PRIMARY KEY DEFAULT nextval('universal_webhook_event_seq'),
+                  event_id UUID NOT NULL UNIQUE,
+                  source INTEGER NOT NULL,
+                  source_sequence BIGINT NOT NULL,
+                  event_type INTEGER NOT NULL,
+                  tx_status INTEGER,
+                  origin_epoch UUID,
+                  origin_stream INTEGER,
+                  origin_sequence BIGINT,
+                  origin_block_height BIGINT,
+                  payload TEXT NOT NULL,
+                  address_a BYTEA,
+                  address_b BYTEA,
+                  token_address BYTEA,
+                  occurred_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  routed_at TIMESTAMP(6) WITH TIME ZONE,
+                  created_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  UNIQUE (source, source_sequence),
+                  CONSTRAINT ck_universal_webhook_event_source CHECK (source IN (0, 1)),
+                  CONSTRAINT ck_universal_webhook_event_type CHECK (event_type BETWEEN 0 AND 2),
+                  CONSTRAINT ck_universal_webhook_event_origin CHECK (
+                      (origin_epoch IS NULL AND origin_stream IS NULL AND origin_sequence IS NULL)
+                      OR (origin_epoch IS NOT NULL AND origin_stream IN (0, 1) AND origin_sequence > 0)
+                  )
+              );
+
+              ALTER TABLE webhook_event
+                  ADD COLUMN universal_active_after_source_sequence BIGINT NOT NULL DEFAULT 0,
+                  ADD COLUMN universal_canonical_epoch UUID,
+                  ADD COLUMN universal_canonical_after_sequence BIGINT NOT NULL DEFAULT 0,
+                  ADD COLUMN universal_mempool_epoch UUID,
+                  ADD COLUMN universal_mempool_after_sequence BIGINT NOT NULL DEFAULT 0,
+                  ADD COLUMN universal_explorer_after_height BIGINT NOT NULL DEFAULT -1;
+
+              CREATE TABLE universal_webhook_delivery (
+                  id BIGINT PRIMARY KEY DEFAULT nextval('universal_webhook_delivery_seq'),
+                  delivery_id UUID NOT NULL UNIQUE,
+                  source_event_id BIGINT NOT NULL REFERENCES universal_webhook_source_event(id),
+                  destination_id UUID NOT NULL REFERENCES webhook(id) ON DELETE CASCADE,
+                  state INTEGER NOT NULL,
+                  attempts INTEGER NOT NULL DEFAULT 0,
+                  next_attempt_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  lease_owner VARCHAR(128),
+                  lease_until TIMESTAMP(6) WITH TIME ZONE,
+                  last_http_status INTEGER,
+                  last_error VARCHAR(2048),
+                  delivered_at TIMESTAMP(6) WITH TIME ZONE,
+                  dead_at TIMESTAMP(6) WITH TIME ZONE,
+                  created_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  updated_at TIMESTAMP(6) WITH TIME ZONE NOT NULL,
+                  UNIQUE (destination_id, source_event_id),
+                  CONSTRAINT ck_universal_webhook_delivery_state CHECK (state BETWEEN 0 AND 4),
+                  CONSTRAINT ck_universal_webhook_delivery_attempts CHECK (attempts >= 0)
+              );
+
+              CREATE INDEX idx_universal_webhook_event_unrouted
+                  ON universal_webhook_source_event (source, source_sequence)
+                  WHERE routed_at IS NULL;
+              CREATE INDEX idx_universal_webhook_delivery_fifo
+                  ON universal_webhook_delivery (destination_id, id)
+                  WHERE state NOT IN (2, 4);
+              CREATE INDEX idx_universal_webhook_delivery_ready
+                  ON universal_webhook_delivery (next_attempt_at, id)
+                  WHERE state IN (0, 3);
+              CREATE INDEX idx_universal_webhook_delivery_expired_lease
+                  ON universal_webhook_delivery (lease_until, id)
+                  WHERE state = 1;
+      rollback:
+        - sql:
+            splitStatements: false
+            sql: |
+              DROP TABLE IF EXISTS universal_webhook_delivery;
+              DROP TABLE IF EXISTS universal_webhook_source_event;
+              DROP TABLE IF EXISTS universal_webhook_journal_cursor;
+              DROP TABLE IF EXISTS universal_webhook_source_cursor;
+              DROP SEQUENCE IF EXISTS universal_webhook_delivery_seq;
+              DROP SEQUENCE IF EXISTS universal_webhook_event_seq;
+              ALTER TABLE webhook_event
+                  DROP COLUMN IF EXISTS universal_mempool_after_sequence,
+                  DROP COLUMN IF EXISTS universal_explorer_after_height,
+                  DROP COLUMN IF EXISTS universal_mempool_epoch,
+                  DROP COLUMN IF EXISTS universal_canonical_after_sequence,
+                  DROP COLUMN IF EXISTS universal_canonical_epoch,
+                  DROP COLUMN IF EXISTS universal_active_after_source_sequence;

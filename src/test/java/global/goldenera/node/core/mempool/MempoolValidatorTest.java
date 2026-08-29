@@ -93,7 +93,7 @@ class MempoolValidatorTest {
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		StoredBlock storedBlock = mock(StoredBlock.class);
 		block = mock(Block.class, RETURNS_DEEP_STUBS);
-		when(block.getHeight()).thenReturn(731_503L);
+		when(block.getHeight()).thenReturn(753_996L);
 		when(block.getHeader().getTimestamp()).thenReturn(Instant.now().minusSeconds(10));
 		when(storedBlock.getBlock()).thenReturn(block);
 		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(storedBlock);
@@ -389,7 +389,7 @@ class MempoolValidatorTest {
 	@Test
 	void activationCandidateUsesConfiguredWindowInsteadOfLegacyParentZero() {
 		balance(Address.NATIVE_TOKEN, 100);
-		when(block.getHeight()).thenReturn(731_502L);
+		when(block.getHeight()).thenReturn(753_995L);
 		when(params.getVersion()).thenReturn(NetworkParamsStateVersion.V1);
 		when(params.getValidatorMiningWindowBlocks()).thenReturn(0L);
 		Address validatorAddress = MempoolTestFixtures.address(94);

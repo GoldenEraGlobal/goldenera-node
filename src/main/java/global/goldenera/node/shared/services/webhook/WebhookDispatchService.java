@@ -24,7 +24,6 @@
 package global.goldenera.node.shared.services.webhook;
 
 import static global.goldenera.node.shared.config.WebhookAsyncConfig.CORE_WEBHOOK_SCHEDULER;
-import static lombok.AccessLevel.PRIVATE;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -32,30 +31,24 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Base64;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Queue;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.tuweni.bytes.Bytes;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.event.EventListener;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.event.TransactionPhase;
-import org.springframework.transaction.event.TransactionalEventListener;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.cryptoj.common.Block;
@@ -64,29 +57,17 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
-import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.shared.components.AESGCMComponent;
-import global.goldenera.node.shared.entities.Webhook;
-import global.goldenera.node.shared.entities.WebhookEvent;
 import global.goldenera.node.shared.enums.WebhookEventType;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.enums.WebhookType;
-import global.goldenera.node.shared.events.ApiKeyUpdatedEvent;
-import global.goldenera.node.shared.events.WebhookEventsUpdateEvent;
-import global.goldenera.node.shared.events.WebhookUpdateEvent;
 import global.goldenera.node.shared.exceptions.GERuntimeException;
-import global.goldenera.node.shared.services.core.WebhookCoreService;
-import global.goldenera.node.shared.services.core.WebhookCoreService.WebhookEventFilter;
+import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStore.ClaimedDelivery;
 import global.goldenera.node.shared.services.webhook.dtos.WebhookEventDtoV1;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
-import jakarta.annotation.PreDestroy;
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
-import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -98,517 +79,334 @@ import okhttp3.Response;
 
 @Slf4j
 @Service
-@FieldDefaults(level = PRIVATE)
-public class WebhookDispatchService {
+@ConditionalOnProperty(name = { "ge.general.postgresql-enable", "ge.general.webhook-enable" }, havingValue = "true")
+public class WebhookDispatchService implements UniversalWebhookEventSink {
+	static final Duration ROUTE_INTERVAL = Duration.ofMillis(250);
+	static final Duration DELIVERY_INTERVAL = Duration.ofSeconds(1);
+	static final Duration LEASE_DURATION = Duration.ofMinutes(2);
+	static final int ROUTE_LIMIT = 256;
+	static final int MAX_ROUTE_BATCHES = 8;
+	static final int CLAIM_LIMIT = 64;
+	static final int MAX_IN_FLIGHT = 64;
+	static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
-	private static final int DEFAULT_DTO_VERSION = 1;
+	public static final String DELIVERY_ID_HEADER = "X-Webhook-Delivery-Id";
+	public static final String EVENT_ID_HEADER = "X-Webhook-Event-Id";
+	public static final String ATTEMPT_HEADER = "X-Webhook-Attempt";
 
-	private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-	static final int MAX_QUEUE_SIZE_PER_WEBHOOK = 256;
-	static final int MAX_GLOBAL_QUEUE_SIZE = 2_048;
-	static final int MAX_GLOBAL_IN_FLIGHT = 64;
-	private static final int MAX_BATCH_SIZE = 256;
+	private final OkHttpClient httpClient;
+	private final ObjectMapper objectMapper;
+	private final TaskScheduler scheduler;
+	private final DurableUniversalWebhookStore store;
+	private final MeterRegistry registry;
+	private final AESGCMComponent encryption;
+	private final BlockchainTxMapper txMapper;
+	private final BlockchainBlockHeaderMapper blockHeaderMapper;
+	private final String workerId;
+	private final AtomicBoolean routing = new AtomicBoolean();
+	private final AtomicBoolean dispatching = new AtomicBoolean();
+	private final Semaphore inFlight = new Semaphore(MAX_IN_FLIGHT);
 
-	final OkHttpClient okHttpClient;
-	final ObjectMapper objectMapper;
-	final TaskScheduler explorerScheduler;
-	final WebhookCoreService webhookCoreService;
-	final MeterRegistry registry;
-	final AESGCMComponent aesGCMComponent;
-	final BlockchainTxMapper blockchainTxMapper;
-	final BlockchainBlockHeaderMapper blockchainBlockHeaderMapper;
-
-	final Map<UUID, WebhookConfig> webhookConfigs = new ConcurrentHashMap<>();
-	final Map<Long, Set<UUID>> apiKeyToWebhookIds = new ConcurrentHashMap<>();
-	final Map<Address, Set<WebhookSubscription>> addressSubscriptions = new ConcurrentHashMap<>();
-	final Set<WebhookSubscription> newBlockSubscriptions = ConcurrentHashMap.newKeySet();
-	final Set<WebhookSubscription> reorgSubscriptions = ConcurrentHashMap.newKeySet();
-	final Map<UUID, Queue<Object>> pendingBatches = new ConcurrentHashMap<>();
-	final Set<UUID> deliveriesInFlight = ConcurrentHashMap.newKeySet();
-	final AtomicInteger pendingPayloadCount = new AtomicInteger();
-	final AtomicInteger inFlightDeliveryCount = new AtomicInteger();
-
-	public WebhookDispatchService(@Qualifier("webhookOkHttpClient") OkHttpClient webhookOkHttpClient,
+	@Autowired
+	public WebhookDispatchService(
+			@Qualifier("webhookOkHttpClient") OkHttpClient httpClient,
 			ObjectMapper objectMapper,
-			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler explorerScheduler,
-			WebhookCoreService webhookCoreService, MeterRegistry registry, AESGCMComponent aesGCMComponent,
-			BlockchainTxMapper blockchainTxMapper, BlockchainBlockHeaderMapper blockchainBlockHeaderMapper) {
-		this.okHttpClient = webhookOkHttpClient;
-		this.objectMapper = objectMapper;
-		this.explorerScheduler = explorerScheduler;
-		this.webhookCoreService = webhookCoreService;
-		this.registry = registry;
-		this.aesGCMComponent = aesGCMComponent;
-		this.blockchainTxMapper = blockchainTxMapper;
-		this.blockchainBlockHeaderMapper = blockchainBlockHeaderMapper;
+			@Qualifier(CORE_WEBHOOK_SCHEDULER) TaskScheduler scheduler,
+			DurableUniversalWebhookStore store,
+			MeterRegistry registry,
+			AESGCMComponent encryption,
+			BlockchainTxMapper txMapper,
+			BlockchainBlockHeaderMapper blockHeaderMapper) {
+		this(httpClient, objectMapper, scheduler, store, registry, encryption, txMapper, blockHeaderMapper,
+				"universal-webhook-" + UUID.randomUUID());
 	}
 
-	@EventListener(CoreReadyEvent.class)
-	public void loadIndexOnStartup() {
-		log.info("Core is ready. Loading all webhook filters...");
-		loadAllFiltersIntoIndex();
+	WebhookDispatchService(
+			OkHttpClient httpClient,
+			ObjectMapper objectMapper,
+			TaskScheduler scheduler,
+			DurableUniversalWebhookStore store,
+			MeterRegistry registry,
+			AESGCMComponent encryption,
+			BlockchainTxMapper txMapper,
+			BlockchainBlockHeaderMapper blockHeaderMapper,
+			String workerId) {
+		this.httpClient = httpClient;
+		this.objectMapper = objectMapper;
+		this.scheduler = scheduler;
+		this.store = store;
+		this.registry = registry;
+		this.encryption = encryption;
+		this.txMapper = txMapper;
+		this.blockHeaderMapper = blockHeaderMapper;
+		this.workerId = workerId;
 	}
 
 	@PostConstruct
 	public void init() {
-		registry.gauge("webhook.queue.size", pendingPayloadCount, AtomicInteger::get);
-		explorerScheduler.scheduleWithFixedDelay(this::dispatchPendingBatches, Duration.ofMillis(3000));
+		scheduler.scheduleWithFixedDelay(this::routePendingEvents, ROUTE_INTERVAL);
+		scheduler.scheduleWithFixedDelay(this::dispatchPendingBatches, DELIVERY_INTERVAL);
 	}
 
-	@PreDestroy
-	public void onShutdown() {
-		log.info("Shutting down Webhook Dispatcher...");
-		dispatchPendingBatches();
+	@Override
+	public void processNewBlockEvent(Block block, List<BlockEvent> events, WebhookType source) {
+		processNewBlockEvent(block, events, source, false);
 	}
 
-	private void loadAllFiltersIntoIndex() {
-		List<Webhook> webhooks = webhookCoreService.getAllEnabledWebhooksWithEvents();
-		for (Webhook webhook : webhooks) {
-			registerWebhookInMemory(webhook);
+	@Override
+	public void processNewBlockEvent(
+			Block block, List<BlockEvent> events, WebhookType source, boolean historicalCatchup) {
+		processNewBlockEvent(block, events, source, null, null, null, null,
+				historicalCatchup ? block.getHeight() : null);
+	}
+
+	void processNewBlockEvent(
+			Block block, List<BlockEvent> events, WebhookType source,
+			UUID originEventKey, UUID originEpoch, Integer originStream, Long originSequence,
+			Long historicalBlockHeight) {
+		requireUniversalSource(source);
+		var payload = new WebhookEventDtoV1.NewBlockEvent(
+				WebhookEventType.NEW_BLOCK, source, blockHeaderMapper.mapBlockWithEvents(block, events));
+		UUID eventId = originEventKey == null
+				? stableEventId(source, WebhookEventType.NEW_BLOCK, block.getHash())
+				: stableEventId(originEventKey, "block");
+		append(eventId, source,
+				WebhookEventType.NEW_BLOCK, null, payload, null, null, null,
+				block.getHeader().getTimestamp(), originEpoch, originStream, originSequence, historicalBlockHeight);
+	}
+
+	@Override
+	public void processAddressActivityEvent(
+			Block block, Tx tx, WebhookTxStatus status, Integer index, WebhookType source) {
+		processAddressActivityEvent(block, tx, status, index, source, false);
+	}
+
+	@Override
+	public void processAddressActivityEvent(
+			Block block, Tx tx, WebhookTxStatus status, Integer index, WebhookType source,
+			boolean historicalCatchup) {
+		processAddressActivityEvent(block, tx, status, index, source, null, null, null, null,
+				historicalCatchup && block != null ? block.getHeight() : null);
+	}
+
+	void processAddressActivityEvent(
+			Block block, Tx tx, WebhookTxStatus status, Integer index, WebhookType source,
+			UUID originEventKey, UUID originEpoch, Integer originStream, Long originSequence,
+			Long historicalBlockHeight) {
+		requireUniversalSource(source);
+		var payload = new WebhookEventDtoV1.AddressActivityEvent(
+				WebhookEventType.ADDRESS_ACTIVITY, source, txMapper.mapTx(block, tx, index), status);
+		Hash blockHash = block == null ? null : block.getHash();
+		UUID eventId = originEventKey == null
+				? stableEventId(source, WebhookEventType.ADDRESS_ACTIVITY, status, tx.getHash(), blockHash)
+				: stableEventId(originEventKey, "tx", status, tx.getHash());
+		append(eventId, source,
+				WebhookEventType.ADDRESS_ACTIVITY, status, payload, tx.getSender(), tx.getRecipient(),
+				tx.getTokenAddress(), tx.getTimestamp(), originEpoch, originStream, originSequence,
+				historicalBlockHeight);
+	}
+
+	@Override
+	public void processReorgEvent(
+			Long oldHeight, Hash oldHash, Long newHeight, Hash newHash, WebhookType source) {
+		processReorgEvent(oldHeight, oldHash, newHeight, newHash, source, null, null, null, null);
+	}
+
+	void processReorgEvent(
+			Long oldHeight, Hash oldHash, Long newHeight, Hash newHash, WebhookType source,
+			UUID originEventKey, UUID originEpoch, Integer originStream, Long originSequence) {
+		requireUniversalSource(source);
+		var payload = new WebhookEventDtoV1.ReorgEvent(
+				WebhookEventType.REORG, source, oldHeight, oldHash, newHeight, newHash);
+		UUID eventId = originEventKey == null
+				? stableEventId(source, WebhookEventType.REORG, oldHeight, oldHash, newHeight, newHash)
+				: stableEventId(originEventKey, "reorg");
+		append(eventId, source,
+				WebhookEventType.REORG, null, payload, null, null, null, Instant.now(),
+				originEpoch, originStream, originSequence, null);
+	}
+
+	private void append(
+			UUID eventId,
+			WebhookType source,
+			WebhookEventType eventType,
+			WebhookTxStatus status,
+			WebhookEventDtoV1 payload,
+			Address addressA,
+			Address addressB,
+			Address tokenAddress,
+			Instant occurredAt,
+			UUID originEpoch,
+			Integer originStream,
+			Long originSequence,
+			Long originBlockHeight) {
+		try {
+			store.append(eventId, source, eventType, status, objectMapper.writeValueAsString(payload),
+					addressA, addressB, tokenAddress, occurredAt == null ? Instant.now() : occurredAt,
+					originEpoch, originStream, originSequence, originBlockHeight);
+		} catch (JsonProcessingException exception) {
+			throw new GERuntimeException("Failed to serialize durable webhook event", exception);
 		}
-		log.info("Loaded {} webhooks into memory.", webhooks.size());
 	}
 
-	private void registerWebhookInMemory(Webhook webhook) {
-		UUID webhookId = webhook.getId();
-		Long apiKeyId = webhook.getCreatedByApiKey().getId();
-		updateConfigCache(webhook);
-		for (WebhookEvent event : webhook.getEvents()) {
-			addSubscriptionToIndex(webhookId, event);
-		}
-		apiKeyToWebhookIds.computeIfAbsent(apiKeyId, k -> ConcurrentHashMap.newKeySet()).add(webhookId);
-	}
-
-	private void updateConfigCache(Webhook webhook) {
-		Bytes secretKey = webhook.getSecretKey() != null
-				? webhook.getSecretKey()
-				: webhook.getCreatedByApiKey().getWebhookSecretKey();
-		if (secretKey == null) {
-			log.error("Skipping webhook {} because API key {} has no webhook signing secret",
-					webhook.getId(), webhook.getCreatedByApiKey().getId());
+	void routePendingEvents() {
+		if (!routing.compareAndSet(false, true)) {
 			return;
 		}
-		Bytes decryptedSecretKey = aesGCMComponent.decrypt(secretKey);
-		webhookConfigs.put(webhook.getId(), new WebhookConfig(
-				webhook.getUrl(),
-				decryptedSecretKey,
-				webhook.getDtoVersion() == null ? DEFAULT_DTO_VERSION : webhook.getDtoVersion(),
-				webhook.getType()));
-	}
-
-	// --- EVENT LISTENERS (Update Cache/Index) ---
-
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	public void handleApiKeyUpdate(ApiKeyUpdatedEvent event) {
-		Long apiKeyId = event.getApiKeyId();
-		ApiKeyUpdatedEvent.UpdateType type = event.getType();
-		log.info("Handling ApiKey update: {} for Key ID: {}", type, apiKeyId);
-		if (type == ApiKeyUpdatedEvent.UpdateType.DELETE_API_KEY) {
-			removeWebhooksByApiKey(apiKeyId);
-		} else if (type == ApiKeyUpdatedEvent.UpdateType.UPDATE_API_KEY) {
-			event.getApiKey().ifPresent(apiKey -> {
-				if (!apiKey.isEnabled()) {
-					log.info("ApiKey {} disabled. Unloading associated webhooks.", apiKeyId);
-					removeWebhooksByApiKey(apiKeyId);
-				} else {
-					log.info("ApiKey {} enabled/updated. Reloading associated webhooks.", apiKeyId);
-					reloadWebhooksForApiKey(apiKeyId);
-				}
-			});
-		}
-	}
-
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	public void handleWebhookUpdate(WebhookUpdateEvent event) {
-		UUID webhookId = event.getWebhookId();
-		removeWebhookFromIndex(webhookId);
-		apiKeyToWebhookIds.entrySet().removeIf(entry -> {
-			entry.getValue().remove(webhookId);
-			return entry.getValue().isEmpty();
-		});
-		switch (event.getType()) {
-			case CREATE_WEBHOOK:
-			case UPDATE_WEBHOOK:
-				Webhook webhook = webhookCoreService.findWebhookByIdWithEvents(webhookId).orElse(null);
-				if (webhook != null && webhook.getType() != WebhookType.BRIDGE
-						&& webhook.isEnabled() && webhook.getCreatedByApiKey().isEnabled()) {
-					registerWebhookInMemory(webhook);
-					log.info("Updated cache for webhook {}", webhookId);
-				} else {
-					webhookConfigs.remove(webhookId);
-					removePendingQueue(webhookId);
-				}
-				break;
-			case DELETE_WEBHOOK:
-				webhookConfigs.remove(webhookId);
-				removePendingQueue(webhookId);
-				break;
-		}
-	}
-
-	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-	public void handleWebhookEventsUpdate(WebhookEventsUpdateEvent event) {
-		UUID webhookId = event.getWebhookId();
-		if (!webhookConfigs.containsKey(webhookId))
-			return;
-
-		switch (event.getType()) {
-			case ADD_EVENTS:
-				for (WebhookEventFilter filter : event.getEvents()) {
-					addSubscriptionToIndex(webhookId, filter.getType(), filter.getAddressFilter(),
-							filter.getTokenAddressFilter());
-				}
-				break;
-			case REMOVE_EVENTS:
-				for (WebhookEventFilter filter : event.getEvents()) {
-					removeSubscriptionFromIndex(webhookId, filter.getType(), filter.getAddressFilter(),
-							filter.getTokenAddressFilter());
-				}
-				break;
-		}
-	}
-
-	// --- INDEX MANIPULATION ---
-
-	private void addSubscriptionToIndex(UUID webhookId, WebhookEvent event) {
-		addSubscriptionToIndex(webhookId, event.getType(), event.getAddressFilter(), event.getTokenAddressFilter());
-	}
-
-	private void addSubscriptionToIndex(UUID webhookId, WebhookEventType type, Address addressFilter,
-			Address tokenAddressFilter) {
-		WebhookConfig config = webhookConfigs.get(webhookId);
-		if (config == null)
-			return;
-		WebhookType webhookType = config.getWebhookType();
-		WebhookSubscription subscription = new WebhookSubscription(webhookId, tokenAddressFilter, webhookType);
-		if (type == WebhookEventType.NEW_BLOCK) {
-			newBlockSubscriptions.add(subscription);
-		} else if (type == WebhookEventType.REORG) {
-			reorgSubscriptions.add(subscription);
-		} else if (type == WebhookEventType.ADDRESS_ACTIVITY && addressFilter != null) {
-			addressSubscriptions.computeIfAbsent(addressFilter, k -> ConcurrentHashMap.newKeySet()).add(subscription);
-		}
-	}
-
-	private void removeSubscriptionFromIndex(UUID webhookId, WebhookEventType type, Address addressFilter,
-			Address tokenAddressFilter) {
-		if (type == WebhookEventType.NEW_BLOCK) {
-			newBlockSubscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId) &&
-					Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
-		} else if (type == WebhookEventType.REORG) {
-			reorgSubscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId) &&
-					Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
-		} else if (type == WebhookEventType.ADDRESS_ACTIVITY && addressFilter != null) {
-			Set<WebhookSubscription> subs = addressSubscriptions.get(addressFilter);
-			if (subs != null) {
-				subs.removeIf(sub -> sub.getWebhookId().equals(webhookId) &&
-						Objects.equals(sub.getTokenAddressFilter(), tokenAddressFilter));
-				if (subs.isEmpty()) {
-					addressSubscriptions.remove(addressFilter, subs);
+		try {
+			for (int batch = 0; batch < MAX_ROUTE_BATCHES; batch++) {
+				if (store.routePending(ROUTE_LIMIT, Instant.now()) == 0) {
+					break;
 				}
 			}
+		} catch (RuntimeException exception) {
+			log.error("Durable webhook routing iteration failed", exception);
+		} finally {
+			routing.set(false);
 		}
 	}
-
-	private void removeWebhookFromIndex(UUID webhookId) {
-		newBlockSubscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId));
-		reorgSubscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId));
-		for (Set<WebhookSubscription> subscriptions : addressSubscriptions.values()) {
-			subscriptions.removeIf(sub -> sub.getWebhookId().equals(webhookId));
-		}
-		addressSubscriptions.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-	}
-
-	private void removeWebhooksByApiKey(Long apiKeyId) {
-		Set<UUID> webhookIds = apiKeyToWebhookIds.remove(apiKeyId);
-		if (webhookIds != null) {
-			for (UUID webhookId : webhookIds) {
-				webhookConfigs.remove(webhookId);
-				removePendingQueue(webhookId);
-				removeWebhookFromIndex(webhookId);
-			}
-			log.info("Unloaded {} webhooks for ApiKey ID {}", webhookIds.size(), apiKeyId);
-		}
-	}
-
-	private void reloadWebhooksForApiKey(Long apiKeyId) {
-		removeWebhooksByApiKey(apiKeyId);
-		List<Webhook> webhooks = webhookCoreService.findEnabledByApiKeyIdWithEvents(apiKeyId);
-		for (Webhook webhook : webhooks) {
-			registerWebhookInMemory(webhook);
-		}
-		log.info("Reloaded {} webhooks for ApiKey ID {}", webhooks.size(), apiKeyId);
-	}
-
-	// --- PROCESSING LOGIC ---
-
-	public void processNewBlockEvent(Block block, List<BlockEvent> events, WebhookType targetType) {
-		WebhookEventDtoV1.NewBlockEvent payload = null;
-		for (WebhookSubscription sub : newBlockSubscriptions) {
-			// Filter by webhook type (BLOCKCHAIN vs EXPLORER)
-			if (sub.getWebhookType() != targetType) {
-				continue;
-			}
-			// WebhookConfig config = webhookConfigs.get(sub.getWebhookId());
-			// if (config.getDtoVersion() == 1) {
-			// TODO
-			// }
-			if (payload == null) {
-				payload = new WebhookEventDtoV1.NewBlockEvent(
-						WebhookEventType.NEW_BLOCK,
-						targetType,
-						blockchainBlockHeaderMapper.mapBlockWithEvents(block, events));
-			}
-			queuePayload(sub.getWebhookId(), payload);
-		}
-	}
-
-	public void processReorgEvent(Long oldHeight, Hash oldHash, Long newHeight, Hash newHash, WebhookType targetType) {
-		for (WebhookSubscription sub : reorgSubscriptions) {
-			// Filter by webhook type (BLOCKCHAIN vs EXPLORER)
-			if (sub.getWebhookType() != targetType) {
-				continue;
-			}
-			WebhookEventDtoV1.ReorgEvent event = new WebhookEventDtoV1.ReorgEvent(
-					WebhookEventType.REORG,
-					targetType,
-					oldHeight,
-					oldHash,
-					newHeight,
-					newHash);
-			queuePayload(sub.getWebhookId(), event);
-		}
-	}
-
-	public void processAddressActivityEvent(Block block, Tx tx, WebhookTxStatus status, Integer index,
-			WebhookType targetType) {
-		Set<Address> involvedAddresses = getAddressesFromTx(tx);
-		Set<UUID> targetWebhookIds = new HashSet<>();
-
-		if (involvedAddresses.isEmpty()) {
-			return;
-		}
-
-		for (Address addr : involvedAddresses) {
-			Set<WebhookSubscription> matches = addressSubscriptions.get(addr);
-			if (matches != null) {
-				for (WebhookSubscription sub : matches) {
-					if (sub.getWebhookType() == targetType && matchesTokenFilter(tx, sub.getTokenAddressFilter())) {
-						targetWebhookIds.add(sub.getWebhookId());
-					}
-				}
-			}
-		}
-
-		WebhookEventDtoV1.AddressActivityEvent payload = targetWebhookIds.isEmpty() ? null
-				: new WebhookEventDtoV1.AddressActivityEvent(
-						WebhookEventType.ADDRESS_ACTIVITY,
-						targetType,
-						blockchainTxMapper.mapTx(block, tx, index),
-						status);
-		for (UUID webhookId : targetWebhookIds) {
-			// WebhookConfig config = webhookConfigs.get(webhookId);
-			// if (config.getDtoVersion() == 1) {
-			// TODO
-			// }
-			queuePayload(webhookId, payload);
-		}
-	}
-
-	private void queuePayload(UUID webhookId, WebhookEventDtoV1 payload) {
-		if (!webhookConfigs.containsKey(webhookId))
-			return;
-
-		Queue<Object> queue = pendingBatches.computeIfAbsent(webhookId, ignored -> new ConcurrentLinkedQueue<>());
-
-		if (queue.size() >= MAX_QUEUE_SIZE_PER_WEBHOOK) {
-			registry.counter("webhook.queue.dropped", "reason", "per_webhook_full").increment();
-			if (queue.poll() != null) {
-				pendingPayloadCount.decrementAndGet();
-			}
-		}
-		if (!reserveGlobalQueueSlot()) {
-			registry.counter("webhook.queue.dropped", "reason", "global_full").increment();
-			return;
-		}
-		queue.add(payload);
-	}
-
-	private boolean reserveGlobalQueueSlot() {
-		int current;
-		do {
-			current = pendingPayloadCount.get();
-			if (current >= MAX_GLOBAL_QUEUE_SIZE) {
-				return false;
-			}
-		} while (!pendingPayloadCount.compareAndSet(current, current + 1));
-		return true;
-	}
-
-	// --- DISPATCH LOGIC ---
 
 	public void dispatchPendingBatches() {
-		for (Map.Entry<UUID, Queue<Object>> entry : pendingBatches.entrySet()) {
-			UUID webhookId = entry.getKey();
-			Queue<Object> queue = entry.getValue();
-
-			// Get current config (URL, Secret) from cache
-			WebhookConfig config = webhookConfigs.get(webhookId);
-			if (config == null) {
-				// Config disappeared (webhook was deleted/disabled), clear queue
-				removePendingQueue(webhookId);
-				continue;
-			}
-
-			if (queue.isEmpty() || !reserveDelivery(webhookId))
-				continue;
-
-			List<Object> batchToSend = new ArrayList<>(MAX_BATCH_SIZE);
-			int count = 0;
-			while (!queue.isEmpty() && count < MAX_BATCH_SIZE) {
-				Object item = queue.poll();
-				if (item != null) {
-					pendingPayloadCount.decrementAndGet();
-					batchToSend.add(item);
-					count++;
-				}
-			}
-
-			if (!batchToSend.isEmpty()) {
-				registry.summary("webhook.batch.size").record(batchToSend.size());
-				sendBatch(config, webhookId, batchToSend);
-			} else {
-				releaseDelivery(webhookId);
-			}
-		}
-	}
-
-	private void sendBatch(WebhookConfig config, UUID webhookId, List<Object> payloads) {
-		try {
-			byte[] jsonBytes = objectMapper.writeValueAsBytes(payloads);
-			String timestamp = String.valueOf(Instant.now().getEpochSecond());
-			String signature = calculateSignature(config.secretKey, timestamp, jsonBytes);
-
-			RequestBody body = RequestBody.create(jsonBytes, JSON);
-			Request request = new Request.Builder()
-					.url(config.url)
-					.addHeader("X-Webhook-Timestamp", timestamp)
-					.addHeader("X-Webhook-Signature", signature)
-					.post(body)
-					.build();
-
-			Timer.Sample sample = Timer.start(registry);
-
-			okHttpClient.newCall(request).enqueue(new Callback() {
-				@Override
-				public void onFailure(Call call, IOException e) {
-					releaseDelivery(webhookId);
-					sample.stop(registry.timer("webhook.delivery.latency", "status", "error"));
-					log.warn("Webhook delivery failed {}: {}", config.url, e.getMessage());
-				}
-
-				@Override
-				public void onResponse(Call call, Response response) throws IOException {
-					try (response) {
-						releaseDelivery(webhookId);
-						sample.stop(registry.timer("webhook.delivery.latency",
-								"status", String.valueOf(response.code())));
-						if (!response.isSuccessful()) {
-							log.warn("Webhook error {}: Code {}", config.url, response.code());
-						}
-					}
-				}
-			});
-
-		} catch (Exception e) {
-			releaseDelivery(webhookId);
-			log.error("Error sending webhook batch", e);
-		}
-	}
-
-	private void removePendingQueue(UUID webhookId) {
-		Queue<Object> queue = pendingBatches.remove(webhookId);
-		releaseDelivery(webhookId);
-		if (queue == null) {
+		if (!dispatching.compareAndSet(false, true)) {
 			return;
 		}
-		int removed = 0;
-		while (queue.poll() != null) {
-			removed++;
-		}
-		if (removed > 0) {
-			pendingPayloadCount.addAndGet(-removed);
-		}
-	}
-
-	private boolean reserveDelivery(UUID webhookId) {
-		if (!deliveriesInFlight.add(webhookId)) {
-			return false;
-		}
-		int current = inFlightDeliveryCount.incrementAndGet();
-		if (current <= MAX_GLOBAL_IN_FLIGHT) {
-			return true;
-		}
-		inFlightDeliveryCount.decrementAndGet();
-		deliveriesInFlight.remove(webhookId);
-		return false;
-	}
-
-	private void releaseDelivery(UUID webhookId) {
-		if (deliveriesInFlight.remove(webhookId)) {
-			inFlightDeliveryCount.decrementAndGet();
-		}
-	}
-
-	// --- HELPERS ---
-
-	private Set<Address> getAddressesFromTx(Tx tx) {
-		Set<Address> addresses = new HashSet<>();
-		if (tx.getSender() != null)
-			addresses.add(tx.getSender());
-		if (tx.getRecipient() != null)
-			addresses.add(tx.getRecipient());
-		return addresses;
-	}
-
-	private boolean matchesTokenFilter(Tx tx, Address tokenAddressFilter) {
-		return tokenAddressFilter == null
-				|| (tx.getTokenAddress() != null && tx.getTokenAddress().equals(tokenAddressFilter));
-	}
-
-	private String calculateSignature(Bytes secretKey, String timestamp, byte[] bodyBytes) {
-		final String ALGORITHM = "HmacSHA256";
 		try {
-			SecretKeySpec secretKeySpec = new SecretKeySpec(secretKey.toArray(), ALGORITHM);
-			Mac mac = Mac.getInstance(ALGORITHM);
-			mac.init(secretKeySpec);
+			int available = Math.min(CLAIM_LIMIT, inFlight.availablePermits());
+			if (available == 0) {
+				return;
+			}
+			for (ClaimedDelivery delivery : store.claimAvailable(
+					workerId, Instant.now(), LEASE_DURATION, available)) {
+				inFlight.acquireUninterruptibly();
+				deliver(delivery);
+			}
+		} catch (RuntimeException exception) {
+			log.error("Durable webhook delivery iteration failed", exception);
+		} finally {
+			dispatching.set(false);
+		}
+	}
+
+	private void deliver(ClaimedDelivery delivery) {
+		Instant now = Instant.now();
+		if (delivery.encryptedSecret() == null) {
+			store.markDead(delivery.deliveryId(), workerId, null,
+					"Webhook destination has no signing secret", now);
+			inFlight.release();
+			return;
+		}
+		try {
+			JsonNode payload = objectMapper.readTree(delivery.payload());
+			byte[] body = objectMapper.writeValueAsBytes(List.of(payload));
+			Bytes secret = encryption.decrypt(Bytes.wrap(delivery.encryptedSecret()));
+			String timestamp = String.valueOf(now.getEpochSecond());
+			Request request = new Request.Builder()
+					.url(delivery.url())
+					.header("X-Webhook-Timestamp", timestamp)
+					.header("X-Webhook-Signature", calculateSignature(secret, timestamp, body))
+					.header(DELIVERY_ID_HEADER, delivery.deliveryId().toString())
+					.header(EVENT_ID_HEADER, delivery.eventId().toString())
+					.header(ATTEMPT_HEADER, String.valueOf(delivery.attempt()))
+					.post(RequestBody.create(body, JSON))
+					.build();
+			execute(delivery, request);
+		} catch (Exception exception) {
+			store.markDead(delivery.deliveryId(), workerId, null,
+					"Cannot prepare signed webhook request: " + exception.getMessage(), Instant.now());
+			inFlight.release();
+		}
+	}
+
+	private void execute(ClaimedDelivery delivery, Request request) {
+		Timer.Sample sample = Timer.start(registry);
+		httpClient.newCall(request).enqueue(new Callback() {
+			@Override
+			public void onFailure(Call call, IOException exception) {
+				try {
+					sample.stop(registry.timer("webhook.delivery.latency", "status", "error"));
+					complete(delivery, null, null, exception.getMessage(), true);
+				} finally {
+					inFlight.release();
+				}
+			}
+
+			@Override
+			public void onResponse(Call call, Response response) {
+				try (response) {
+					sample.stop(registry.timer("webhook.delivery.latency", "status", String.valueOf(response.code())));
+					complete(delivery, response.code(), response.header("Retry-After"),
+							"HTTP " + response.code(), false);
+				} finally {
+					inFlight.release();
+				}
+			}
+		});
+	}
+
+	private void complete(
+			ClaimedDelivery delivery, Integer httpStatus, String retryAfter, String error, boolean networkFailure) {
+		Instant now = Instant.now();
+		if (!networkFailure && httpStatus != null && httpStatus >= 200 && httpStatus < 300) {
+			store.markDelivered(delivery.deliveryId(), workerId, httpStatus, now);
+			return;
+		}
+		boolean transientFailure = networkFailure || httpStatus == null || httpStatus == 408 || httpStatus == 429
+				|| httpStatus >= 500;
+		if (transientFailure) {
+			store.markRetry(delivery.deliveryId(), workerId, httpStatus, error,
+					retryAt(delivery.attempt(), retryAfter, now), now);
+		} else {
+			store.markDead(delivery.deliveryId(), workerId, httpStatus, error, now);
+		}
+	}
+
+	private Duration retryDelay(int attempt) {
+		long multiplier = 1L << Math.min(Math.max(attempt - 1, 0), 12);
+		return Duration.ofSeconds(Math.min(3_600L, 5L * multiplier));
+	}
+
+	private Instant retryAt(int attempt, String retryAfter, Instant now) {
+		if (retryAfter != null) {
+			try {
+				long seconds = Long.parseLong(retryAfter.trim());
+				if (seconds >= 0) {
+					return now.plusSeconds(Math.min(seconds, Duration.ofDays(1).toSeconds()));
+				}
+			} catch (NumberFormatException ignored) {
+				// Fall back to capped exponential backoff.
+			}
+		}
+		return now.plus(retryDelay(attempt));
+	}
+
+	private String calculateSignature(Bytes secretKey, String timestamp, byte[] body) {
+		try {
+			Mac mac = Mac.getInstance("HmacSHA256");
+			mac.init(new SecretKeySpec(secretKey.toArray(), "HmacSHA256"));
 			mac.update(timestamp.getBytes(StandardCharsets.UTF_8));
 			mac.update((byte) '.');
-			return Base64.getEncoder().encodeToString(mac.doFinal(bodyBytes));
-		} catch (NoSuchAlgorithmException | InvalidKeyException e) {
-			throw new GERuntimeException("Error creating HMAC signature", e);
+			return Base64.getEncoder().encodeToString(mac.doFinal(body));
+		} catch (NoSuchAlgorithmException | InvalidKeyException exception) {
+			throw new GERuntimeException("Error creating HMAC signature", exception);
 		}
 	}
 
-	// --- INNER CLASSES ---
-
-	/** Immutable config snapshot */
-	@Data
-	@AllArgsConstructor
-	private static class WebhookConfig {
-		String url;
-		Bytes secretKey;
-		int dtoVersion;
-		WebhookType webhookType;
+	static UUID stableEventId(Object... components) {
+		StringBuilder value = new StringBuilder("goldenera:universal-webhook:v1");
+		for (Object component : components) {
+			value.append('|');
+			if (component instanceof Bytes bytes) {
+				value.append(bytes.toHexString());
+			} else {
+				value.append(component);
+			}
+		}
+		return UUID.nameUUIDFromBytes(value.toString().getBytes(StandardCharsets.UTF_8));
 	}
 
-	/** Index entry - only IDs */
-	@Data
-	@EqualsAndHashCode(of = { "webhookId", "tokenAddressFilter", "webhookType" })
-	@AllArgsConstructor
-	private static class WebhookSubscription {
-		UUID webhookId;
-		Address tokenAddressFilter;
-		WebhookType webhookType;
+	private void requireUniversalSource(WebhookType source) {
+		if (source == WebhookType.BRIDGE) {
+			throw new IllegalArgumentException("Bridge webhooks use their dedicated delivery pipeline");
+		}
 	}
 }

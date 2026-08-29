@@ -41,7 +41,7 @@ import io.hypersistence.utils.spring.repository.BaseJpaRepository;
 
 @Repository
 public interface BridgeSubscriptionRepository extends BaseJpaRepository<BridgeSubscription, UUID>,
-        ListCrudRepository<BridgeSubscription, UUID> {
+		ListCrudRepository<BridgeSubscription, UUID>, BridgeSubscriptionRepositoryCustom {
 
     @Query("""
             SELECT subscription
@@ -50,13 +50,23 @@ public interface BridgeSubscriptionRepository extends BaseJpaRepository<BridgeSu
             JOIN FETCH destination.createdByApiKey apiKey
             WHERE subscription.enabled = true
               AND subscription.network = :network
-              AND subscription.address IN :addresses
+			  AND subscription.address IN :addresses
+			  AND (:epoch IS NULL OR
+			       (:stream = 0 AND subscription.activeFromCanonicalEpoch = :epoch
+			                    AND subscription.activeFromCanonicalSequence < :sequence)
+			       OR (:stream = 1 AND subscription.activeFromMempoolEpoch = :epoch
+			                    AND subscription.activeFromMempoolSequence < :sequence))
+			  AND (:canonicalHeight IS NULL OR subscription.activeAfterCanonicalHeight < :canonicalHeight)
               AND destination.enabled = true
               AND apiKey.enabled = true
             """)
-    List<BridgeSubscription> findEnabledByNetworkAndAddressIn(
-            @Param("network") Network network,
-            @Param("addresses") Collection<Address> addresses);
+	List<BridgeSubscription> findEnabledByNetworkAndAddressIn(
+			@Param("network") Network network,
+			@Param("addresses") Collection<Address> addresses,
+			@Param("stream") int stream,
+			@Param("epoch") UUID epoch,
+			@Param("sequence") long sequence,
+			@Param("canonicalHeight") Long canonicalHeight);
 
     @Query("""
             SELECT subscription
@@ -64,11 +74,44 @@ public interface BridgeSubscriptionRepository extends BaseJpaRepository<BridgeSu
             JOIN FETCH subscription.destination destination
             JOIN FETCH destination.createdByApiKey apiKey
             WHERE subscription.enabled = true
-              AND subscription.network = :network
+			  AND subscription.network = :network
+			  AND (:epoch IS NULL OR
+			       (:stream = 0 AND subscription.activeFromCanonicalEpoch = :epoch
+			                    AND subscription.activeFromCanonicalSequence < :sequence)
+			       OR (:stream = 1 AND subscription.activeFromMempoolEpoch = :epoch
+			                    AND subscription.activeFromMempoolSequence < :sequence))
+			  AND (:canonicalHeight IS NULL OR subscription.activeAfterCanonicalHeight < :canonicalHeight)
               AND destination.enabled = true
               AND apiKey.enabled = true
             """)
-    List<BridgeSubscription> findAllEnabledWithDestination(@Param("network") Network network);
+	List<BridgeSubscription> findAllEnabledWithDestination(
+			@Param("network") Network network,
+			@Param("stream") int stream,
+			@Param("epoch") UUID epoch,
+			@Param("sequence") long sequence,
+			@Param("canonicalHeight") Long canonicalHeight);
+
+	@Query("""
+			SELECT CASE WHEN COUNT(subscription) > 0 THEN true ELSE false END
+			FROM BridgeSubscription subscription
+			JOIN subscription.destination destination
+			JOIN destination.createdByApiKey apiKey
+			WHERE subscription.enabled = true
+			  AND subscription.network = :network
+			  AND destination.enabled = true
+			  AND apiKey.enabled = true
+			  AND ((:stream = 0 AND subscription.activeFromCanonicalEpoch = :epoch
+			                    AND subscription.activeFromCanonicalSequence < :sequence)
+			       OR (:stream = 1 AND subscription.activeFromMempoolEpoch = :epoch
+			                    AND subscription.activeFromMempoolSequence < :sequence))
+			  AND (:canonicalHeight IS NULL OR subscription.activeAfterCanonicalHeight < :canonicalHeight)
+			""")
+	boolean existsEnabledForSource(
+			@Param("network") Network network,
+			@Param("stream") int stream,
+			@Param("epoch") UUID epoch,
+			@Param("sequence") long sequence,
+			@Param("canonicalHeight") Long canonicalHeight);
 
     @Query("""
             SELECT DISTINCT subscription.destination

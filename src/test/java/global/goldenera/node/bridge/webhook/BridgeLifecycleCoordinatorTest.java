@@ -27,8 +27,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -60,6 +63,7 @@ import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.properties.GeneralProperties;
 
 class BridgeLifecycleCoordinatorTest {
+	private static final UUID EPOCH = UUID.fromString("00000000-0000-0000-0000-000000000300");
 
 	private final BridgeSubscriptionRepository subscriptionRepository = mock(BridgeSubscriptionRepository.class);
 	private final BridgeDeliveryRepository deliveryRepository = mock(BridgeDeliveryRepository.class);
@@ -73,7 +77,8 @@ class BridgeLifecycleCoordinatorTest {
 			txMapper,
 			blockHeaderMapper,
 			objectMapper,
-			properties);
+			properties,
+			new BridgeGlobalRoutingPolicy());
 
 	@Test
 	void matchingAddressesShareOneIdempotentDestinationDelivery() throws Exception {
@@ -94,7 +99,8 @@ class BridgeLifecycleCoordinatorTest {
 				"00000000-0000-0000-0000-000000000002"), sender);
 		BridgeSubscription recipientSubscription = subscription(destination, UUID.fromString(
 				"00000000-0000-0000-0000-000000000001"), recipient);
-		when(subscriptionRepository.findEnabledByNetworkAndAddressIn(eq(Network.TESTNET), any()))
+		when(subscriptionRepository.findEnabledByNetworkAndAddressIn(
+				eq(Network.TESTNET), any(), eq(1), isNull(), eq(Long.MAX_VALUE), nullable(Long.class)))
 				.thenReturn(List.of(senderSubscription, recipientSubscription));
 		when(deliveryRepository.reserve(any(), eq(destinationId), any()))
 				.thenReturn(Optional.of(new BridgeDeliveryReservation(42L, UUID.randomUUID())));
@@ -128,7 +134,8 @@ class BridgeLifecycleCoordinatorTest {
 		MempoolEntry entry = new MempoolEntry(tx);
 		Webhook destination = new Webhook();
 		destination.setId(UUID.randomUUID());
-		when(subscriptionRepository.findEnabledByNetworkAndAddressIn(eq(Network.TESTNET), any()))
+		when(subscriptionRepository.findEnabledByNetworkAndAddressIn(
+				eq(Network.TESTNET), any(), eq(1), isNull(), eq(Long.MAX_VALUE), nullable(Long.class)))
 				.thenReturn(List.of(subscription(destination, UUID.randomUUID(), sender)));
 		when(deliveryRepository.reserve(any(), eq(destination.getId()), any())).thenReturn(Optional.empty());
 
@@ -164,9 +171,11 @@ class BridgeLifecycleCoordinatorTest {
 		Webhook destination = new Webhook();
 		destination.setId(UUID.randomUUID());
 		BridgeSubscription subscription = subscription(destination, UUID.randomUUID(), sender);
-		when(subscriptionRepository.findAllEnabledWithDestination(Network.TESTNET))
+		when(subscriptionRepository.findAllEnabledWithDestination(
+				Network.TESTNET, 0, null, Long.MAX_VALUE, 0L))
 				.thenReturn(List.of(subscription));
-		when(subscriptionRepository.findEnabledByNetworkAndAddressIn(eq(Network.TESTNET), any()))
+		when(subscriptionRepository.findEnabledByNetworkAndAddressIn(
+				eq(Network.TESTNET), any(), eq(0), isNull(), eq(Long.MAX_VALUE), nullable(Long.class)))
 				.thenReturn(List.of(subscription));
 		when(deliveryRepository.reserve(any(), eq(destination.getId()), any()))
 				.thenReturn(
@@ -177,7 +186,7 @@ class BridgeLifecycleCoordinatorTest {
 		coordinator.confirmedBlock(block, List.of());
 
 		ArgumentCaptor<String> bodies = ArgumentCaptor.forClass(String.class);
-		verify(deliveryRepository, org.mockito.Mockito.times(2)).setBodyOnce(anyLong(), bodies.capture(), any());
+		verify(deliveryRepository, times(2)).setBodyOnce(anyLong(), bodies.capture(), any());
 		assertThat(objectMapper.readTree(bodies.getAllValues().get(0)).path("type").asText())
 				.isEqualTo("NEW_BLOCK");
 		assertThat(objectMapper.readTree(bodies.getAllValues().get(1)).path("status").asText())
@@ -186,8 +195,74 @@ class BridgeLifecycleCoordinatorTest {
 		assertThat(objectMapper.readTree(bodies.getAllValues().get(1)).path("sequence").asLong()).isEqualTo(51L);
 	}
 
+	@Test
+	void sourceSequenceIsPassedToActivationAwareRoutingQueries() {
+		Hash blockHash = Hash.fromHexString("0x" + "09".repeat(32));
+		BlockHeader header = mock(BlockHeader.class);
+		when(header.getTimestamp()).thenReturn(Instant.parse("2026-08-16T14:00:00Z"));
+		Block block = mock(Block.class);
+		when(block.getHash()).thenReturn(blockHash);
+		when(block.getHeader()).thenReturn(header);
+		when(block.getTxs()).thenReturn(List.of());
+
+		coordinator.confirmedBlock(block, List.of(), 101L);
+
+		verify(subscriptionRepository).findAllEnabledWithDestination(Network.TESTNET, 0, null, 101L, 0L);
+	}
+
+	@Test
+	void subscriptionActivatedDuringBacklogExcludesOlderConnectAndReceivesLaterConnect() {
+		Webhook destination = new Webhook();
+		destination.setId(UUID.randomUUID());
+		BridgeSubscription subscription = new BridgeSubscription(
+				destination, Network.TESTNET,
+				Address.fromHexString("0x" + "0a".repeat(20)), EPOCH, 100L, EPOCH, 0L, 10L);
+		subscription.setId(UUID.randomUUID());
+		when(subscriptionRepository.findAllEnabledWithDestination(Network.TESTNET, 0, EPOCH, 99L, 10L))
+				.thenReturn(List.of());
+		when(subscriptionRepository.findAllEnabledWithDestination(Network.TESTNET, 0, EPOCH, 101L, 11L))
+				.thenReturn(List.of(subscription));
+		when(deliveryRepository.reserve(any(), eq(destination.getId()), any()))
+				.thenReturn(Optional.of(new BridgeDeliveryReservation(70L, UUID.randomUUID())));
+		when(deliveryRepository.setBodyOnce(eq(70L), any(), any())).thenReturn(true);
+
+		coordinator.confirmedBlock(emptyBlock(10), List.of(),
+				new BridgeSourcePosition(EPOCH, 99L, UUID.randomUUID()));
+		coordinator.confirmedBlock(emptyBlock(11), List.of(),
+				new BridgeSourcePosition(EPOCH, 101L, UUID.randomUUID()));
+
+		verify(deliveryRepository).reserve(any(), eq(destination.getId()), any());
+	}
+
+	@Test
+	void repeatedSemanticTransitionUsesJournalOccurrenceKeyForDistinctEventIds() {
+		Webhook destination = new Webhook();
+		destination.setId(UUID.randomUUID());
+		BridgeSubscription subscription = new BridgeSubscription(
+				destination, Network.TESTNET,
+				Address.fromHexString("0x" + "0b".repeat(20)), EPOCH, 0L, EPOCH, 0L, 0L);
+		subscription.setId(UUID.randomUUID());
+		when(subscriptionRepository.findAllEnabledWithDestination(
+				eq(Network.TESTNET), eq(0), eq(EPOCH), anyLong(), anyLong())).thenReturn(List.of(subscription));
+		when(deliveryRepository.reserve(any(), eq(destination.getId()), any()))
+				.thenReturn(
+						Optional.of(new BridgeDeliveryReservation(80L, UUID.randomUUID())),
+						Optional.of(new BridgeDeliveryReservation(81L, UUID.randomUUID())));
+		when(deliveryRepository.setBodyOnce(anyLong(), any(), any())).thenReturn(true);
+		Block block = emptyBlock(12);
+
+		coordinator.confirmedBlock(block, List.of(), new BridgeSourcePosition(EPOCH, 110L, UUID.randomUUID()));
+		coordinator.confirmedBlock(block, List.of(), new BridgeSourcePosition(EPOCH, 111L, UUID.randomUUID()));
+
+		ArgumentCaptor<UUID> eventIds = ArgumentCaptor.forClass(UUID.class);
+		verify(deliveryRepository, times(2))
+				.reserve(eventIds.capture(), eq(destination.getId()), any());
+		assertThat(eventIds.getAllValues().get(0)).isNotEqualTo(eventIds.getAllValues().get(1));
+	}
+
 	private BridgeSubscription subscription(Webhook destination, UUID id, Address address) {
-		BridgeSubscription subscription = new BridgeSubscription(destination, Network.TESTNET, address);
+		BridgeSubscription subscription = new BridgeSubscription(
+				destination, Network.TESTNET, address, EPOCH, 0L, EPOCH, 0L, 0L);
 		subscription.setId(id);
 		return subscription;
 	}
@@ -196,5 +271,16 @@ class BridgeLifecycleCoordinatorTest {
 		GeneralProperties generalProperties = new GeneralProperties();
 		generalProperties.setNetwork(Network.TESTNET);
 		return generalProperties;
+	}
+
+	private Block emptyBlock(int value) {
+		BlockHeader header = mock(BlockHeader.class);
+		when(header.getTimestamp()).thenReturn(Instant.parse("2026-08-16T15:00:00Z"));
+		Block block = mock(Block.class);
+		when(block.getHash()).thenReturn(Hash.fromHexString("0x" + "%064x".formatted(value)));
+		when(block.getHeight()).thenReturn((long) value);
+		when(block.getHeader()).thenReturn(header);
+		when(block.getTxs()).thenReturn(List.of());
+		return block;
 	}
 }

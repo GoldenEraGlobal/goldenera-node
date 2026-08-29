@@ -25,7 +25,6 @@ package global.goldenera.node.bridge.webhook;
 
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 import org.junit.jupiter.api.Test;
 
@@ -36,45 +35,43 @@ import global.goldenera.node.core.mempool.domain.MempoolEntry;
 
 class BridgeCoreLifecycleListenerTest {
 
-	private final BridgeLifecycleCoordinator coordinator = mock(BridgeLifecycleCoordinator.class);
-	private final BridgeReorgPendingGate reorgPendingGate = mock(BridgeReorgPendingGate.class);
-	private final BridgeCoreLifecycleListener listener = new BridgeCoreLifecycleListener(coordinator, reorgPendingGate);
+	private final BridgeCoreJournalConsumer journalConsumer = mock(BridgeCoreJournalConsumer.class);
+	private final BridgeCoreLifecycleListener listener = new BridgeCoreLifecycleListener(journalConsumer);
 
 	@Test
-	void allSuccessfulAdmissionsBecomePending() {
+	void mempoolAdmissionWakesJournalProjection() {
 		MempoolEntry entry = mock(MempoolEntry.class);
 
 		listener.handleMempoolAdd(new MempoolTxAddEvent(this, entry, MempoolTxAddEvent.AddReason.SYNC));
 
-		verify(coordinator).pending(entry, "SYNC");
+		verify(journalConsumer).wake();
 	}
 
 	@Test
-	void reorgAdmissionWaitsForExplorerCommit() {
+	void reorgAdmissionAlsoWakesJournalProjection() {
 		MempoolEntry entry = mock(MempoolEntry.class);
 
 		listener.handleMempoolAdd(new MempoolTxAddEvent(this, entry, MempoolTxAddEvent.AddReason.REORG));
 
-		verify(reorgPendingGate).coreReadded(entry);
-		verifyNoInteractions(coordinator);
+		verify(journalConsumer).wake();
 	}
 
 	@Test
-	void rbfCarriesReplacementHash() {
+	void rbfRemovalWakesJournalProjection() {
 		MempoolEntry entry = mock(MempoolEntry.class);
 		Hash replacementHash = mock(Hash.class);
 
 		listener.handleMempoolRemove(new MempoolTxRemoveEvent(
 				this, entry, MempoolTxRemoveEvent.RemoveReason.RBF, replacementHash));
 
-		verify(coordinator).replaced(entry, replacementHash, "RBF");
+		verify(journalConsumer).wake();
 	}
 
 	@Test
-	void minedRemovalDoesNotCompeteWithExplorerConfirmation() {
+	void minedRemovalUsesTheSameCoreJournalWakePath() {
 		listener.handleMempoolRemove(new MempoolTxRemoveEvent(
 				this, mock(MempoolEntry.class), MempoolTxRemoveEvent.RemoveReason.MINED));
 
-		verifyNoInteractions(coordinator);
+		verify(journalConsumer).wake();
 	}
 }

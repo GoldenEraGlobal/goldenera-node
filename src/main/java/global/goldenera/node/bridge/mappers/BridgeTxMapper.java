@@ -26,7 +26,6 @@ package global.goldenera.node.bridge.mappers;
 import java.math.BigInteger;
 
 import org.springframework.stereotype.Component;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.serialization.tx.TxEncoder;
@@ -35,7 +34,6 @@ import global.goldenera.node.core.api.v1.blockchain.mappers.TxMapper;
 import lombok.RequiredArgsConstructor;
 
 @Component
-@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class BridgeTxMapper {
 

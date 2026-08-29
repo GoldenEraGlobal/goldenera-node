@@ -38,6 +38,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.mock.web.MockServletContext;
+import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.security.web.FilterChainProxy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
@@ -69,6 +70,17 @@ class SecurityConfigTest {
 			mockMvc.perform(get("/api/bridge/v1/probe"))
 					.andExpect(status().isForbidden());
 		}
+	}
+
+	@Test
+	void authenticatedAuthorizationDenialMapsToForbidden() throws Exception {
+		MockMvc mockMvc = MockMvcBuilders
+				.standaloneSetup(new AuthorizationDeniedController())
+				.setControllerAdvice(new ExceptionHandlerConfig(new ObjectMapper()))
+				.build();
+
+		mockMvc.perform(get("/authorization-denied"))
+				.andExpect(status().isForbidden());
 	}
 
 	@Test
@@ -147,6 +159,15 @@ class SecurityConfigTest {
 		String probe() {
 			calls.incrementAndGet();
 			return "ok";
+		}
+	}
+
+	@RestController
+	static class AuthorizationDeniedController {
+
+		@GetMapping("/authorization-denied")
+		void denied() {
+			throw mock(AuthorizationDeniedException.class);
 		}
 	}
 }

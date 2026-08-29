@@ -23,16 +23,9 @@
  */
 package global.goldenera.node.bridge.api.v1;
 
-import java.util.UUID;
-
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -40,15 +33,10 @@ import org.springframework.web.bind.annotation.RestController;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeAddressNonceDtoV1;
-import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscribeAddressDtoV1;
-import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscribeAddressInDtoV1;
 import global.goldenera.node.bridge.services.BridgeAddressService;
-import global.goldenera.node.shared.entities.ApiKey;
-import global.goldenera.node.shared.exceptions.GEValidationException;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 @RequestMapping("/api/bridge/v1/address")
 public class BridgeAddressApiV1 {
@@ -59,29 +47,5 @@ public class BridgeAddressApiV1 {
     @PreAuthorize("hasAuthority('BRIDGE_READ_NONCE')")
     public BridgeAddressNonceDtoV1 getNonce(@PathVariable Address address, @RequestParam Network network) {
         return bridgeAddressService.getNonce(address, network);
-    }
-
-    @PostMapping("subscribe")
-    @PreAuthorize("hasAuthority('BRIDGE_MANAGE_SUBSCRIPTIONS')")
-    public BridgeSubscribeAddressDtoV1 subscribe(
-            @RequestBody BridgeSubscribeAddressInDtoV1 input,
-            Authentication authentication) {
-        return bridgeAddressService.subscribe(input, apiKey(authentication));
-    }
-
-    @DeleteMapping("subscription/{subscriptionId}")
-    @PreAuthorize("hasAuthority('BRIDGE_MANAGE_SUBSCRIPTIONS')")
-    public void unsubscribe(
-            @PathVariable UUID subscriptionId,
-            @RequestParam Network network,
-            Authentication authentication) {
-        bridgeAddressService.unsubscribe(subscriptionId, network, apiKey(authentication));
-    }
-
-    private ApiKey apiKey(Authentication authentication) {
-        if (authentication == null || !(authentication.getPrincipal() instanceof ApiKey apiKey)) {
-            throw new GEValidationException("Invalid authentication");
-        }
-        return apiKey;
     }
 }

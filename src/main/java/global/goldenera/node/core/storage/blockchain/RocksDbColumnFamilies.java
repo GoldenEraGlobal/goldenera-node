@@ -61,6 +61,8 @@ public class RocksDbColumnFamilies {
 	public static final String CF_VALIDATORS = "validators";
 	public static final String CF_ENTITY_UNDO_LOG = "entity_undo_log";
 	public static final String CF_EQUIVOCATIONS = "equivocations";
+	public static final String CF_LIFECYCLE_JOURNAL = "lifecycle_journal";
+	public static final String CF_MEMPOOL_STATE = "mempool_state";
 
 	Map<String, ColumnFamilyHandle> handles = new HashMap<>();
 
@@ -111,5 +113,13 @@ public class RocksDbColumnFamilies {
 
 	public ColumnFamilyHandle equivocations() {
 		return handles.get(CF_EQUIVOCATIONS);
+	}
+
+	public ColumnFamilyHandle lifecycleJournal() {
+		return handles.get(CF_LIFECYCLE_JOURNAL);
+	}
+
+	public ColumnFamilyHandle mempoolState() {
+		return handles.get(CF_MEMPOOL_STATE);
 	}
 }

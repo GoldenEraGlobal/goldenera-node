@@ -43,7 +43,7 @@ class BridgeDeliveryRetryPolicyTest {
 		assertThat(policy.classify(429, false, 1)).isEqualTo(Outcome.RETRY);
 		assertThat(policy.classify(503, false, 1)).isEqualTo(Outcome.RETRY);
 		assertThat(policy.classify(400, false, 1)).isEqualTo(Outcome.DEAD);
-		assertThat(policy.classify(503, false, BridgeDeliveryRetryPolicy.MAX_ATTEMPTS)).isEqualTo(Outcome.DEAD);
+		assertThat(policy.classify(503, false, Integer.MAX_VALUE)).isEqualTo(Outcome.RETRY);
 	}
 
 	@Test

@@ -182,8 +182,8 @@ class MiningEconomicsActivationServiceTest {
 			WorldState state = storage.createEmpty(false);
 			state.setParams(legacyParams(1));
 
-			assertThatCode(() -> service.assertHeadReady(state, 731_502)).doesNotThrowAnyException();
-			assertThatThrownBy(() -> service.assertHeadReady(state, 731_503))
+			assertThatCode(() -> service.assertHeadReady(state, 753_995)).doesNotThrowAnyException();
+			assertThatThrownBy(() -> service.assertHeadReady(state, 753_996))
 					.isInstanceOf(GEValidationException.class)
 					.hasMessageContaining("missing the mining economics activation transition");
 		}

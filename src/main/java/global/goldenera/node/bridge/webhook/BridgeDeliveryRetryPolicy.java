@@ -36,7 +36,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class BridgeDeliveryRetryPolicy {
 
-	static final int MAX_ATTEMPTS = 12;
 	static final Duration BASE_DELAY = Duration.ofSeconds(5);
 	static final Duration MAX_DELAY = Duration.ofHours(1);
 	static final Duration MAX_RETRY_AFTER = Duration.ofDays(1);
@@ -47,7 +46,7 @@ public class BridgeDeliveryRetryPolicy {
 		}
 		boolean retryable = networkFailure || statusCode == null || statusCode == 408 || statusCode == 429
 				|| statusCode >= 500;
-		return retryable && attempt < MAX_ATTEMPTS ? Outcome.RETRY : Outcome.DEAD;
+		return retryable ? Outcome.RETRY : Outcome.DEAD;
 	}
 
 	public Instant nextAttemptAt(int attempt, Integer statusCode, String retryAfter, Instant now) {

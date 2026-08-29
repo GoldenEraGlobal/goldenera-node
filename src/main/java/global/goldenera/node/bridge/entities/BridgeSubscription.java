@@ -87,16 +87,39 @@ public class BridgeSubscription {
     @Column(name = "enabled", nullable = false)
     boolean enabled;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    Instant createdAt;
+	@Column(name = "created_at", nullable = false, updatable = false)
+	Instant createdAt;
 
-    public BridgeSubscription(Webhook destination, Network network, Address address) {
-        this.destination = destination;
-        this.network = network;
-        this.address = address;
-        this.enabled = true;
-        this.createdAt = Instant.now();
-    }
+	@Column(name = "active_from_canonical_sequence", nullable = false)
+	long activeFromCanonicalSequence;
+
+	@Column(name = "active_from_canonical_epoch", columnDefinition = "uuid", nullable = false)
+	UUID activeFromCanonicalEpoch;
+
+	@Column(name = "active_from_mempool_sequence", nullable = false)
+	long activeFromMempoolSequence;
+
+	@Column(name = "active_from_mempool_epoch", columnDefinition = "uuid", nullable = false)
+	UUID activeFromMempoolEpoch;
+
+	@Column(name = "active_after_canonical_height", nullable = false)
+	long activeAfterCanonicalHeight;
+
+	public BridgeSubscription(Webhook destination, Network network, Address address,
+			UUID activeFromCanonicalEpoch, long activeFromCanonicalSequence,
+			UUID activeFromMempoolEpoch, long activeFromMempoolSequence,
+			long activeAfterCanonicalHeight) {
+		this.destination = destination;
+		this.network = network;
+		this.address = address;
+		this.enabled = true;
+		this.createdAt = Instant.now();
+		this.activeFromCanonicalEpoch = activeFromCanonicalEpoch;
+		this.activeFromCanonicalSequence = activeFromCanonicalSequence;
+		this.activeFromMempoolEpoch = activeFromMempoolEpoch;
+		this.activeFromMempoolSequence = activeFromMempoolSequence;
+		this.activeAfterCanonicalHeight = activeAfterCanonicalHeight;
+	}
 
     @PrePersist
     void initialize() {

@@ -50,6 +50,7 @@ import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalAppender;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
 
@@ -134,7 +135,8 @@ class ChainSwitchServiceCumulativeDifficultyTest {
 				new ReentrantLock(),
 				mock(EntityIndexRepository.class),
 				mock(BlockEventExtractor.class),
-				CoreSnapshotCheckpointFloorPolicy.withoutFloor());
+				CoreSnapshotCheckpointFloorPolicy.withoutFloor(),
+				mock(LifecycleJournalAppender.class));
 		return new Fixture(service, chainQuery, blockRepository);
 	}
 

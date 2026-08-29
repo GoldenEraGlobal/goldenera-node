@@ -26,6 +26,7 @@ package global.goldenera.node.core.node.readiness;
 public enum CoreReadinessFailureReason {
 	CHAIN_IDENTITY,
 	GENESIS_HEAD,
+	MEMPOOL_RECOVERY,
 	P2P_BIND,
 	CORE_RUNTIME
 }

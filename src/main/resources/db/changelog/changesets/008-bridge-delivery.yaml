@@ -49,6 +49,31 @@ databaseChangeLog:
                   type: TIMESTAMP(6) WITH TIME ZONE
                   constraints:
                     nullable: false
+              - column:
+                  name: active_from_canonical_epoch
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: active_from_canonical_sequence
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: active_from_mempool_epoch
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: active_from_mempool_sequence
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: active_after_canonical_height
+                  type: BIGINT
+                  constraints:
+                    nullable: false
         - createTable:
             tableName: bridge_delivery
             columns:
@@ -116,6 +141,72 @@ databaseChangeLog:
                   type: TIMESTAMP(6) WITH TIME ZONE
                   constraints:
                     nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  constraints:
+                    nullable: false
+        - createTable:
+            tableName: bridge_lifecycle_cursor
+            columns:
+              - column:
+                  name: stream
+                  type: INT
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: bridge_lifecycle_cursorPK
+                    nullable: false
+              - column:
+                  name: journal_epoch
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: last_sequence
+                  type: BIGINT
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
+                  constraints:
+                    nullable: false
+        - createTable:
+            tableName: bridge_reorg_pending
+            columns:
+              - column:
+                  name: tx_hash
+                  type: BYTEA
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: bridge_reorg_pendingPK
+                    nullable: false
+              - column:
+                  name: canonical_reverted
+                  type: BOOLEAN
+                  constraints:
+                    nullable: false
+              - column:
+                  name: revert_sequence
+                  type: BIGINT
+              - column:
+                  name: readd_sequence
+                  type: BIGINT
+              - column:
+                  name: readd_epoch
+                  type: UUID
+              - column:
+                  name: readd_event_key
+                  type: UUID
+              - column:
+                  name: raw_tx
+                  type: BYTEA
+              - column:
+                  name: first_seen_height
+                  type: BIGINT
+              - column:
+                  name: first_seen_at
+                  type: TIMESTAMP(6) WITH TIME ZONE
               - column:
                   name: updated_at
                   type: TIMESTAMP(6) WITH TIME ZONE
@@ -199,6 +290,10 @@ databaseChangeLog:
         - sql:
             dbms: postgresql
             sql: DROP INDEX IF EXISTS uc_bridge_webhook_destination
+        - dropTable:
+            tableName: bridge_reorg_pending
+        - dropTable:
+            tableName: bridge_lifecycle_cursor
         - dropTable:
             tableName: bridge_delivery
         - dropTable:

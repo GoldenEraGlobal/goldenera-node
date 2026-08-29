@@ -23,154 +23,40 @@
  */
 package global.goldenera.node.shared.services.webhook;
 
-import static global.goldenera.node.core.config.CoreAsyncConfig.WEBHOOK_EVENT_EXECUTOR;
-import static lombok.AccessLevel.PRIVATE;
-
-import java.util.concurrent.Executor;
-
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
-import global.goldenera.node.shared.enums.WebhookTxStatus;
-import global.goldenera.node.shared.enums.WebhookType;
-import lombok.experimental.FieldDefaults;
-import lombok.extern.slf4j.Slf4j;
+import lombok.RequiredArgsConstructor;
 
-/**
- * Listens for core blockchain events and forwards them to BLOCKCHAIN webhooks.
- */
-@Slf4j
+/** Wakes the durable core lifecycle-journal consumer after source events are appended. */
 @Service
-@FieldDefaults(level = PRIVATE, makeFinal = true)
+@RequiredArgsConstructor
+@ConditionalOnProperty(name = { "ge.general.postgresql-enable", "ge.general.webhook-enable" }, havingValue = "true")
 public class WebhookListenerService {
+	private final CoreLifecycleJournalWebhookConsumer journalConsumer;
 
-	WebhookDispatchService webhookDispatchService;
-	ObjectFactory<Executor> webhookEventExecutor;
-
-	@Autowired
-	public WebhookListenerService(
-			WebhookDispatchService webhookDispatchService,
-			@Qualifier(WEBHOOK_EVENT_EXECUTOR) ObjectFactory<Executor> webhookEventExecutor) {
-		this.webhookDispatchService = webhookDispatchService;
-		this.webhookEventExecutor = webhookEventExecutor;
-	}
-
-	WebhookListenerService(
-			WebhookDispatchService webhookDispatchService,
-			Executor webhookEventExecutor) {
-		this(webhookDispatchService, () -> webhookEventExecutor);
-	}
-
-	// ==================== BLOCKCHAIN EVENTS ====================
-
-	/**
-	 * Handles new blocks from core blockchain.
-	 * Sends to BLOCKCHAIN type webhooks.
-	 */
 	@EventListener
 	public void handleBlockConnected(BlockConnectedEvent event) {
-		if (event.isBatchMember()) {
-			return;
-		}
-		submitWebhookEvent("block connected", () -> processBlockConnected(event));
+		journalConsumer.wake();
 	}
 
-	private void processBlockConnected(BlockConnectedEvent event) {
-		log.debug("Processing BlockConnectedEvent: {}", event.getBlock().getHash());
-		webhookDispatchService.processNewBlockEvent(event.getBlock(), event.getEvents(), WebhookType.BLOCKCHAIN);
-		int index = 0;
-		for (Tx tx : event.getBlock().getTxs()) {
-			webhookDispatchService.processAddressActivityEvent(event.getBlock(), tx,
-					WebhookTxStatus.CONFIRMED, index++, WebhookType.BLOCKCHAIN);
-		}
-	}
-
-	/**
-	 * Handles blockchain reorganization events.
-	 * Sends to BLOCKCHAIN type webhooks.
-	 */
 	@EventListener
 	public void handleBlockReorg(BlockReorgEvent event) {
-		submitWebhookEvent("block reorg", () -> processBlockReorg(event));
+		journalConsumer.wake();
 	}
 
-	private void processBlockReorg(BlockReorgEvent event) {
-		log.debug("Processing BlockReorgEvent: old=#{} -> new=#{}", event.getOldHeight(), event.getNewHeight());
-		webhookDispatchService.processReorgEvent(
-				event.getOldHeight(), event.getOldHash(),
-				event.getNewHeight(), event.getNewHash(),
-				WebhookType.BLOCKCHAIN);
-	}
-
-	/**
-	 * Handles transactions entering the mempool.
-	 * This is the key logic for PENDING vs. REVERTED.
-	 * Sends to BLOCKCHAIN type webhooks only.
-	 */
 	@EventListener
 	public void handleMempoolTxAdd(MempoolTxAddEvent event) {
-		submitWebhookEvent("mempool add", () -> processMempoolTxAdd(event));
+		journalConsumer.wake();
 	}
 
-	private void processMempoolTxAdd(MempoolTxAddEvent event) {
-		log.trace("Processing MempoolTxAddEvent: {}", event.getEntry().getTx().getHash());
-		switch (event.getReason()) {
-			case NEW:
-				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.PENDING, null, WebhookType.BLOCKCHAIN);
-				break;
-			case REORG:
-				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.REVERTED, null, WebhookType.BLOCKCHAIN);
-				break;
-		}
-	}
-
-	/**
-	 * Handles transactions being removed from the mempool.
-	 * Sends to BLOCKCHAIN type webhooks only.
-	 */
 	@EventListener
 	public void handleMempoolTxRemove(MempoolTxRemoveEvent event) {
-		submitWebhookEvent("mempool remove", () -> processMempoolTxRemove(event));
-	}
-
-	private void processMempoolTxRemove(MempoolTxRemoveEvent event) {
-		log.trace("Processing MempoolTxRemoveEvent: {}", event.getEntry().getHash());
-
-		switch (event.getReason()) {
-			case MINED:
-				break;
-			case RBF:
-				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.REPLACED, null, WebhookType.BLOCKCHAIN);
-				break;
-			case STALE_NONCE:
-			case EXPIRED:
-			case INVALID:
-			case EVICTED_FULL:
-			case INSUFFICIENT_FUNDS:
-				webhookDispatchService.processAddressActivityEvent(null, event.getEntry().getTx(),
-						WebhookTxStatus.DROPPED, null, WebhookType.BLOCKCHAIN);
-				break;
-		}
-	}
-
-	private void submitWebhookEvent(String eventType, Runnable action) {
-		webhookEventExecutor.getObject().execute(() -> {
-			try {
-				action.run();
-			} catch (RuntimeException exception) {
-				log.error("Failed to process {} webhook event", eventType, exception);
-			}
-		});
+		journalConsumer.wake();
 	}
 }

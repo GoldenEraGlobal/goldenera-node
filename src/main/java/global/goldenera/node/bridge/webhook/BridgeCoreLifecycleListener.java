@@ -29,39 +29,44 @@ import org.springframework.stereotype.Component;
 
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import lombok.RequiredArgsConstructor;
 
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(
-		prefix = "ge.general",
-		name = { "explorer-enable", "postgresql-enable", "webhook-enable" },
+			prefix = "ge.general",
+			name = { "postgresql-enable", "webhook-enable" },
 		havingValue = "true",
 		matchIfMissing = true)
 public class BridgeCoreLifecycleListener {
 
-	private final BridgeLifecycleCoordinator coordinator;
-	private final BridgeReorgPendingGate reorgPendingGate;
+	private final BridgeCoreJournalConsumer journalConsumer;
+
+	@EventListener
+	public void handleBlockConnected(BlockConnectedEvent event) {
+		journalConsumer.wake();
+	}
+
+	@EventListener
+	public void handleBlockDisconnected(BlockDisconnectedEvent event) {
+		journalConsumer.wake();
+	}
+
+	@EventListener
+	public void handleBlockReorg(BlockReorgEvent event) {
+		journalConsumer.wake();
+	}
 
 	@EventListener
 	public void handleMempoolAdd(MempoolTxAddEvent event) {
-		if (event.getReason() == MempoolTxAddEvent.AddReason.REORG) {
-			reorgPendingGate.coreReadded(event.getEntry());
-		} else {
-			coordinator.pending(event.getEntry(), event.getReason().name());
-		}
+		journalConsumer.wake();
 	}
 
 	@EventListener
 	public void handleMempoolRemove(MempoolTxRemoveEvent event) {
-		switch (event.getReason()) {
-			case MINED -> {
-				// Explorer confirmation is the only bridge authority for mined transactions.
-			}
-			case RBF -> coordinator.replaced(
-					event.getEntry(), event.getReplacementTxHash(), event.getReason().name());
-			case STALE_NONCE, EXPIRED, INVALID, EVICTED_FULL, INSUFFICIENT_FUNDS -> coordinator.dropped(
-					event.getEntry(), event.getReason().name());
-		}
+		journalConsumer.wake();
 	}
 }

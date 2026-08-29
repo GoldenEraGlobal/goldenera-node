@@ -27,6 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -34,7 +36,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.BeforeEach;
@@ -144,6 +149,53 @@ class BridgeDeliveryWorkerTest {
 		worker.deliver(delivery);
 
 		verify(store).markDead(eq(delivery.getDeliveryId()), eq(OWNER), eq(400), eq("HTTP 400"), any(Instant.class));
+	}
+
+	@Test
+	void schedulerThreadOnlyClaimsAndSubmitsHttpWorkToDedicatedExecutor() {
+		Executor executor = mock(Executor.class);
+		BridgeDeliveryWorker asyncWorker = new BridgeDeliveryWorker(
+				httpClient,
+				mock(TaskScheduler.class),
+				store,
+				encryption,
+				signatures,
+				retryPolicy,
+				OWNER,
+				executor);
+		ClaimedDelivery delivery = delivery(1);
+		when(store.claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8)))
+				.thenReturn(List.of(delivery));
+
+		asyncWorker.processAvailable();
+
+		verify(executor).execute(any(Runnable.class));
+		verify(httpClient, never()).newCall(any());
+	}
+
+	@Test
+	void saturatedDeliveryExecutorDoesNotClaimRowsThatCannotStartBeforeLeaseExpiry() {
+		Executor executor = mock(Executor.class);
+		BridgeDeliveryWorker asyncWorker = new BridgeDeliveryWorker(
+				httpClient,
+				mock(TaskScheduler.class),
+				store,
+				encryption,
+				signatures,
+				retryPolicy,
+				OWNER,
+				executor);
+		List<ClaimedDelivery> deliveries = IntStream.range(0, 8)
+				.mapToObj(ignored -> delivery(1))
+				.toList();
+		when(store.claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8)))
+				.thenReturn(deliveries);
+
+		asyncWorker.processAvailable();
+		asyncWorker.processAvailable();
+
+		verify(store).claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8));
+		verify(executor, times(8)).execute(any(Runnable.class));
 	}
 
 	private ClaimedDelivery delivery(int attempt) {

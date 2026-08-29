@@ -24,7 +24,6 @@
 package global.goldenera.node.bridge.services;
 
 import org.springframework.stereotype.Component;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.shared.exceptions.GEValidationException;
@@ -32,7 +31,6 @@ import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
 @Component
-@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class BridgeNetworkValidator {
 

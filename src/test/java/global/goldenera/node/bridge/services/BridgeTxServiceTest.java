@@ -32,13 +32,13 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.Map;
 import java.util.Optional;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.ObjectProvider;
 
 import global.goldenera.cryptoj.builder.TxBuilder;
 import global.goldenera.cryptoj.common.Tx;
@@ -52,21 +52,17 @@ import global.goldenera.node.bridge.api.v1.dtos.BridgeBroadcastTxDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeBroadcastTxInDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeTxDtoV1;
 import global.goldenera.node.bridge.mappers.BridgeTxMapper;
+import global.goldenera.node.bridge.exceptions.BridgeCapabilityException;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
-import global.goldenera.node.explorer.entities.ExTx;
-import global.goldenera.node.explorer.services.core.ExTxCoreService;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 
 class BridgeTxServiceTest {
 
     private final BridgeNetworkValidator networkValidator = mock(BridgeNetworkValidator.class);
-    private final ExTxCoreService explorer = mock(ExTxCoreService.class);
-    @SuppressWarnings("unchecked")
-    private final ObjectProvider<ExTxCoreService> explorerProvider = mock(ObjectProvider.class);
     private final ChainQuery chainQuery = mock(ChainQuery.class);
     private final MempoolStore mempool = mock(MempoolStore.class);
     private final MempoolManager manager = mock(MempoolManager.class);
@@ -76,25 +72,25 @@ class BridgeTxServiceTest {
 
     @BeforeEach
     void setUp() {
-        when(explorerProvider.getIfAvailable()).thenReturn(explorer);
-        service = new BridgeTxService(networkValidator, explorerProvider, chainQuery, mempool, manager, mapper);
+		service = new BridgeTxService(networkValidator, chainQuery, mempool, manager, mapper);
     }
 
     @Test
-    void explorerConfirmedTransactionWinsOverCoreAndMempool() {
-        Hash hash = hash(1);
-        ExTx tx = mock(ExTx.class);
-        BridgeTxDtoV1 expected = mock(BridgeTxDtoV1.class);
-        when(explorer.getByHashOptional(hash)).thenReturn(Optional.of(tx));
-        when(explorer.getConfirmationsByHashOptional(hash)).thenReturn(Optional.of(7L));
-        when(tx.getBlockHeight()).thenReturn(9L);
-        when(tx.getBlockHash()).thenReturn(hash(2));
-        when(tx.getIndex()).thenReturn(3);
-        when(mapper.mapConfirmed(tx, 9L, hash(2).toHexString(), 3, 7L)).thenReturn(expected);
+	void coreCanonicalTransactionWinsOverExplorerAndMempool() {
+		Hash hash = hash(1);
+		Tx tx = mock(Tx.class);
+		StoredBlock block = mock(StoredBlock.class);
+		BridgeTxDtoV1 expected = mock(BridgeTxDtoV1.class);
+		when(chainQuery.getTransactionBlock(hash)).thenReturn(Optional.of(block));
+		when(block.getTransactionByHash(hash)).thenReturn(tx);
+		when(block.getTransactionIndex()).thenReturn(Map.of(hash, 3));
+		when(block.getHeight()).thenReturn(9L);
+		when(block.getHash()).thenReturn(hash(2));
+		when(chainQuery.getTransactionConfirmations(hash)).thenReturn(Optional.of(7L));
+		when(mapper.mapConfirmed(tx, 9L, hash(2).toHexString(), 3, 7L)).thenReturn(expected);
 
         assertThat(service.getByHash(hash, Network.MAINNET)).isSameAs(expected);
-        verify(chainQuery, never()).getTransactionBlock(hash);
-        verify(mempool, never()).getTxByHash(hash);
+		verify(mempool, never()).getTxByHash(hash);
     }
 
     @Test
@@ -103,24 +99,34 @@ class BridgeTxServiceTest {
         Tx tx = mock(Tx.class);
         MempoolEntry entry = new MempoolEntry(tx);
         BridgeTxDtoV1 expected = mock(BridgeTxDtoV1.class);
-        when(explorer.getByHashOptional(hash)).thenReturn(Optional.empty());
-        when(chainQuery.getTransactionBlock(hash)).thenReturn(Optional.empty());
+		when(chainQuery.getTransactionBlock(hash)).thenReturn(Optional.empty());
         when(mempool.getTxByHash(hash)).thenReturn(Optional.of(entry));
         when(mapper.mapMempool(tx)).thenReturn(expected);
 
-        assertThat(service.getByHash(hash, Network.TESTNET)).isSameAs(expected);
+		assertThat(service.getByHash(hash, Network.TESTNET)).isSameAs(expected);
     }
 
     @Test
     void returnsNotFoundOnlyAfterAllSourcesMiss() {
         Hash hash = hash(4);
-        when(explorer.getByHashOptional(hash)).thenReturn(Optional.empty());
         when(chainQuery.getTransactionBlock(hash)).thenReturn(Optional.empty());
         when(mempool.getTxByHash(hash)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.getByHash(hash, Network.MAINNET))
-                .isInstanceOf(GENotFoundException.class);
-    }
+		assertThatThrownBy(() -> service.getByHash(hash, Network.MAINNET))
+				.isInstanceOf(GENotFoundException.class);
+	}
+
+	@Test
+	void rejectsIncompleteCanonicalMetadataInsteadOfReturningSentinels() {
+		Hash hash = hash(5);
+		StoredBlock block = mock(StoredBlock.class);
+		when(chainQuery.getTransactionBlock(hash)).thenReturn(Optional.of(block));
+		when(block.getTransactionByHash(hash)).thenReturn(mock(Tx.class));
+		when(block.getTransactionIndex()).thenReturn(Map.of());
+
+		assertThatThrownBy(() -> service.getByHash(hash, Network.MAINNET))
+				.isInstanceOf(BridgeCapabilityException.class);
+	}
 
     @Test
     void broadcastIsIdempotentForTransactionAlreadyInCanonicalChain() throws Exception {

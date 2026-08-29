@@ -40,20 +40,21 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import org.apache.tuweni.bytes.Bytes;
+import org.apache.tuweni.units.ethereum.Wei;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
-
-import org.apache.tuweni.units.ethereum.Wei;
-
-import com.google.common.collect.Iterators;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
@@ -71,16 +72,20 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.serialization.tx.TxDecoder;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
+import global.goldenera.node.core.storage.blockchain.journal.MempoolLifecycleJournalWriter;
+import global.goldenera.node.core.storage.blockchain.mempool.PersistentMempoolBoundedScanner;
+import global.goldenera.node.core.storage.blockchain.mempool.PersistentMempoolStore;
+import global.goldenera.node.core.storage.blockchain.mempool.MempoolCanonicalProjectionAdvance;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
-import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
@@ -89,10 +94,12 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Atomic in-memory transaction store. Every mutation updates the hash, fee,
  * sender, executable and governance indexes in one write-locked operation.
+ * Authoritative mempool state and lifecycle entries share one RocksDB batch. RAM
+ * mutations stay write-locked until that batch commits and before any Spring wake
+ * event is published.
  */
 @Service
 @Slf4j
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MempoolStore {
 
@@ -105,6 +112,9 @@ public class MempoolStore {
 	MempoolProperties mempoolProperties;
 	ChainHeadStateCache chainHeadStateService;
 	ApplicationEventPublisher applicationEventPublisher;
+	MempoolLifecycleJournalWriter lifecycleJournalWriter;
+	PersistentMempoolStore persistentMempoolStore;
+	MempoolIntegrityGuard integrityGuard;
 
 	ConcurrentSkipListSet<MempoolEntry> executableTxsByFee = new ConcurrentSkipListSet<>(TX_FEE_COMPARATOR);
 	ConcurrentSkipListSet<MempoolEntry> allTxsByFee = new ConcurrentSkipListSet<>(TX_FEE_COMPARATOR);
@@ -123,7 +133,57 @@ public class MempoolStore {
 	ConcurrentHashMap<Address, BigInteger> pendingTokenMintAmounts = new ConcurrentHashMap<>();
 	ConcurrentHashMap<Hash, TokenMintReservation> tokenMintsByHash = new ConcurrentHashMap<>();
 
-	ReentrantReadWriteLock globalLock = new ReentrantReadWriteLock();
+	ReentrantReadWriteLock globalLock = new ReentrantReadWriteLock(true);
+	ReentrantLock lifecycleMutationLock = new ReentrantLock(true);
+	ThreadLocal<LifecycleEventBatch> lifecycleEventBatch = new ThreadLocal<>();
+
+	@Autowired
+	public MempoolStore(
+			MeterRegistry registry,
+			MempoolProperties mempoolProperties,
+			ChainHeadStateCache chainHeadStateService,
+			ApplicationEventPublisher applicationEventPublisher,
+			MempoolLifecycleJournalWriter lifecycleJournalWriter,
+			PersistentMempoolStore persistentMempoolStore,
+			MempoolIntegrityGuard integrityGuard) {
+		this.registry = registry;
+		this.mempoolProperties = mempoolProperties;
+		this.chainHeadStateService = chainHeadStateService;
+		this.applicationEventPublisher = applicationEventPublisher;
+		this.lifecycleJournalWriter = lifecycleJournalWriter;
+		this.persistentMempoolStore = persistentMempoolStore;
+		this.integrityGuard = integrityGuard;
+	}
+
+	MempoolStore(
+			MeterRegistry registry,
+			MempoolProperties mempoolProperties,
+			ChainHeadStateCache chainHeadStateService,
+			ApplicationEventPublisher applicationEventPublisher,
+			MempoolLifecycleJournalWriter lifecycleJournalWriter,
+			PersistentMempoolStore persistentMempoolStore) {
+		this(registry, mempoolProperties, chainHeadStateService, applicationEventPublisher,
+				lifecycleJournalWriter, persistentMempoolStore, new MempoolIntegrityGuard());
+	}
+
+	MempoolStore(
+			MeterRegistry registry,
+			MempoolProperties mempoolProperties,
+			ChainHeadStateCache chainHeadStateService,
+			ApplicationEventPublisher applicationEventPublisher,
+			MempoolLifecycleJournalWriter lifecycleJournalWriter) {
+		this(registry, mempoolProperties, chainHeadStateService, applicationEventPublisher,
+				lifecycleJournalWriter, null, new MempoolIntegrityGuard());
+	}
+
+	MempoolStore(
+			MeterRegistry registry,
+			MempoolProperties mempoolProperties,
+			ChainHeadStateCache chainHeadStateService,
+			ApplicationEventPublisher applicationEventPublisher) {
+		this(registry, mempoolProperties, chainHeadStateService, applicationEventPublisher,
+				MempoolLifecycleJournalWriter.disabled(), null, new MempoolIntegrityGuard());
+	}
 
 	@PostConstruct
 	public void initMetrics() {
@@ -141,12 +201,18 @@ public class MempoolStore {
 
 	public StorageAddResult addTransaction(@NonNull MempoolEntry entry, long currentChainNonce,
 			MempoolTxAddEvent.AddReason reason, AdmissionConstraints constraints) {
+		return withLifecycleMutationLock(
+				() -> addTransactionOrdered(entry, currentChainNonce, reason, constraints));
+	}
+
+	private StorageAddResult addTransactionOrdered(MempoolEntry entry, long currentChainNonce,
+			MempoolTxAddEvent.AddReason reason, AdmissionConstraints constraints) {
 		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
 		StorageAddResult result = addTransactionInternal(entry, currentChainNonce, constraints, removeEvents);
-		publishRemoveEvents(removeEvents);
-		if (result.isSuccess()) {
-			publishAddEvent(new MempoolTxAddEvent(this, entry, reason));
-		}
+		List<MempoolTxAddEvent> addEvents = result.isSuccess()
+				? List.of(new MempoolTxAddEvent(this, entry, reason))
+				: List.of();
+		publishLifecycleEvents(removeEvents, addEvents);
 		return result;
 	}
 
@@ -156,6 +222,11 @@ public class MempoolStore {
 	 * atomic while preserving input order for nonce chains and RBF.
 	 */
 	public Map<Hash, StorageAddResult> addTransactions(List<MempoolEntry> entries,
+			Map<Address, Long> senderChainNonces, MempoolTxAddEvent.AddReason reason) {
+		return withLifecycleMutationLock(() -> addTransactionsOrdered(entries, senderChainNonces, reason));
+	}
+
+	private Map<Hash, StorageAddResult> addTransactionsOrdered(List<MempoolEntry> entries,
 			Map<Address, Long> senderChainNonces, MempoolTxAddEvent.AddReason reason) {
 		Map<Hash, StorageAddResult> results = new LinkedHashMap<>();
 		Map<Hash, MempoolEntry> successful = new LinkedHashMap<>();
@@ -194,16 +265,31 @@ public class MempoolStore {
 		}
 
 		removeEvents.removeIf(event -> transientEntries.contains(event.getEntry().getHash()));
-		publishRemoveEvents(removeEvents);
-		successful.values().forEach(entry -> publishAddEvent(new MempoolTxAddEvent(this, entry, reason)));
+		List<MempoolTxAddEvent> addEvents = successful.values().stream()
+				.map(entry -> new MempoolTxAddEvent(this, entry, reason))
+				.toList();
+		publishLifecycleEvents(removeEvents, addEvents);
 		return results;
 	}
 
 	public Iterator<MempoolEntry> getExecutableTransactionsIterator() {
-		return Iterators.concat(systemTxs.iterator(), executableTxsByFee.iterator());
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
+		try {
+			List<MempoolEntry> snapshot = new ArrayList<>(systemTxs.size() + executableTxsByFee.size());
+			snapshot.addAll(systemTxs);
+			snapshot.addAll(executableTxsByFee);
+			return snapshot.iterator();
+		} finally {
+			globalLock.readLock().unlock();
+		}
 	}
 
 	public void processNewBlock(@NonNull List<Tx> txs) {
+		withLifecycleMutationLock(() -> processNewBlockOrdered(txs));
+	}
+
+	private void processNewBlockOrdered(List<Tx> txs) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		Set<Address> affectedSenders = new HashSet<>();
 		globalLock.writeLock().lock();
@@ -225,10 +311,55 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 	}
 
 	public void addTransactionsBack(@NonNull List<Tx> txs, Block block) {
+		withLifecycleMutationLock(() -> addTransactionsBackOrdered(txs, block));
+	}
+
+	public void executePersistenceBatch(@NonNull Runnable operation) {
+		executePersistenceBatch(null, operation);
+	}
+
+	/** Internal atomic boundary for the durable canonical-to-mempool projector. */
+	public void executeCanonicalPersistenceBatch(
+			@NonNull MempoolCanonicalProjectionAdvance projectionAdvance,
+			@NonNull Runnable operation) {
+		executePersistenceBatch(projectionAdvance, operation);
+	}
+
+	private void executePersistenceBatch(
+			MempoolCanonicalProjectionAdvance projectionAdvance,
+			Runnable operation) {
+		withLifecycleMutationLock(() -> {
+			if (lifecycleEventBatch.get() != null) {
+				if (projectionAdvance != null) {
+					throw new IllegalStateException("Canonical projection batches cannot be nested");
+				}
+				operation.run();
+				return;
+			}
+			LifecycleEventBatch batch = new LifecycleEventBatch();
+			lifecycleEventBatch.set(batch);
+			try {
+				operation.run();
+			} catch (RuntimeException failure) {
+				lifecycleEventBatch.remove();
+				restoreRamFromPersistent(failure);
+				throw failure;
+			} finally {
+				lifecycleEventBatch.remove();
+			}
+			publishLifecycleEvents(batch.removals(), batch.additions(), projectionAdvance);
+		});
+	}
+
+	<T> T executeRecovery(Supplier<T> recovery) {
+		return withLifecycleMutationLock(recovery);
+	}
+
+	private void addTransactionsBackOrdered(List<Tx> txs, Block block) {
 		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
 		Map<Hash, MempoolEntry> added = new LinkedHashMap<>();
 		globalLock.writeLock().lock();
@@ -254,12 +385,17 @@ public class MempoolStore {
 				.collect(Collectors.toSet());
 		removeEvents.removeIf(event -> transientEntries.contains(event.getEntry().getHash()));
 		transientEntries.forEach(added::remove);
-		publishRemoveEvents(removeEvents);
-		added.values().forEach(entry -> publishAddEvent(
-				new MempoolTxAddEvent(this, entry, MempoolTxAddEvent.AddReason.REORG)));
+		List<MempoolTxAddEvent> addEvents = added.values().stream()
+				.map(entry -> new MempoolTxAddEvent(this, entry, MempoolTxAddEvent.AddReason.REORG))
+				.toList();
+		publishLifecycleEvents(removeEvents, addEvents);
 	}
 
 	public List<MempoolEntry> pruneExpiredTransactions(@NonNull Instant cutoffTime) {
+		return withLifecycleMutationLock(() -> pruneExpiredTransactionsOrdered(cutoffTime));
+	}
+
+	private List<MempoolEntry> pruneExpiredTransactionsOrdered(Instant cutoffTime) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		List<MempoolEntry> expired;
 		globalLock.writeLock().lock();
@@ -274,52 +410,55 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 		return expired.isEmpty() ? Collections.emptyList() : expired;
 	}
 
 	public boolean isAuthorityAddPending(Address address) {
-		return pendingAuthorityChanges.containsKey(address);
+		return withReadLock(() -> pendingAuthorityChanges.containsKey(address));
 	}
 
 	public boolean isAuthorityRemovePending(Address address) {
-		return pendingAuthorityChanges.containsKey(address);
+		return withReadLock(() -> pendingAuthorityChanges.containsKey(address));
 	}
 
 	public boolean isValidatorAddPending(Address address) {
-		return pendingValidatorChanges.containsKey(address);
+		return withReadLock(() -> pendingValidatorChanges.containsKey(address));
 	}
 
 	public boolean isValidatorRemovePending(Address address) {
-		return pendingValidatorChanges.containsKey(address);
+		return withReadLock(() -> pendingValidatorChanges.containsKey(address));
 	}
 
 	public boolean isValidatorMiningPolicyChangePending(Address address) {
-		return pendingValidatorChanges.containsKey(address);
+		return withReadLock(() -> pendingValidatorChanges.containsKey(address));
 	}
 
 	public boolean isAddressAliasAddPending(String alias) {
-		return pendingAddressAliasChanges.containsKey(alias);
+		return withReadLock(() -> pendingAddressAliasChanges.containsKey(alias));
 	}
 
 	public boolean isAddressAliasRemovePending(String alias) {
-		return pendingAddressAliasChanges.containsKey(alias);
+		return withReadLock(() -> pendingAddressAliasChanges.containsKey(alias));
 	}
 
 	public boolean isNetworkParamsChangePending() {
-		return pendingNetworkParamsChange.get() != null;
+		return withReadLock(() -> pendingNetworkParamsChange.get() != null);
 	}
 
 	public boolean isTokenUpdatePending(Address tokenAddress) {
-		return pendingTokenUpdates.containsKey(tokenAddress);
+		return withReadLock(() -> pendingTokenUpdates.containsKey(tokenAddress));
 	}
 
 	public boolean isBipVotePending(Hash bipHash, Address voter) {
-		Map<Address, Hash> voters = pendingBipVotes.get(bipHash);
-		return voters != null && voters.containsKey(voter);
+		return withReadLock(() -> {
+			Map<Address, Hash> voters = pendingBipVotes.get(bipHash);
+			return voters != null && voters.containsKey(voter);
+		});
 	}
 
 	public BigInteger getPendingTokenMintAmount(Address tokenAddress, Hash ignoredHash) {
+		integrityGuard.requireHealthy();
 		globalLock.readLock().lock();
 		try {
 			BigInteger total = pendingTokenMintAmounts.getOrDefault(tokenAddress, BigInteger.ZERO);
@@ -336,41 +475,53 @@ public class MempoolStore {
 	}
 
 	public ReservationSnapshot nativeReservation(Address sender, Tx candidate, Wei available) {
-		SenderAccountPool pool = userTxsBySender.get(sender);
-		BigInteger reserved = BigInteger.ZERO;
-		BigInteger replacing = BigInteger.ZERO;
-		if (pool != null) {
-			pool.lock.lock();
-			try {
-				reserved = pool.reservedNative;
-				MempoolEntry existing = pool.get(candidate.getNonce());
-				if (existing != null) {
-					replacing = nativeCost(existing.getTx());
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
+		try {
+			SenderAccountPool pool = userTxsBySender.get(sender);
+			BigInteger reserved = BigInteger.ZERO;
+			BigInteger replacing = BigInteger.ZERO;
+			if (pool != null) {
+				pool.lock.lock();
+				try {
+					reserved = pool.reservedNative;
+					MempoolEntry existing = pool.get(candidate.getNonce());
+					if (existing != null) {
+						replacing = nativeCost(existing.getTx());
+					}
+				} finally {
+					pool.lock.unlock();
 				}
-			} finally {
-				pool.lock.unlock();
 			}
+			return reservationSnapshot(reserved, replacing, nativeCost(candidate), available);
+		} finally {
+			globalLock.readLock().unlock();
 		}
-		return reservationSnapshot(reserved, replacing, nativeCost(candidate), available);
 	}
 
 	public ReservationSnapshot tokenReservation(Address sender, Address tokenAddress, Tx candidate, Wei available) {
-		SenderAccountPool pool = userTxsBySender.get(sender);
-		BigInteger reserved = BigInteger.ZERO;
-		BigInteger replacing = BigInteger.ZERO;
-		if (pool != null) {
-			pool.lock.lock();
-			try {
-				reserved = pool.reservedTokens.getOrDefault(tokenAddress, BigInteger.ZERO);
-				MempoolEntry existing = pool.get(candidate.getNonce());
-				if (existing != null) {
-					replacing = tokenCost(existing.getTx(), tokenAddress);
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
+		try {
+			SenderAccountPool pool = userTxsBySender.get(sender);
+			BigInteger reserved = BigInteger.ZERO;
+			BigInteger replacing = BigInteger.ZERO;
+			if (pool != null) {
+				pool.lock.lock();
+				try {
+					reserved = pool.reservedTokens.getOrDefault(tokenAddress, BigInteger.ZERO);
+					MempoolEntry existing = pool.get(candidate.getNonce());
+					if (existing != null) {
+						replacing = tokenCost(existing.getTx(), tokenAddress);
+					}
+				} finally {
+					pool.lock.unlock();
 				}
-			} finally {
-				pool.lock.unlock();
 			}
+			return reservationSnapshot(reserved, replacing, tokenCost(candidate, tokenAddress), available);
+		} finally {
+			globalLock.readLock().unlock();
 		}
-		return reservationSnapshot(reserved, replacing, tokenCost(candidate, tokenAddress), available);
 	}
 
 	/**
@@ -379,6 +530,10 @@ public class MempoolStore {
 	 * reconciled by this call.
 	 */
 	public void reconcileSenderBalances(@NonNull Map<Address, SenderBalances> balancesBySender) {
+		withLifecycleMutationLock(() -> reconcileSenderBalancesOrdered(balancesBySender));
+	}
+
+	private void reconcileSenderBalancesOrdered(Map<Address, SenderBalances> balancesBySender) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		globalLock.writeLock().lock();
 		try {
@@ -426,7 +581,7 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 	}
 
 	public record ReservationSnapshot(
@@ -460,6 +615,7 @@ public class MempoolStore {
 
 	/** Returns whether entry conflicts with a different pending governance tx. */
 	public boolean hasGovernanceConflict(@NonNull MempoolEntry entry, Hash ignoredHash) {
+		integrityGuard.requireHealthy();
 		globalLock.readLock().lock();
 		try {
 			return hasGovernanceConflictInternal(entry, ignoredHash);
@@ -469,104 +625,134 @@ public class MempoolStore {
 	}
 
 	public Optional<MempoolEntry> getTransactionBySenderAndNonce(Address sender, long nonce) {
-		SenderAccountPool pool = userTxsBySender.get(sender);
-		if (pool == null) {
-			return Optional.empty();
-		}
-		pool.lock.lock();
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
 		try {
-			return Optional.ofNullable(pool.get(nonce));
+			SenderAccountPool pool = userTxsBySender.get(sender);
+			if (pool == null) {
+				return Optional.empty();
+			}
+			pool.lock.lock();
+			try {
+				return Optional.ofNullable(pool.get(nonce));
+			} finally {
+				pool.lock.unlock();
+			}
 		} finally {
-			pool.lock.unlock();
+			globalLock.readLock().unlock();
 		}
 	}
 
 	public Optional<MempoolEntry> getTxByHash(Hash hash) {
-		return Optional.ofNullable(allTxsByHash.get(hash));
+		return withReadLock(() -> Optional.ofNullable(allTxsByHash.get(hash)));
 	}
 
 	public List<MempoolEntry> getAllTxs() {
-		return new ArrayList<>(allTxsByHash.values());
+		return withReadLock(() -> new ArrayList<>(allTxsByHash.values()));
 	}
 
 	public List<Hash> getAllTxHashes() {
-		return new ArrayList<>(allTxsByHash.keySet());
+		return withReadLock(() -> new ArrayList<>(allTxsByHash.keySet()));
 	}
 
 	public long getCount() {
-		return allTxsByHash.size();
+		return withReadLock(allTxsByHash::size);
 	}
 
 	public FeeStatistics getFeeStatistics() {
-		List<Double> feesPerByte = executableTxsByFee.stream()
-				.map(MempoolStore::calculateFeePerByte)
-				.filter(fee -> fee > 0)
-				.sorted(Comparator.reverseOrder())
-				.toList();
-		if (feesPerByte.isEmpty()) {
-			return new FeeStatistics(0.0, 0.0, 0);
-		}
-		int size = feesPerByte.size();
-		int middle = size / 2;
-		double median = size % 2 == 0
-				? (feesPerByte.get(middle - 1) + feesPerByte.get(middle)) / 2.0
-				: feesPerByte.get(middle);
-		int fastIndex = Math.max(0, (int) Math.ceil(size * 0.2) - 1);
-		return new FeeStatistics(median, feesPerByte.get(fastIndex), size);
+		return withReadLock(() -> {
+			List<Double> feesPerByte = executableTxsByFee.stream()
+					.map(MempoolStore::calculateFeePerByte)
+					.filter(fee -> fee > 0)
+					.sorted(Comparator.reverseOrder())
+					.toList();
+			if (feesPerByte.isEmpty()) {
+				return new FeeStatistics(0.0, 0.0, 0);
+			}
+			int size = feesPerByte.size();
+			int middle = size / 2;
+			double median = size % 2 == 0
+					? (feesPerByte.get(middle - 1) + feesPerByte.get(middle)) / 2.0
+					: feesPerByte.get(middle);
+			int fastIndex = Math.max(0, (int) Math.ceil(size * 0.2) - 1);
+			return new FeeStatistics(median, feesPerByte.get(fastIndex), size);
+		});
 	}
 
 	public record FeeStatistics(double medianFeePerByte, double fastFeePerByte, int txCount) {
 	}
 
 	public List<MempoolEntry> getTxsBySender(Address sender) {
-		SenderAccountPool pool = userTxsBySender.get(sender);
-		if (pool == null) {
-			return Collections.emptyList();
-		}
-		pool.lock.lock();
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
 		try {
-			return new ArrayList<>(pool.allTransactions().values());
+			SenderAccountPool pool = userTxsBySender.get(sender);
+			if (pool == null) {
+				return Collections.emptyList();
+			}
+			pool.lock.lock();
+			try {
+				return new ArrayList<>(pool.allTransactions().values());
+			} finally {
+				pool.lock.unlock();
+			}
 		} finally {
-			pool.lock.unlock();
+			globalLock.readLock().unlock();
 		}
 	}
 
 	public int getPendingTxCount(Address sender) {
-		SenderAccountPool pool = userTxsBySender.get(sender);
-		if (pool == null) {
-			return 0;
-		}
-		pool.lock.lock();
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
 		try {
-			return pool.size();
+			SenderAccountPool pool = userTxsBySender.get(sender);
+			if (pool == null) {
+				return 0;
+			}
+			pool.lock.lock();
+			try {
+				return pool.size();
+			} finally {
+				pool.lock.unlock();
+			}
 		} finally {
-			pool.lock.unlock();
+			globalLock.readLock().unlock();
 		}
 	}
 
 	public long getNextAvailableNonce(Address sender, long confirmedNonce) {
-		SenderAccountPool pool = userTxsBySender.get(sender);
-		if (pool == null) {
-			return confirmedNonce + 1;
-		}
-		pool.lock.lock();
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
 		try {
-			long nonce = confirmedNonce + 1;
-			while (pool.get(nonce) != null) {
-				nonce++;
+			SenderAccountPool pool = userTxsBySender.get(sender);
+			if (pool == null) {
+				return confirmedNonce + 1;
 			}
-			return nonce;
+			pool.lock.lock();
+			try {
+				long nonce = confirmedNonce + 1;
+				while (pool.get(nonce) != null) {
+					nonce++;
+				}
+				return nonce;
+			} finally {
+				pool.lock.unlock();
+			}
 		} finally {
-			pool.lock.unlock();
+			globalLock.readLock().unlock();
 		}
 	}
 
 	/** Full means no free slot remains; insertion evicts only when size exceeds max. */
 	public boolean isFull() {
-		return allTxsByHash.size() >= mempoolProperties.getMaxSize();
+		return withReadLock(() -> allTxsByHash.size() >= mempoolProperties.getMaxSize());
 	}
 
 	public void removeTransaction(@NonNull Hash txHash) {
+		withLifecycleMutationLock(() -> removeTransactionOrdered(txHash));
+	}
+
+	private void removeTransactionOrdered(Hash txHash) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		globalLock.writeLock().lock();
 		try {
@@ -577,10 +763,14 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 	}
 
 	public void removeTransactions(@NonNull List<Hash> txHashes) {
+		withLifecycleMutationLock(() -> removeTransactionsOrdered(txHashes));
+	}
+
+	private void removeTransactionsOrdered(List<Hash> txHashes) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		globalLock.writeLock().lock();
 		try {
@@ -593,7 +783,7 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 	}
 
 	/**
@@ -601,6 +791,10 @@ public class MempoolStore {
 	 * removed, gaps are repaired, and the global executable index is rebuilt.
 	 */
 	public void resynchronizeSender(@NonNull Address sender, long currentChainNonce) {
+		withLifecycleMutationLock(() -> resynchronizeSenderOrdered(sender, currentChainNonce));
+	}
+
+	private void resynchronizeSenderOrdered(Address sender, long currentChainNonce) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		globalLock.writeLock().lock();
 		try {
@@ -608,10 +802,14 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 	}
 
 	public void resynchronizeSenders(@NonNull Map<Address, Long> chainNonces) {
+		withLifecycleMutationLock(() -> resynchronizeSendersOrdered(chainNonces));
+	}
+
+	private void resynchronizeSendersOrdered(Map<Address, Long> chainNonces) {
 		List<MempoolTxRemoveEvent> events = new ArrayList<>();
 		globalLock.writeLock().lock();
 		try {
@@ -619,34 +817,49 @@ public class MempoolStore {
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		publishRemoveEvents(events);
+		publishLifecycleEvents(events, List.of());
 	}
 
 	public void clear() {
+		withLifecycleMutationLock(this::clearOrdered);
+	}
+
+	void resetDerivedStateForRecovery() {
+		withLifecycleMutationLock(this::clearDerivedState);
+	}
+
+	RecoveryAddResult restoreTransaction(
+			MempoolEntry entry,
+			long currentChainNonce,
+			AdmissionConstraints constraints) {
+		return withLifecycleMutationLock(() -> {
+			List<MempoolTxRemoveEvent> removals = new ArrayList<>();
+			StorageAddResult result = addTransactionInternal(
+					entry, currentChainNonce, constraints, removals);
+			return new RecoveryAddResult(result, removals);
+		});
+	}
+
+	record RecoveryAddResult(StorageAddResult result, List<MempoolTxRemoveEvent> removals) {
+		RecoveryAddResult {
+			removals = List.copyOf(removals);
+		}
+	}
+
+	private void clearOrdered() {
 		List<MempoolEntry> removed;
 		globalLock.writeLock().lock();
 		try {
 			removed = new ArrayList<>(allTxsByHash.values());
-			allTxsByHash.clear();
-			allTxsByFee.clear();
-			executableTxsByFee.clear();
-			userTxsBySender.clear();
-			systemTxs.clear();
-			pendingAuthorityChanges.clear();
-			pendingValidatorChanges.clear();
-			pendingAddressAliasChanges.clear();
-			pendingNetworkParamsChange.set(null);
-			pendingTokenUpdates.clear();
-			pendingBipVotes.clear();
-			pendingTokenMintAmounts.clear();
-			tokenMintsByHash.clear();
+			clearDerivedState();
 		} finally {
 			globalLock.writeLock().unlock();
 		}
-		for (MempoolEntry entry : removed) {
-			publishRemoveEvent(new MempoolTxRemoveEvent(
-					this, entry, MempoolTxRemoveEvent.RemoveReason.INVALID));
-		}
+		List<MempoolTxRemoveEvent> events = removed.stream()
+				.map(entry -> new MempoolTxRemoveEvent(
+						this, entry, MempoolTxRemoveEvent.RemoveReason.INVALID))
+				.toList();
+		publishLifecycleEvents(events, List.of());
 	}
 
 	private StorageAddResult addTransactionInternal(MempoolEntry entry, long currentChainNonce,
@@ -1051,8 +1264,167 @@ public class MempoolStore {
 		};
 	}
 
-	private void publishRemoveEvents(List<MempoolTxRemoveEvent> events) {
-		events.forEach(this::publishRemoveEvent);
+	private void publishLifecycleEvents(
+			List<MempoolTxRemoveEvent> removals,
+			List<MempoolTxAddEvent> additions) {
+		publishLifecycleEvents(removals, additions, null);
+	}
+
+	private void publishLifecycleEvents(
+			List<MempoolTxRemoveEvent> removals,
+			List<MempoolTxAddEvent> additions,
+			MempoolCanonicalProjectionAdvance projectionAdvance) {
+		LifecycleEventBatch activeBatch = lifecycleEventBatch.get();
+		if (activeBatch != null) {
+			activeBatch.add(removals, additions);
+			return;
+		}
+		try {
+			if (projectionAdvance == null) {
+				lifecycleJournalWriter.commitBeforeWake(UUID.randomUUID(), removals, additions);
+			} else {
+				lifecycleJournalWriter.commitBeforeWake(
+						UUID.randomUUID(), removals, additions, projectionAdvance);
+			}
+		} catch (RuntimeException failure) {
+			restoreRamFromPersistent(failure);
+			throw failure;
+		}
+		removals.forEach(this::publishRemoveEvent);
+		additions.forEach(this::publishAddEvent);
+	}
+
+	private void restoreRamFromPersistent(RuntimeException commitFailure) {
+		if (persistentMempoolStore == null) {
+			IllegalStateException terminal = new IllegalStateException(
+					"Persistent mempool commit failed without an authoritative restore source", commitFailure);
+			integrityGuard.fail(terminal);
+			throw terminal;
+		}
+		try {
+			rebuildDerivedIndexesExact();
+		} catch (RuntimeException restoreFailure) {
+			commitFailure.addSuppressed(restoreFailure);
+			IllegalStateException terminal = new IllegalStateException(
+					"Persistent mempool commit failed and derived RAM state could not be restored",
+					commitFailure);
+			integrityGuard.fail(terminal);
+			throw terminal;
+		}
+	}
+
+	private void rebuildDerivedIndexesExact() {
+		clearDerivedState();
+		Set<Hash> expectedHashes = new LinkedHashSet<>();
+		Map<Address, List<MempoolEntry>> bySender = new LinkedHashMap<>();
+		int scanned = PersistentMempoolBoundedScanner.scanOrdered(
+				persistentMempoolStore, mempoolProperties, record -> {
+			MempoolEntry entry = new MempoolEntry(
+					TxDecoder.INSTANCE.decode(Bytes.wrap(record.rawSignedTx())),
+					record.firstSeenTime(), record.firstSeenHeight(), null);
+			if (!record.txHash().equals(entry.getHash()) || !expectedHashes.add(entry.getHash())
+					|| allTxsByHash.putIfAbsent(entry.getHash(), entry) != null) {
+				throw new IllegalStateException("Persistent mempool record hash mismatch during RAM rebuild");
+			}
+			allTxsByFee.add(entry);
+			Address sender = entry.getTx().getSender();
+			if (sender == null) {
+				systemTxs.add(entry);
+			} else {
+				bySender.computeIfAbsent(sender, ignored -> new ArrayList<>()).add(entry);
+			}
+		});
+		if (scanned != expectedHashes.size()) {
+			throw new IllegalStateException("Persistent mempool scan returned duplicate transaction hashes");
+		}
+
+		for (Map.Entry<Address, List<MempoolEntry>> senderEntries : bySender.entrySet()) {
+			Address sender = senderEntries.getKey();
+			long chainNonce = chainHeadStateService.getHeadState().getNonce(sender).getNonce();
+			SenderAccountPool pool = new SenderAccountPool(mempoolProperties, sender, chainNonce);
+			List<MempoolEntry> ordered = senderEntries.getValue().stream()
+					.sorted(Comparator.comparing(MempoolEntry::getNonce).thenComparing(MempoolEntry::getHash))
+					.toList();
+			long executableNonce = Math.addExact(chainNonce, 1L);
+			boolean gap = false;
+			for (MempoolEntry entry : ordered) {
+				long nonce = entry.getNonce();
+				if (pool.executableTxs.containsKey(nonce) || pool.futureTxs.containsKey(nonce)) {
+					throw new IllegalStateException(
+							"Persistent mempool contains two active transactions for sender/nonce");
+				}
+				pool.addCost(entry.getTx());
+				if (!gap && nonce == executableNonce) {
+					pool.executableTxs.put(nonce, entry);
+					executableTxsByFee.add(entry);
+					executableNonce = Math.incrementExact(executableNonce);
+				} else {
+					gap = true;
+					pool.futureTxs.put(nonce, entry);
+				}
+			}
+			userTxsBySender.put(sender, pool);
+		}
+
+		for (MempoolEntry entry : allTxsByHash.values()) {
+			if (hasGovernanceConflictInternal(entry, null)) {
+				throw new IllegalStateException("Persistent mempool contains conflicting governance reservations");
+			}
+			addGovernanceReservation(entry);
+		}
+		if (!allTxsByHash.keySet().equals(expectedHashes)) {
+			throw new IllegalStateException("Derived mempool hash set differs from persistent ACTIVE records");
+		}
+	}
+
+	private void clearDerivedState() {
+		allTxsByHash.clear();
+		allTxsByFee.clear();
+		executableTxsByFee.clear();
+		userTxsBySender.clear();
+		systemTxs.clear();
+		pendingAuthorityChanges.clear();
+		pendingValidatorChanges.clear();
+		pendingAddressAliasChanges.clear();
+		pendingNetworkParamsChange.set(null);
+		pendingTokenUpdates.clear();
+		pendingBipVotes.clear();
+		pendingTokenMintAmounts.clear();
+		tokenMintsByHash.clear();
+	}
+
+	private <T> T withLifecycleMutationLock(Supplier<T> operation) {
+		integrityGuard.requireHealthy();
+		lifecycleMutationLock.lock();
+		globalLock.writeLock().lock();
+		try {
+			return operation.get();
+		} finally {
+			globalLock.writeLock().unlock();
+			lifecycleMutationLock.unlock();
+		}
+	}
+
+	private void withLifecycleMutationLock(Runnable operation) {
+		integrityGuard.requireHealthy();
+		lifecycleMutationLock.lock();
+		globalLock.writeLock().lock();
+		try {
+			operation.run();
+		} finally {
+			globalLock.writeLock().unlock();
+			lifecycleMutationLock.unlock();
+		}
+	}
+
+	private <T> T withReadLock(Supplier<T> operation) {
+		integrityGuard.requireHealthy();
+		globalLock.readLock().lock();
+		try {
+			return operation.get();
+		} finally {
+			globalLock.readLock().unlock();
+		}
 	}
 
 	private void publishRemoveEvent(MempoolTxRemoveEvent event) {
@@ -1077,6 +1449,30 @@ public class MempoolStore {
 		void add(Hash hash);
 
 		void remove(Hash hash);
+	}
+
+	private static final class LifecycleEventBatch {
+		private final List<MempoolTxRemoveEvent> removals = new ArrayList<>();
+		private final LinkedHashMap<Hash, MempoolTxAddEvent> additions = new LinkedHashMap<>();
+
+		void add(List<MempoolTxRemoveEvent> newRemovals, List<MempoolTxAddEvent> newAdditions) {
+			for (MempoolTxRemoveEvent removal : newRemovals) {
+				if (additions.remove(removal.getEntry().getHash()) == null) {
+					removals.add(removal);
+				}
+			}
+			for (MempoolTxAddEvent addition : newAdditions) {
+				additions.put(addition.getEntry().getHash(), addition);
+			}
+		}
+
+		List<MempoolTxRemoveEvent> removals() {
+			return List.copyOf(removals);
+		}
+
+		List<MempoolTxAddEvent> additions() {
+			return List.copyOf(additions.values());
+		}
 	}
 
 	@Getter

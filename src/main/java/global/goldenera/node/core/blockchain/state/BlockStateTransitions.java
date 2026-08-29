@@ -52,6 +52,8 @@ import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalAppender;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalDraft;
 import global.goldenera.node.core.storage.chainidentity.VerifiedGenesisPlan;
 import global.goldenera.node.core.storage.chainidentity.VerifiedGenesisPlan.ClaimedGenesis;
 import global.goldenera.node.shared.exceptions.GEFailedException;
@@ -71,6 +73,7 @@ public class BlockStateTransitions {
 	ReentrantLock masterChainLock;
 	EntityIndexRepository entityIndexRepository;
 	BlockEventExtractor blockEventExtractor;
+	LifecycleJournalAppender lifecycleJournalAppender;
 
 	public BlockStateTransitions(
 			BlockRepository blockRepository,
@@ -79,7 +82,8 @@ public class BlockStateTransitions {
 			ApplicationEventPublisher applicationEventPublisher,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
 			EntityIndexRepository entityIndexRepository,
-			BlockEventExtractor blockEventExtractor) {
+			BlockEventExtractor blockEventExtractor,
+			LifecycleJournalAppender lifecycleJournalAppender) {
 		this.blockRepository = blockRepository;
 		this.chainQueryService = chainQueryService;
 		this.chainSwitchService = chainSwitchService;
@@ -87,6 +91,7 @@ public class BlockStateTransitions {
 		this.masterChainLock = masterChainLock;
 		this.entityIndexRepository = entityIndexRepository;
 		this.blockEventExtractor = blockEventExtractor;
+		this.lifecycleJournalAppender = lifecycleJournalAppender;
 	}
 
 	public void connectValidatedBlock(
@@ -241,6 +246,11 @@ public class BlockStateTransitions {
 					if (performFullConnect) {
 						entityIndexRepository.saveEntities(batch, block, worldState);
 						blockRepository.addBlockToBatch(batch, storedBlockToSave);
+						lifecycleJournalAppender.appendCanonicalToBatch(batch, List.of(
+								LifecycleJournalDraft.connect(
+										null, 0, 1, height, block.getHash(), block.getHeader().getPreviousHash(),
+										receivedAt == null ? Instant.now() : receivedAt,
+										source.getCode(), null)));
 					} else {
 						try {
 							blockRepository.saveForkBlockDataToBatch(batch, storedBlockToSave);

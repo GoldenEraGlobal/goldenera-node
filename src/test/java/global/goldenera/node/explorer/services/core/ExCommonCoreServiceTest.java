@@ -26,12 +26,18 @@ package global.goldenera.node.explorer.services.core;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -59,6 +65,7 @@ class ExCommonCoreServiceTest {
 	private final ExValidatorRepository validators = mock(ExValidatorRepository.class);
 	private final ExAuthorityRepository authorities = mock(ExAuthorityRepository.class);
 	private final ExMemTransferRepository mempool = mock(ExMemTransferRepository.class);
+	private final ExplorerSearchQueryPlan queryPlan = directQueryPlan();
 
 	@AfterEach
 	void clearInterruptFlag() {
@@ -99,13 +106,35 @@ class ExCommonCoreServiceTest {
 
 	@Test
 	void timesOutWhenTheBoundedExecutorCannotCompleteSearchWork() {
-		Executor stalledExecutor = command -> {
-		};
+		List<Runnable> submitted = new java.util.ArrayList<>();
+		Executor stalledExecutor = submitted::add;
 		ExCommonCoreService service = service(stalledExecutor, 1);
 
 		assertThatThrownBy(() -> service.search("gold", Set.of(ExSearchEntityType.TOKEN)))
 				.isInstanceOf(GEFailedException.class)
 				.hasMessageContaining("timed out");
+		assertThat(submitted).allMatch(command -> ((FutureTask<?>) command).isCancelled());
+	}
+
+	@Test
+	void rejectionCancelsTasksSubmittedEarlierInTheSameSearch() {
+		List<Runnable> submitted = new java.util.ArrayList<>();
+		AtomicInteger attempts = new AtomicInteger();
+		Executor rejectSecond = command -> {
+			if (attempts.getAndIncrement() > 0) {
+				throw new RejectedExecutionException("full");
+			}
+			submitted.add(command);
+		};
+		ExCommonCoreService service = service(rejectSecond, 1_000);
+
+		assertThatThrownBy(() -> service.search(
+				"0x1111111111111111111111111111111111111111",
+				Set.of(ExSearchEntityType.ACCOUNT)))
+				.isInstanceOf(GEFailedException.class)
+				.hasMessageContaining("capacity exhausted");
+		assertThat(submitted).singleElement().satisfies(command ->
+				assertThat(((FutureTask<?>) command).isCancelled()).isTrue());
 	}
 
 	@Test
@@ -119,6 +148,7 @@ class ExCommonCoreServiceTest {
 			context.registerBean(ExValidatorRepository.class, () -> validators);
 			context.registerBean(ExAuthorityRepository.class, () -> authorities);
 			context.registerBean(ExMemTransferRepository.class, () -> mempool);
+			context.registerBean(ExplorerSearchQueryPlan.class, () -> queryPlan);
 			context.registerBean(
 					ExplorerAsyncConfig.EXPLORER_SEARCH_EXECUTOR, Executor.class, () -> Runnable::run);
 			context.register(ExCommonCoreService.class);
@@ -132,6 +162,13 @@ class ExCommonCoreServiceTest {
 	private ExCommonCoreService service(Executor executor, long timeoutMillis) {
 		return new ExCommonCoreService(
 				blocks, txs, accounts, tokens, aliases, validators, authorities, mempool,
-				executor, timeoutMillis);
+				queryPlan, executor, timeoutMillis);
+	}
+
+	private ExplorerSearchQueryPlan directQueryPlan() {
+		ExplorerSearchQueryPlan plan = mock(ExplorerSearchQueryPlan.class);
+		when(plan.execute(anyLong(), any())).thenAnswer(invocation ->
+				((Supplier<?>) invocation.getArgument(1)).get());
+		return plan;
 	}
 }

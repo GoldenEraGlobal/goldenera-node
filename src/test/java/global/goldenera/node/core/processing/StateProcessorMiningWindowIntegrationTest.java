@@ -78,7 +78,7 @@ class StateProcessorMiningWindowIntegrationTest {
 			ValidatorMiningPolicyService policyService = new ValidatorMiningPolicyService();
 			StateProcessor processor = new StateProcessor(
 					List.of(), mock(MiningEconomicsActivationService.class), policyService);
-			SimpleBlock block = signedBlock(731_504);
+			SimpleBlock block = signedBlock(753_997);
 
 			processor.executeTransactions(validationState, block, List.of(), validationState.getParams());
 			processor.executeMiningBatch(miningState, block, List.of(), miningState.getParams());
@@ -98,7 +98,7 @@ class StateProcessorMiningWindowIntegrationTest {
 			ValidatorMiningPolicyService policyService = new ValidatorMiningPolicyService();
 			StateProcessor processor = new StateProcessor(
 					List.of(), new MiningEconomicsActivationService(), policyService);
-			SimpleBlock block = signedBlock(731_503);
+			SimpleBlock block = signedBlock(753_996);
 
 			processor.executeTransactions(state, block, List.of(), state.getParams());
 
@@ -106,7 +106,7 @@ class StateProcessorMiningWindowIntegrationTest {
 			assertThat(block.getIdentity()).isNotEqualTo(block.getCoinbase());
 			assertThat(state.getParams().getVersion()).isEqualTo(NetworkParamsStateVersion.V2);
 			assertThat(state.getMiningWindow().getOrderedValidatorIdentities()).isEmpty();
-			assertThat(state.getMiningWindow().getLastUpdatedBlockHeight()).isEqualTo(731_503);
+			assertThat(state.getMiningWindow().getLastUpdatedBlockHeight()).isEqualTo(753_996);
 		}
 	}
 

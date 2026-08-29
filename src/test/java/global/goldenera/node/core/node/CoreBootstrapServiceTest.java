@@ -53,6 +53,7 @@ import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.blockchain.genesis.GenesisInitializer;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.mempool.MempoolStartupRecoveryCoordinator;
 import global.goldenera.node.core.node.readiness.CoreReadinessFailureReason;
 import global.goldenera.node.core.node.readiness.CoreReadinessStage;
 import global.goldenera.node.core.node.readiness.CoreMilestonePublisher;
@@ -80,12 +81,13 @@ class CoreBootstrapServiceTest {
 		fixture.service.onApplicationReady(mock(ApplicationReadyEvent.class));
 
 		InOrder order = inOrder(fixture.identity, fixture.genesis, fixture.headState,
-				fixture.activation, fixture.p2p, fixture.connections, fixture.sync,
+				fixture.activation, fixture.mempoolRecovery, fixture.p2p, fixture.connections, fixture.sync,
 				fixture.directory, fixture.milestones);
 		order.verify(fixture.identity).identity();
 		order.verify(fixture.genesis).checkAndInitGenesisBlock();
 		order.verify(fixture.headState).init();
 		order.verify(fixture.activation).assertHeadReady(isNull(), eq(42L));
+		order.verify(fixture.mempoolRecovery).recover();
 		order.verify(fixture.milestones).publish(any(CoreDbReadyEvent.class));
 		order.verify(fixture.p2p).start();
 		order.verify(fixture.connections).start();
@@ -141,6 +143,24 @@ class CoreBootstrapServiceTest {
 				.isEqualTo(CoreReadinessFailureReason.GENESIS_HEAD);
 		verify(fixture.p2p, never()).start();
 		verify(fixture.milestones, never()).publish(any(CoreReadyEvent.class));
+	}
+
+	@Test
+	void mempoolRecoveryFailureIsTypedAndPreventsP2pAndPeerSync() throws Exception {
+		Fixture fixture = new Fixture();
+		doThrow(new IllegalStateException("corrupt persisted mempool"))
+				.when(fixture.mempoolRecovery).recover();
+
+		assertThatThrownBy(() -> fixture.service.onApplicationReady(mock(ApplicationReadyEvent.class)))
+				.isInstanceOf(CoreBootstrapException.class)
+				.hasMessageContaining("mempool recovery");
+
+		assertThat(fixture.readiness.status().failureReason())
+				.isEqualTo(CoreReadinessFailureReason.MEMPOOL_RECOVERY);
+		verify(fixture.p2p, never()).start();
+		verify(fixture.connections, never()).start();
+		verify(fixture.sync, never()).start();
+		verify(fixture.milestones, never()).publish(any(CoreDbReadyEvent.class));
 	}
 
 	@Test
@@ -206,6 +226,7 @@ class CoreBootstrapServiceTest {
 		private final MiningEconomicsActivationService activation = mock(MiningEconomicsActivationService.class);
 		private final AuthoritativeChainIdentityProvider identity = mock(AuthoritativeChainIdentityProvider.class);
 		private final CoreRuntimeReadinessTracker readiness = new CoreRuntimeReadinessTracker();
+		private final MempoolStartupRecoveryCoordinator mempoolRecovery = mock(MempoolStartupRecoveryCoordinator.class);
 		private final CoreBootstrapService service;
 
 		private Fixture() {
@@ -235,7 +256,8 @@ class CoreBootstrapServiceTest {
 					chain,
 					activation,
 					identity,
-					readiness);
+					readiness,
+					mempoolRecovery);
 		}
 	}
 }

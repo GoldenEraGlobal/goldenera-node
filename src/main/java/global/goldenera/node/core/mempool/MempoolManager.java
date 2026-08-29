@@ -37,10 +37,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.function.ToLongFunction;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.context.event.EventListener;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -49,6 +50,7 @@ import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.serialization.tx.TxEncoder;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
@@ -58,6 +60,7 @@ import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
+import global.goldenera.node.core.storage.blockchain.mempool.MempoolMutationBatch;
 import global.goldenera.node.core.state.WorldState;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -88,11 +91,14 @@ public class MempoolManager {
 	ChainHeadStateCache chainHeadStateService;
 	Executor mempoolEventExecutor;
 	ThreadPoolTaskScheduler coreScheduler;
+	MempoolRecoveryGate recoveryGate;
 
+	@Autowired
 	public MempoolManager(MeterRegistry registry, MempoolStore mempoolStore, MempoolValidator mempoolValidator,
 			MempoolProperties mempoolProperties, ChainHeadStateCache chainHeadStateService,
 			@Qualifier(MEMPOOL_EVENT_EXECUTOR) Executor mempoolEventExecutor,
-			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler) {
+			@Qualifier(CORE_SCHEDULER) ThreadPoolTaskScheduler coreScheduler,
+			MempoolRecoveryGate recoveryGate) {
 		this.registry = registry;
 		this.mempoolStore = mempoolStore;
 		this.mempoolValidator = mempoolValidator;
@@ -100,6 +106,14 @@ public class MempoolManager {
 		this.chainHeadStateService = chainHeadStateService;
 		this.mempoolEventExecutor = mempoolEventExecutor;
 		this.coreScheduler = coreScheduler;
+		this.recoveryGate = recoveryGate;
+	}
+
+	public MempoolManager(MeterRegistry registry, MempoolStore mempoolStore, MempoolValidator mempoolValidator,
+			MempoolProperties mempoolProperties, ChainHeadStateCache chainHeadStateService,
+			Executor mempoolEventExecutor, ThreadPoolTaskScheduler coreScheduler) {
+		this(registry, mempoolStore, mempoolValidator, mempoolProperties, chainHeadStateService,
+				mempoolEventExecutor, coreScheduler, MempoolRecoveryGate.completedForTests());
 	}
 
 	@PostConstruct
@@ -114,6 +128,9 @@ public class MempoolManager {
 	 * Scheduled task to prune expired transactions from the mempool.
 	 */
 	private void pruneExpired() {
+		if (!recoveryGate.isRecovered()) {
+			return;
+		}
 		long expireTimeMs = mempoolProperties.getTxExpireTimeInMinutes() * 60 * 1000L;
 		Instant cutoffTime = Instant.now().minusMillis(expireTimeMs);
 		mempoolStore.pruneExpiredTransactions(cutoffTime);
@@ -264,14 +281,50 @@ public class MempoolManager {
 	public void addTxs(@NonNull List<Tx> txs, Address receivedFrom, @NonNull MempoolTxAddEvent.AddReason reason,
 			boolean skipValidation) {
 		log.debug("addTxs called: {} txs, reason={}, skipValidation={}", txs.size(), reason, skipValidation);
-		int added = 0;
-		for (Tx tx : txs) {
-			MempoolResult result = addTx(tx, receivedFrom, reason, skipValidation);
-			if (result.status().isSuccess()) {
-				added++;
-			}
+		int[] added = { 0 };
+		for (List<Tx> chunk : persistenceChunks(txs)) {
+			mempoolStore.executePersistenceBatch(() -> {
+				for (Tx tx : chunk) {
+					MempoolResult result = addTx(tx, receivedFrom, reason, skipValidation);
+					if (result.status().isSuccess()) {
+						added[0]++;
+					}
+				}
+			});
 		}
-		log.debug("Mempool batch added {}/{} tx(s)", added, txs.size());
+		log.debug("Mempool batch added {}/{} tx(s)", added[0], txs.size());
+	}
+
+	private List<List<Tx>> persistenceChunks(List<Tx> txs) {
+		return persistenceChunks(txs, tx -> TxEncoder.INSTANCE.encode(tx, true).size());
+	}
+
+	static List<List<Tx>> persistenceChunks(List<Tx> txs, ToLongFunction<Tx> encodedSize) {
+		List<List<Tx>> chunks = new ArrayList<>();
+		List<Tx> chunk = new ArrayList<>();
+		long rawBytes = 0L;
+		for (Tx tx : txs) {
+			long encodedBytes = encodedSize.applyAsLong(tx);
+			if (encodedBytes < 1L) {
+				throw new IllegalArgumentException("Encoded transaction size must be positive");
+			}
+			if (encodedBytes > MempoolMutationBatch.MAX_RAW_ADMISSION_BYTES_PER_BATCH) {
+				throw new IllegalArgumentException("Transaction exceeds the persistent mempool batch byte contract");
+			}
+			if (!chunk.isEmpty() && (rawBytes + encodedBytes
+					> MempoolMutationBatch.MAX_RAW_ADMISSION_BYTES_PER_BATCH
+					|| chunk.size() >= MempoolMutationBatch.MAX_MUTATIONS)) {
+				chunks.add(List.copyOf(chunk));
+				chunk.clear();
+				rawBytes = 0L;
+			}
+			chunk.add(tx);
+			rawBytes = Math.addExact(rawBytes, encodedBytes);
+		}
+		if (!chunk.isEmpty()) {
+			chunks.add(List.copyOf(chunk));
+		}
+		return List.copyOf(chunks);
 	}
 
 	public Iterator<MempoolEntry> getTxIterator() {
@@ -312,6 +365,9 @@ public class MempoolManager {
 	 * processing (especially on non-mining nodes).
 	 */
 	public synchronized void revalidateMempool() {
+		if (!recoveryGate.isRecovered()) {
+			return;
+		}
 		if (mempoolStore.getCount() == 0) {
 			return;
 		}
@@ -404,7 +460,6 @@ public class MempoolManager {
 	 * @param event
 	 *            The event containing the connected block and its txs.
 	 */
-	@EventListener
 	public void onBlockConnected(BlockConnectedEvent event) {
 		if (event.isBatchMember()) {
 			return;
@@ -417,7 +472,6 @@ public class MempoolManager {
 				"connect", newBlock, () -> processBlockConnected(newBlock)));
 	}
 
-	@EventListener
 	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
 		if (event.getConnectedSource() != ConnectedSource.SYNC) {
 			return;
@@ -449,7 +503,6 @@ public class MempoolManager {
 	 * @param event
 	 *            The event containing the *disconnected* block and its txs.
 	 */
-	@EventListener
 	public void onBlockDisconnected(BlockDisconnectedEvent event) {
 		Block oldBlock = event.getBlock();
 		if (oldBlock.getHeight() == 0) { // Genesis block
@@ -463,9 +516,20 @@ public class MempoolManager {
 	 * Revalidates the final mempool projection after every disconnected and
 	 * connected block from a reorg has been processed by the ordered executor.
 	 */
-	@EventListener
 	public void onBlockReorg(BlockReorgEvent event) {
 		mempoolEventExecutor.execute(this::revalidateMempool);
+	}
+
+	void applyCanonicalConnect(Block block) {
+		processBlockConnected(block);
+	}
+
+	void applyCanonicalDisconnect(Block block) {
+		processBlockDisconnected(block);
+	}
+
+	void applyCanonicalReorgCommit() {
+		revalidateMempool();
 	}
 
 	private synchronized void processBlockDisconnected(Block oldBlock) {

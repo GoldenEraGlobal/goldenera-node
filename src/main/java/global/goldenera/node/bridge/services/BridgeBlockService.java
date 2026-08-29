@@ -24,36 +24,25 @@
 package global.goldenera.node.bridge.services;
 
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
 import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
-import global.goldenera.node.explorer.services.core.ExBlockHeaderCoreService;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import lombok.RequiredArgsConstructor;
 
 @Service
-@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 public class BridgeBlockService {
 
-    private final BridgeNetworkValidator networkValidator;
-    private final ObjectProvider<ExBlockHeaderCoreService> exBlockHeaderCoreService;
-    private final ChainQuery chainQuery;
+	private final BridgeNetworkValidator networkValidator;
+	private final ChainQuery chainQuery;
     private final MempoolTxMapper mempoolTxMapper;
 
-    public BridgeLastBlockDtoV1 getLastBlock(Network network) {
-        networkValidator.validate(network);
-        ExBlockHeaderCoreService explorer = exBlockHeaderCoreService.getIfAvailable();
-        Long height = explorer == null
-                ? null
-                : explorer.getLatestOptional().map(header -> header.getHeight()).orElse(null);
-        if (height == null) {
-            height = chainQuery.getLatestBlockHeight().orElse(null);
-        }
+	public BridgeLastBlockDtoV1 getLastBlock(Network network) {
+		networkValidator.validate(network);
+		Long height = chainQuery.getLatestBlockHeight().orElse(null);
         if (height == null) {
             throw new GENotFoundException("Latest canonical block not found");
         }

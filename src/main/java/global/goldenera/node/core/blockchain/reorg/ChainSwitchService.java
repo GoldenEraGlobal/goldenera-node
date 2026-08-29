@@ -32,6 +32,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.units.ethereum.Wei;
@@ -61,6 +62,8 @@ import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalAppender;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalDraft;
 import global.goldenera.node.core.sync.snapshot.bootstrap.CoreSnapshotCheckpointFloorPolicy;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
@@ -82,6 +85,7 @@ public class ChainSwitchService {
     EntityIndexRepository entityIndexRepository;
     BlockEventExtractor blockEventExtractor;
     CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy;
+    LifecycleJournalAppender lifecycleJournalAppender;
 
     public ChainSwitchService(
             ChainQuery chainQueryService,
@@ -93,7 +97,8 @@ public class ChainSwitchService {
             @Qualifier("masterChainLock") ReentrantLock masterChainLock,
             EntityIndexRepository entityIndexRepository,
             BlockEventExtractor blockEventExtractor,
-            CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy) {
+            CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy,
+            LifecycleJournalAppender lifecycleJournalAppender) {
         this.chainQueryService = chainQueryService;
         this.blockRepository = blockRepository;
         this.worldStateFactory = worldStateFactory;
@@ -104,6 +109,7 @@ public class ChainSwitchService {
         this.entityIndexRepository = entityIndexRepository;
         this.blockEventExtractor = blockEventExtractor;
         this.checkpointFloorPolicy = checkpointFloorPolicy;
+        this.lifecycleJournalAppender = lifecycleJournalAppender;
     }
 
     void executeAtomicSyncSwap(
@@ -169,6 +175,10 @@ public class ChainSwitchService {
             }
 
             try {
+                UUID journalGroupId = UUID.randomUUID();
+                Instant journalOccurredAt = Instant.now();
+                int journalGroupSize = oldChainStored.size() + newChainHeaders.size() + (isReorg ? 1 : 0);
+                List<LifecycleJournalDraft> journalDrafts = new ArrayList<>(journalGroupSize);
                 blockRepository.executeAtomicBatch(batch -> {
                     for (StoredBlock storedBlockToDisconnect : oldChainStored) {
                         Block blockToDisconnect = storedBlockToDisconnect.getBlock();
@@ -182,6 +192,11 @@ public class ChainSwitchService {
 
                         entityIndexRepository.revertEntities(batch, blockToDisconnect);
                         blockDisconnectedEvents.add(new BlockDisconnectedEvent(this, blockToDisconnect));
+                        journalDrafts.add(LifecycleJournalDraft.disconnect(
+                                journalGroupId, journalDrafts.size(), journalGroupSize,
+                                blockToDisconnect.getHeight(), blockToDisconnect.getHash(),
+                                blockToDisconnect.getHeader().getPreviousHash(), journalOccurredAt,
+                                ConnectedSource.REORG.getCode()));
                     }
 
                     Block previousBlock = canonicalAncestor.getBlock();
@@ -289,6 +304,11 @@ public class ChainSwitchService {
                                 !isReorg);
 
                         blockConnectedEvents.add(event);
+                        journalDrafts.add(LifecycleJournalDraft.connect(
+                                journalGroupId, journalDrafts.size(), journalGroupSize,
+                                blockToConnect.getHeight(), blockToConnect.getHash(),
+                                blockToConnect.getHeader().getPreviousHash(), journalOccurredAt,
+                                event.getConnectedSource().getCode(), null));
                         worldState.prepareForNextBlock();
                         previousBlock = blockToConnect;
                         branchHeaders.put(blockToConnect.getHeight(), blockToConnect.getHeader());
@@ -304,6 +324,15 @@ public class ChainSwitchService {
                                     String.format("%.1f", blocksPerSec));
                         }
                     }
+                    if (isReorg) {
+                        StoredBlock oldTip = oldChainStored.get(0);
+                        StoredBlock newTip = newChainHeaders.get(newChainHeaders.size() - 1);
+                        journalDrafts.add(LifecycleJournalDraft.reorgCommit(
+                                journalGroupId, journalDrafts.size(), journalGroupSize,
+                                newTip.getHeight(), newTip.getHash(), oldTip.getHash(),
+                                journalOccurredAt, ConnectedSource.REORG.getCode()));
+                    }
+                    lifecycleJournalAppender.appendCanonicalToBatch(batch, journalDrafts);
                 });
                 entityIndexRepository.invalidateCaches();
             } catch (RuntimeException e) {

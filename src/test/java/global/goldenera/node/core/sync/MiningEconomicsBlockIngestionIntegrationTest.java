@@ -111,6 +111,7 @@ import global.goldenera.node.core.state.WorldStateSerialization;
 import global.goldenera.node.core.state.trie.rocksdb.RocksDBMerkleStorageFactory;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalAppender;
 import global.goldenera.node.core.storage.blockchain.RocksDBRepository;
 import global.goldenera.node.core.storage.blockchain.RocksDbColumnFamilies;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
@@ -289,10 +290,10 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.isEqualTo(Wei.valueOf(100));
 			assertThat(losingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getLockedMiningReward())
 					.isEqualTo(Wei.valueOf(200));
-			assertThat(losingState.getMiningRewardMaturity(731_506).getRewards()).isEmpty();
-			assertThat(losingState.getMiningRewardMaturity(731_507).getRewards())
+			assertThat(losingState.getMiningRewardMaturity(753_999).getRewards()).isEmpty();
+			assertThat(losingState.getMiningRewardMaturity(754_000).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
-			assertThat(losingState.getMiningRewardMaturity(731_508).getRewards())
+			assertThat(losingState.getMiningRewardMaturity(754_001).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 
 			Block forkEleven = fixture.buildValidChild(base.getBlock(), MINER_B_KEY);
@@ -314,17 +315,17 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.isEqualTo(Wei.valueOf(200));
 			assertThat(winningState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN).getLockedMiningReward())
 					.isEqualTo(Wei.valueOf(200));
-			assertThat(winningState.getMiningRewardMaturity(731_507).getRewards()).isEmpty();
-			assertThat(winningState.getMiningRewardMaturity(731_508).getRewards())
+			assertThat(winningState.getMiningRewardMaturity(754_000).getRewards()).isEmpty();
+			assertThat(winningState.getMiningRewardMaturity(754_001).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
-			assertThat(winningState.getMiningRewardMaturity(731_509).getRewards())
+			assertThat(winningState.getMiningRewardMaturity(754_002).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 
 			WorldState persistedLosingState = fixture.worldStateFactory.createForValidation(losingRoot);
 			assertThat(persistedLosingState.calculateRootHash()).isEqualTo(losingRoot);
 			assertThat(persistedLosingState.getBalance(BENEFICIARY, Address.NATIVE_TOKEN)
 					.getLockedMiningReward()).isEqualTo(Wei.valueOf(200));
-			assertThat(persistedLosingState.getMiningRewardMaturity(731_507).getRewards())
+			assertThat(persistedLosingState.getMiningRewardMaturity(754_000).getRewards())
 					.containsEntry(BENEFICIARY, Wei.valueOf(100));
 		}
 	}
@@ -346,7 +347,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					.hasMessageContaining("candidate count 41 exceeds maximum 40");
 
 			assertThat(fixture.chainQuery.getLatestStoredBlockOrThrow().getHash()).isEqualTo(base.getHash());
-			assertThat(fixture.chainQuery.getStoredBlockByHeight(731_504)).isEmpty();
+			assertThat(fixture.chainQuery.getStoredBlockByHeight(753_997)).isEmpty();
 		}
 	}
 
@@ -674,16 +675,18 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 						lock,
 						entityIndex,
 						eventExtractor,
-						CoreSnapshotCheckpointFloorPolicy.withoutFloor());
+						CoreSnapshotCheckpointFloorPolicy.withoutFloor(),
+						mock(LifecycleJournalAppender.class));
 			blockReorgs = new BlockReorgs(chainSwitchService);
 			BlockStateTransitions transitions = new BlockStateTransitions(
 					blockRepository,
 					chainQuery,
 					chainSwitchService,
 					events,
-					lock,
-					entityIndex,
-					eventExtractor);
+						lock,
+						entityIndex,
+						eventExtractor,
+						mock(LifecycleJournalAppender.class));
 			SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 			BlockOrphanBufferService orphanBuffer = new BlockOrphanBufferService(
 					meterRegistry, mock(ThreadPoolTaskScheduler.class));
@@ -709,7 +712,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to seed expected legacy state", exception);
 			}
-			Block block = signedBlock(731_502, Hash.ZERO, root, MINER_A_KEY);
+			Block block = signedBlock(753_995, Hash.ZERO, root, MINER_A_KEY);
 			StoredBlock stored = stored(block, BigInteger.TEN);
 			rocksRepository.executeAtomicBatch(batch -> {
 				state.persistToBatch(batch);
@@ -729,7 +732,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to seed expected active state", exception);
 			}
-			Block block = signedBlock(731_503, Hash.ZERO, root, MINER_B_KEY);
+			Block block = signedBlock(753_996, Hash.ZERO, root, MINER_B_KEY);
 			StoredBlock stored = stored(block, BigInteger.valueOf(11));
 			rocksRepository.executeAtomicBatch(batch -> {
 				state.persistToBatch(batch);
@@ -749,7 +752,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 			} catch (Exception exception) {
 				throw new IllegalStateException("Unable to seed expected reward vesting state", exception);
 			}
-			Block block = signedBlock(731_503, Hash.ZERO, root, MINER_B_KEY);
+			Block block = signedBlock(753_996, Hash.ZERO, root, MINER_B_KEY);
 			StoredBlock stored = stored(block, BigInteger.valueOf(11));
 			rocksRepository.executeAtomicBatch(batch -> {
 				state.persistToBatch(batch);

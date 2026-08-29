@@ -23,73 +23,63 @@
  */
 package global.goldenera.node.bridge.webhook;
 
-import java.time.Duration;
-
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.bridge.webhook.BridgeReorgPendingStore.ReadyReadd;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import lombok.RequiredArgsConstructor;
 
 @Component
 @RequiredArgsConstructor
 @ConditionalOnProperty(
-		prefix = "ge.general",
-		name = { "explorer-enable", "postgresql-enable", "webhook-enable" },
+			prefix = "ge.general",
+			name = { "postgresql-enable", "webhook-enable" },
 		havingValue = "true",
 		matchIfMissing = true)
 public class BridgeReorgPendingGate {
 
-	private static final Duration REORG_CORRELATION_WINDOW = Duration.ofMinutes(30);
-
 	private final BridgeLifecycleCoordinator coordinator;
-	private final Object monitor = new Object();
-	private final Cache<Hash, MempoolEntry> coreReadds = Caffeine.newBuilder()
-			.expireAfterWrite(REORG_CORRELATION_WINDOW)
-			.maximumSize(100_000)
-			.build();
-	private final Cache<Hash, Boolean> committedExplorerReverts = Caffeine.newBuilder()
-			.expireAfterWrite(REORG_CORRELATION_WINDOW)
-			.maximumSize(100_000)
-			.build();
+	private final BridgeReorgPendingStore store;
 
 	public void coreReadded(MempoolEntry entry) {
-		MempoolEntry ready = null;
-		synchronized (monitor) {
-			Hash hash = entry.getHash();
-			if (committedExplorerReverts.getIfPresent(hash) != null) {
-				committedExplorerReverts.invalidate(hash);
-				ready = entry;
-			} else {
-				coreReadds.put(hash, entry);
-			}
-		}
-		if (ready != null) {
-			coordinator.pendingAfterReorg(ready);
+		coreReadded(entry, Long.MAX_VALUE);
+	}
+
+	public void coreReadded(MempoolEntry entry, long sourceSequence) {
+		coreReadded(entry, BridgeSourcePosition.live(sourceSequence));
+	}
+
+	public void coreReadded(MempoolEntry entry, BridgeSourcePosition position) {
+		emitReady(entry.getHash(), store.markReadded(entry, position));
+	}
+
+	public void canonicalRevertCommitted(Block orphanBlock) {
+		canonicalRevertCommitted(orphanBlock, Long.MAX_VALUE);
+	}
+
+	public void canonicalRevertCommitted(Block orphanBlock, long revertSequence) {
+		for (Tx tx : orphanBlock.getTxs()) {
+			emitReady(tx.getHash(), store.markCanonicalReverted(tx.getHash(), revertSequence));
 		}
 	}
 
-	public void explorerRevertCommitted(Block orphanBlock) {
-		for (Tx tx : orphanBlock.getTxs()) {
-			MempoolEntry ready;
-			synchronized (monitor) {
-				Hash hash = tx.getHash();
-				ready = coreReadds.getIfPresent(hash);
-				if (ready == null) {
-					committedExplorerReverts.put(hash, Boolean.TRUE);
-				} else {
-					coreReadds.invalidate(hash);
-				}
-			}
-			if (ready != null) {
-				coordinator.pendingAfterReorg(ready);
-			}
+	public void discard(Hash txHash) {
+		store.delete(txHash);
+	}
+
+	public boolean hasCanonicalRevert(Hash txHash) {
+		return store.hasCanonicalRevert(txHash);
+	}
+
+	private void emitReady(Hash txHash, ReadyReadd ready) {
+		if (ready == null) {
+			return;
 		}
+		coordinator.pendingAfterReorg(ready.entry(), ready.position());
+		store.delete(txHash);
 	}
 }

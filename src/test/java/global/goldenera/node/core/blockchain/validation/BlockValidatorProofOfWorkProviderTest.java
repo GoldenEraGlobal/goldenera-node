@@ -84,9 +84,9 @@ class BlockValidatorProofOfWorkProviderTest {
 				.thenAnswer(invocation -> new ProofOfWorkHasher(input -> new byte[32], () -> { }));
 		BlockValidator validator = validator(provider);
 
-		assertThatCode(() -> validator.validateHeader(mockHeaderWithForeignIdentity(731_502)))
+		assertThatCode(() -> validator.validateHeader(mockHeaderWithForeignIdentity(753_995)))
 				.doesNotThrowAnyException();
-		assertThatThrownBy(() -> validator.validateHeader(mockHeaderWithForeignIdentity(731_503)))
+		assertThatThrownBy(() -> validator.validateHeader(mockHeaderWithForeignIdentity(753_996)))
 				.isInstanceOf(BlockValidationException.class)
 				.hasRootCauseMessage("Miner signature does not authenticate the recovered identity");
 	}

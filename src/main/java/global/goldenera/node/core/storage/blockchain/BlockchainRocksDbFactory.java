@@ -65,9 +65,11 @@ public final class BlockchainRocksDbFactory {
 			RocksDbColumnFamilies.CF_METADATA,
 			RocksDbColumnFamilies.CF_TOKENS,
 			RocksDbColumnFamilies.CF_AUTHORITIES,
-			RocksDbColumnFamilies.CF_VALIDATORS,
-			RocksDbColumnFamilies.CF_ENTITY_UNDO_LOG,
-			RocksDbColumnFamilies.CF_EQUIVOCATIONS);
+				RocksDbColumnFamilies.CF_VALIDATORS,
+				RocksDbColumnFamilies.CF_ENTITY_UNDO_LOG,
+				RocksDbColumnFamilies.CF_EQUIVOCATIONS,
+				RocksDbColumnFamilies.CF_LIFECYCLE_JOURNAL,
+				RocksDbColumnFamilies.CF_MEMPOOL_STATE);
 
 	private final BlockchainDbProperties properties;
 
@@ -147,7 +149,9 @@ public final class BlockchainRocksDbFactory {
 						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_AUTHORITIES.getBytes(UTF_8), defaultOptions),
 						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_VALIDATORS.getBytes(UTF_8), defaultOptions),
 						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_ENTITY_UNDO_LOG.getBytes(UTF_8), defaultOptions),
-						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_EQUIVOCATIONS.getBytes(UTF_8), defaultOptions));
+						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_EQUIVOCATIONS.getBytes(UTF_8), defaultOptions),
+						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_LIFECYCLE_JOURNAL.getBytes(UTF_8), indexOptions),
+						new ColumnFamilyDescriptor(RocksDbColumnFamilies.CF_MEMPOOL_STATE.getBytes(UTF_8), indexOptions));
 
 				if (properties.isRocksdbDirectReads()) {
 					databaseOptions.setUseDirectReads(true);

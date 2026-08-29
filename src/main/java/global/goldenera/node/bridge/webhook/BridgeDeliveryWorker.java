@@ -31,7 +31,14 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -44,6 +51,7 @@ import global.goldenera.node.bridge.webhook.BridgeDeliveryRetryPolicy.Outcome;
 import global.goldenera.node.bridge.webhook.BridgeDeliveryStore.ClaimedDelivery;
 import global.goldenera.node.shared.components.AESGCMComponent;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
@@ -70,6 +78,7 @@ public class BridgeDeliveryWorker {
 	static final Duration LEASE_DURATION = Duration.ofMinutes(2);
 	static final int CLAIM_LIMIT = 8;
 	static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+	private static final AtomicInteger DELIVERY_THREAD_ID = new AtomicInteger();
 
 	OkHttpClient httpClient;
 	TaskScheduler scheduler;
@@ -78,7 +87,9 @@ public class BridgeDeliveryWorker {
 	BridgeWebhookSignatureService signatures;
 	BridgeDeliveryRetryPolicy retryPolicy;
 	String workerId;
+	Executor deliveryExecutor;
 	AtomicBoolean running = new AtomicBoolean();
+	Semaphore deliveryPermits = new Semaphore(CLAIM_LIMIT);
 
 	@Autowired
 	public BridgeDeliveryWorker(
@@ -89,7 +100,7 @@ public class BridgeDeliveryWorker {
 			BridgeWebhookSignatureService signatures,
 			BridgeDeliveryRetryPolicy retryPolicy) {
 		this(httpClient, scheduler, store, encryption, signatures, retryPolicy,
-				"bridge-delivery-" + UUID.randomUUID());
+				"bridge-delivery-" + UUID.randomUUID(), newDeliveryExecutor());
 	}
 
 	BridgeDeliveryWorker(
@@ -100,6 +111,18 @@ public class BridgeDeliveryWorker {
 			BridgeWebhookSignatureService signatures,
 			BridgeDeliveryRetryPolicy retryPolicy,
 			String workerId) {
+		this(httpClient, scheduler, store, encryption, signatures, retryPolicy, workerId, Runnable::run);
+	}
+
+	BridgeDeliveryWorker(
+			OkHttpClient httpClient,
+			TaskScheduler scheduler,
+			BridgeDeliveryStore store,
+			AESGCMComponent encryption,
+			BridgeWebhookSignatureService signatures,
+			BridgeDeliveryRetryPolicy retryPolicy,
+			String workerId,
+			Executor deliveryExecutor) {
 		this.httpClient = httpClient;
 		this.scheduler = scheduler;
 		this.store = store;
@@ -107,11 +130,28 @@ public class BridgeDeliveryWorker {
 		this.signatures = signatures;
 		this.retryPolicy = retryPolicy;
 		this.workerId = workerId;
+		this.deliveryExecutor = deliveryExecutor;
 	}
 
 	@PostConstruct
 	void schedule() {
 		scheduler.scheduleWithFixedDelay(this::processAvailable, POLL_INTERVAL);
+	}
+
+	@PreDestroy
+	void stop() {
+		if (!(deliveryExecutor instanceof ExecutorService executorService)) {
+			return;
+		}
+		executorService.shutdown();
+		try {
+			if (!executorService.awaitTermination(5, TimeUnit.SECONDS)) {
+				executorService.shutdownNow();
+			}
+		} catch (InterruptedException exception) {
+			executorService.shutdownNow();
+			Thread.currentThread().interrupt();
+		}
 	}
 
 	void processAvailable() {
@@ -120,8 +160,26 @@ public class BridgeDeliveryWorker {
 		}
 		try {
 			Instant now = Instant.now();
-			for (ClaimedDelivery delivery : store.claimAvailable(workerId, now, LEASE_DURATION, CLAIM_LIMIT)) {
-				deliver(delivery);
+			int available = deliveryPermits.availablePermits();
+			if (available == 0) {
+				return;
+			}
+			for (ClaimedDelivery delivery : store.claimAvailable(workerId, now, LEASE_DURATION, available)) {
+				if (!deliveryPermits.tryAcquire()) {
+					break;
+				}
+				try {
+					deliveryExecutor.execute(() -> {
+						try {
+							deliver(delivery);
+						} finally {
+							deliveryPermits.release();
+						}
+					});
+				} catch (RuntimeException failure) {
+					deliveryPermits.release();
+					throw failure;
+				}
 			}
 		} catch (RuntimeException exception) {
 			log.error("Bridge delivery worker iteration failed", exception);
@@ -186,5 +244,20 @@ public class BridgeDeliveryWorker {
 					now);
 			case DEAD -> store.markDead(delivery.getDeliveryId(), workerId, statusCode, error, now);
 		}
+	}
+
+	private static ExecutorService newDeliveryExecutor() {
+		return new ThreadPoolExecutor(
+				CLAIM_LIMIT,
+				CLAIM_LIMIT,
+				0L,
+				TimeUnit.MILLISECONDS,
+				new SynchronousQueue<>(),
+				runnable -> {
+			Thread thread = new Thread(runnable,
+					"bridge-delivery-http-" + DELIVERY_THREAD_ID.incrementAndGet());
+			thread.setDaemon(true);
+			return thread;
+		}, new ThreadPoolExecutor.AbortPolicy());
 	}
 }

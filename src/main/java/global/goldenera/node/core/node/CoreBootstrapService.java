@@ -35,6 +35,7 @@ import global.goldenera.node.core.blockchain.events.CoreReadyEvent;
 import global.goldenera.node.core.blockchain.genesis.GenesisInitializer;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.mempool.MempoolStartupRecoveryCoordinator;
 import global.goldenera.node.core.node.readiness.CoreReadinessFailureReason;
 import global.goldenera.node.core.node.readiness.CoreMilestonePublisher;
 import global.goldenera.node.core.node.readiness.CoreRuntimeReadinessTracker;
@@ -67,12 +68,14 @@ public class CoreBootstrapService {
 	MiningEconomicsActivationService miningEconomicsActivationService;
 	AuthoritativeChainIdentityProvider chainIdentityProvider;
 	CoreRuntimeReadinessTracker readiness;
+	MempoolStartupRecoveryCoordinator mempoolRecovery;
 
 	@EventListener
 	public void onApplicationReady(ApplicationReadyEvent event) {
 		log.info("CORE: Starting core initialization...");
 		verifyChainIdentity();
 		initializationDb();
+		recoverMempool();
 
 		milestonePublisher.publish(new CoreDbReadyEvent(this));
 
@@ -81,6 +84,16 @@ public class CoreBootstrapService {
 		startDirectory(boundPort);
 		log.info("CORE: Core initialization successful. Publishing CoreReadyEvent.");
 		milestonePublisher.publish(new CoreReadyEvent(this));
+	}
+
+	private void recoverMempool() {
+		try {
+			mempoolRecovery.recover();
+		} catch (Exception e) {
+			readiness.failed(CoreReadinessFailureReason.MEMPOOL_RECOVERY);
+			log.error("CORE MEMPOOL: Startup recovery failed: {}", e.getMessage(), e);
+			throw new CoreBootstrapException("Persistent mempool recovery failed", e);
+		}
 	}
 
 	private void verifyChainIdentity() {

@@ -24,7 +24,6 @@
 package global.goldenera.node.bridge.api.v1;
 
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -36,7 +35,6 @@ import global.goldenera.node.bridge.services.BridgeBlockService;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@ConditionalOnProperty(prefix = "ge.general", name = "explorer-enable", havingValue = "true", matchIfMissing = true)
 @RequiredArgsConstructor
 @RequestMapping("/api/bridge/v1/block")
 public class BridgeBlockApiV1 {

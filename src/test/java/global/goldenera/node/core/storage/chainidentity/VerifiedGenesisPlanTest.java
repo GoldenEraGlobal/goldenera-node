@@ -56,6 +56,7 @@ import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalAppender;
 
 class VerifiedGenesisPlanTest {
 
@@ -76,7 +77,8 @@ class VerifiedGenesisPlanTest {
 				mock(ApplicationEventPublisher.class),
 				new ReentrantLock(),
 				mock(EntityIndexRepository.class),
-				mock(BlockEventExtractor.class));
+				mock(BlockEventExtractor.class),
+				mock(LifecycleJournalAppender.class));
 
 		assertThatThrownBy(() -> transitions.connectVerifiedGenesis(plan))
 				.isInstanceOf(IllegalArgumentException.class)
