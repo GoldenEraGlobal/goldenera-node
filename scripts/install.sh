@@ -5,7 +5,8 @@ readonly DEFAULT_IMAGE="ghcr.io/goldeneraglobal/goldenera-node:latest"
 readonly LOCAL_IMAGE="goldenera-node:sandbox-local"
 readonly ZERO_ADDRESS="0x0000000000000000000000000000000000000000"
 # Persistent pages cover one active FULL dataset/cache plus mining VM
-# scratchpads. The entrypoint separately budgets standard-memory rollover.
+# scratchpads. The entrypoint separately budgets optional sync acceleration and
+# retained verification caches.
 readonly RANDOMX_DATASET_CACHE_HUGEPAGES=1168
 readonly RANDOMX_HUGEPAGE_MARGIN=64
 readonly RANDOMX_MIN_HUGEPAGES=1280

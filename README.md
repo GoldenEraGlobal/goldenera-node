@@ -89,6 +89,160 @@ without deleting blockchain or PostgreSQL data. A local image configured with
 The mnemonic option configures the node's persistent P2P identity. Mining does
 not use that private key; mining rewards are sent to `BENEFICIARY_ADDRESS`.
 
+## Upgrading an older installation
+
+Older installations created from the previous README may have an unsafe manual
+heap, oversized RocksDB caches, no container memory limits, and a 4GB huge-page
+pool. Upgrade the configuration before starting a current image. The commands
+below preserve `node_data` and `postgres_data`; never use `docker compose down
+-v` and never delete either data directory. Take a VM/disk snapshot first when
+the node contains data that cannot be recreated.
+
+### Choose the memory profile
+
+`NODE_MEMORY_LIMIT_MB` is a hard container ceiling. Leave `JAVA_HEAP_MB` empty:
+the entrypoint derives the heap from that ceiling, current cgroup usage, huge
+pages, RocksDB, PostgreSQL, and enabled services. An explicitly configured heap
+is accepted only when it fits the same safety model.
+
+| Host RAM | Mining | Huge pages | `NODE_MEMORY_LIMIT_MB` | Explorer/PostgreSQL |
+| :--- | :--- | :--- | ---: | :--- |
+| 8GB | Off | Off | `8192` | Prefer off |
+| 12GB+ | Off | Off | `8192` | Supported |
+| 16GB+ | `FULL` | On | `9216` | Supported |
+| 16GB+ | `FULL` | Off | `12288` | Supported |
+
+For Linux `FULL` mining, huge pages are recommended. The current installer
+calculates a worker-aware target of at least 1280 two-megabyte pages (about
+2.5GB). The node releases the old mining dataset before creating the next one,
+so two mining datasets no longer need to fit in the pool simultaneously.
+
+### Installations with the `goldenera` management command
+
+Back up the generated configuration, download the current installer, and let
+`reconfigure` regenerate Compose and `.env` while preserving existing secrets:
+
+```bash
+cd ~/goldenera-node # use your actual installation directory
+cp .env ".env.backup.$(date +%Y%m%d-%H%M%S)"
+cp compose.yaml "compose.yaml.backup.$(date +%Y%m%d-%H%M%S)"
+./goldenera stop
+curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.sh -o /tmp/goldenera-install.sh
+chmod +x /tmp/goldenera-install.sh
+/tmp/goldenera-install.sh reconfigure --install-dir "$PWD"
+./goldenera status
+```
+
+Review the detected network, public P2P address, mining/reward settings,
+Explorer choice, huge pages, and memory limit when prompted. The installer
+recreates the services but does not remove the bind-mounted data directories.
+If mining is disabled on a Linux host that previously reserved huge pages,
+follow the cleanup commands in the legacy section below and set
+`vm.nr_hugepages=0`.
+
+### Legacy manual Docker Compose installations
+
+First back up the old files and download the new Compose definition without
+overwriting the running configuration:
+
+```bash
+cd /path/to/your/goldenera-node
+cp .env ".env.backup.$(date +%Y%m%d-%H%M%S)"
+cp docker-compose.yml "docker-compose.yml.backup.$(date +%Y%m%d-%H%M%S)"
+curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/docker-compose.yml -o docker-compose.yml.new
+```
+
+Edit the existing `.env`; keep all passwords, security secrets, network,
+beneficiary, P2P address, ports, and identity paths unchanged. Add or replace
+the following values (do not leave duplicate keys):
+
+```dotenv
+# Let the container calculate a safe heap.
+JAVA_HEAP_MB=
+JAVA_INITIAL_HEAP_MB=1024
+JAVA_NMT_LEVEL=summary
+JAVA_JFR_ENABLE=true
+
+# Select NODE_MEMORY_LIMIT_MB from the table above.
+NODE_MEMORY_LIMIT_MB=8192
+POSTGRESQL_MEMORY_LIMIT_MB=1024
+
+ROCKSDB_BLOCK_CACHE_MB=512
+ROCKSDB_WRITE_BUFFER_MB=32
+ROCKSDB_MAX_WRITE_BUFFERS=2
+
+MINING_MEMORY_MODE=FULL
+CONFIGURE_RANDOMX_HUGEPAGES=false
+SYNC_RANDOMX_VERIFICATION_MODE=LIGHT
+```
+
+If the built-in Explorer is enabled, use:
+
+```dotenv
+POSTGRESQL_ENABLE=true
+EXPLORER_ENABLE=true
+WEBHOOK_ENABLE=true
+```
+
+For a SQL-free/core-only node, use all three as `false`. Protected core API
+keys require PostgreSQL, so `SECURITY_CORE_API_ENABLED=true` must not be used
+with `POSTGRESQL_ENABLE=false`.
+
+Validate the new configuration and stop the old containers before changing
+host memory settings:
+
+```bash
+docker compose -f docker-compose.yml.new --env-file .env config >/dev/null
+docker compose down                 # never add -v
+```
+
+On a Linux host that previously configured huge pages, locate and remove every
+old `vm.nr_hugepages` line first so a later reboot cannot restore the old 4GB
+pool:
+
+```bash
+grep -R '^vm.nr_hugepages' /etc/sysctl.conf /etc/sysctl.d 2>/dev/null || true
+sudo sed -i '/^[[:space:]]*vm\.nr_hugepages[[:space:]]*=/d' /etc/sysctl.conf
+sudo find /etc/sysctl.d -maxdepth 1 -type f \
+  -exec sed -i '/^[[:space:]]*vm\.nr_hugepages[[:space:]]*=/d' {} +
+```
+
+For `FULL` mining, create the new right-sized persistent pool:
+
+```bash
+sudo sh -c 'printf "vm.nr_hugepages=1280\n" > /etc/sysctl.d/99-goldenera-node.conf'
+sudo sysctl --system
+grep -E 'HugePages_Total|HugePages_Free|Hugepagesize' /proc/meminfo
+```
+
+Set `CONFIGURE_RANDOMX_HUGEPAGES=true` and
+`NODE_MEMORY_LIMIT_MB=9216`. If huge pages are intentionally disabled, keep
+`CONFIGURE_RANDOMX_HUGEPAGES=false` and use at least
+`NODE_MEMORY_LIMIT_MB=12288` for `FULL` mining.
+
+For a non-mining host, release the old reservation instead:
+
+```bash
+sudo sysctl -w vm.nr_hugepages=0
+```
+
+Activate the new Compose file:
+
+```bash
+mv docker-compose.yml.new docker-compose.yml
+docker compose pull
+docker compose up -d --remove-orphans
+docker compose ps
+docker compose logs -f node
+```
+
+At startup, verify that the log reports the host/cgroup memory, huge-page
+availability, reserve breakdown, and an `Auto-calculated Java Heap`. If the
+entrypoint rejects the memory budget, do not restore the old oversized heap;
+disable mining/Explorer or move the node to a larger host. To roll back, restore
+the timestamped `.env` and Compose backups and run `docker compose up -d`; the
+data directories are not changed by this procedure.
+
 ### Installer test with the local node image
 
 From a clean committed worktree with the project dependencies installed:
@@ -121,8 +275,8 @@ match; the published release-image path remains the default Docker target.
 
 For optimal mining performance (RandomX), huge pages can be enabled on the host machine.
 The automated Linux installer offers this as an explicit opt-in because it is a
-global host change. The production profile uses 2000 two-megabyte pages (about
-4GB), which leaves additional working and fragmentation margin. The generated Compose file
+global host change. The production profile uses a worker-aware pool of at least
+1280 two-megabyte pages (about 2.5GB). The generated Compose file
 grants only `IPC_LOCK`, which lets the unprivileged node process use those pages.
 If that capability is unavailable, automatic heap sizing reserves enough normal
 memory for RandomX's fallback instead.
@@ -251,7 +405,7 @@ PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
 # Conservative container profiles:
 #   non-mining: NODE_MEMORY_LIMIT_MB=8192
 #   FULL mining without huge pages: NODE_MEMORY_LIMIT_MB=12288
-#   FULL mining with 2000 host huge pages: NODE_MEMORY_LIMIT_MB=9216
+#   FULL mining with at least 1280 host huge pages: NODE_MEMORY_LIMIT_MB=9216
 #
 # Leave empty for cgroup- and huge-page-aware auto-calculation (recommended)
 # =============================================================================
