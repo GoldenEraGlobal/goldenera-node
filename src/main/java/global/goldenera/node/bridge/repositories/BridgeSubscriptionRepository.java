@@ -68,29 +68,6 @@ public interface BridgeSubscriptionRepository extends BaseJpaRepository<BridgeSu
 			@Param("sequence") long sequence,
 			@Param("canonicalHeight") Long canonicalHeight);
 
-    @Query("""
-            SELECT subscription
-            FROM BridgeSubscription subscription
-            JOIN FETCH subscription.destination destination
-            JOIN FETCH destination.createdByApiKey apiKey
-            WHERE subscription.enabled = true
-			  AND subscription.network = :network
-			  AND (:epoch IS NULL OR
-			       (:stream = 0 AND subscription.activeFromCanonicalEpoch = :epoch
-			                    AND subscription.activeFromCanonicalSequence < :sequence)
-			       OR (:stream = 1 AND subscription.activeFromMempoolEpoch = :epoch
-			                    AND subscription.activeFromMempoolSequence < :sequence))
-			  AND (:canonicalHeight IS NULL OR subscription.activeAfterCanonicalHeight < :canonicalHeight)
-              AND destination.enabled = true
-              AND apiKey.enabled = true
-            """)
-	List<BridgeSubscription> findAllEnabledWithDestination(
-			@Param("network") Network network,
-			@Param("stream") int stream,
-			@Param("epoch") UUID epoch,
-			@Param("sequence") long sequence,
-			@Param("canonicalHeight") Long canonicalHeight);
-
 	@Query("""
 			SELECT CASE WHEN COUNT(subscription) > 0 THEN true ELSE false END
 			FROM BridgeSubscription subscription

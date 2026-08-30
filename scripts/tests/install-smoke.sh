@@ -68,6 +68,19 @@ assert_contains "$default_dir/.env" "LISTEN_PORT=8080"
 assert_contains "$default_dir/.env" "NODE_MEMORY_LIMIT_MB=8192"
 assert_not_contains "$default_dir/compose.yaml" "image: postgres:18.1-alpine"
 
+# Interactive automatic mode uses the recommended miner profile without asking
+# optional questions. Required values can still be supplied explicitly.
+automatic_dir="$TEST_ROOT/automatic"
+GOLDENERA_INSTALL_DIR="$automatic_dir" \
+GOLDENERA_P2P_HOST="203.0.113.14" \
+GOLDENERA_BENEFICIARY_ADDRESS="0x3333333333333333333333333333333333333333" \
+"$ROOT_DIR/scripts/install.sh" --mode automatic --skip-docker-check >/dev/null
+assert_contains "$automatic_dir/.env" "GOLDENERA_IMAGE=ghcr.io/goldeneraglobal/goldenera-node:latest"
+assert_contains "$automatic_dir/.env" "MINING_ENABLE=true"
+assert_contains "$automatic_dir/.env" "EXPLORER_ENABLE=false"
+assert_contains "$automatic_dir/.env" "NODE_MEMORY_LIMIT_MB=12288"
+assert_not_contains "$automatic_dir/compose.yaml" "image: postgres:18.1-alpine"
+
 # The local-image update path must recreate containers without attempting a pull.
 fake_bin="$TEST_ROOT/bin"
 mkdir -p "$fake_bin"

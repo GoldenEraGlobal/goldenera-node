@@ -24,7 +24,5 @@
 package global.goldenera.node.bridge.webhook.dtos;
 
 public enum BridgeWebhookEventType {
-	ADDRESS_ACTIVITY,
-	NEW_BLOCK,
-	REORG
+	ADDRESS_ACTIVITY
 }

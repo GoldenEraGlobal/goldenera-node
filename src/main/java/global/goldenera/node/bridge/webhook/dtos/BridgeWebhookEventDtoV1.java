@@ -31,7 +31,6 @@ import java.util.UUID;
 
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.Network;
-import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainBlockHeaderDtoV1;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import lombok.AllArgsConstructor;
@@ -71,27 +70,5 @@ public class BridgeWebhookEventDtoV1 {
 
 	BlockchainTxDtoV1 data;
 
-	ReorgDataDtoV1 reorg;
-
-	BlockchainBlockHeaderDtoV1 block;
-
 	Hash replacementTxHash;
-
-	@Getter
-	@Setter
-	@Builder
-	@ToString
-	@AllArgsConstructor
-	@NoArgsConstructor
-	@FieldDefaults(level = PRIVATE)
-	public static class ReorgDataDtoV1 {
-
-		Long oldHeight;
-
-		Hash oldHash;
-
-		Long newHeight;
-
-		Hash newHash;
-	}
 }

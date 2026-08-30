@@ -79,12 +79,6 @@ public class BridgeLifecycleProjectionService {
 			return;
 		}
 
-		if (commit != null) {
-			StoredBlock oldHead = storedBlock(commit.relatedHash());
-			coordinator.reorg(
-					oldHead.getHeight(), commit.relatedHash(), commit.height(), commit.primaryHash(), position(commit));
-		}
-
 		for (LifecycleJournalEntry entry : ordered) {
 			if (entry.operation() == LifecycleJournalOperation.DISCONNECT) {
 				Block orphanBlock = storedBlock(entry.primaryHash()).getBlock();
@@ -95,7 +89,7 @@ public class BridgeLifecycleProjectionService {
 		for (LifecycleJournalEntry entry : ordered) {
 			if (entry.operation() == LifecycleJournalOperation.CONNECT && entry.height() > 0L) {
 				StoredBlock storedBlock = storedBlock(entry.primaryHash());
-				coordinator.confirmedBlock(storedBlock.getBlock(), storedBlock.getEvents(), position(entry));
+				coordinator.confirmedBlock(storedBlock.getBlock(), position(entry));
 			}
 		}
 		cursorStore.advance(LifecycleJournalStream.CANONICAL, ordered.get(0).epoch(), lastSequence(ordered));

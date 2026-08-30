@@ -14,6 +14,9 @@ function Assert-NotContains([string]$Path, [string]$Text) {
 }
 
 try {
+    Remove-Item Env:GOLDENERA_IMAGE -ErrorAction SilentlyContinue
+    Remove-Item Env:GOLDENERA_MINING_ENABLE -ErrorAction SilentlyContinue
+    Remove-Item Env:GOLDENERA_NODE_MEMORY_LIMIT_MB -ErrorAction SilentlyContinue
     $DefaultInstallDir = Join-Path $TestRoot "default-node"
     $env:GOLDENERA_P2P_HOST = "203.0.113.19"
     Remove-Item Env:GOLDENERA_EXPLORER_ENABLE -ErrorAction SilentlyContinue
@@ -23,6 +26,16 @@ try {
     Assert-Contains (Join-Path $DefaultInstallDir ".env") "LISTEN_PORT=8080"
     Assert-Contains (Join-Path $DefaultInstallDir ".env") "NODE_MEMORY_LIMIT_MB=8192"
     Assert-NotContains (Join-Path $DefaultInstallDir "compose.yaml") "image: postgres:18.1-alpine"
+
+    $AutomaticInstallDir = Join-Path $TestRoot "automatic-node"
+    $env:GOLDENERA_P2P_HOST = "203.0.113.22"
+    $env:GOLDENERA_BENEFICIARY_ADDRESS = "0x3333333333333333333333333333333333333333"
+    & (Join-Path $RootDir "scripts\install.ps1") -InstallDir $AutomaticInstallDir -InstallMode Automatic -SkipDockerCheck
+    Assert-Contains (Join-Path $AutomaticInstallDir ".env") "GOLDENERA_IMAGE=ghcr.io/goldeneraglobal/goldenera-node:latest"
+    Assert-Contains (Join-Path $AutomaticInstallDir ".env") "MINING_ENABLE=true"
+    Assert-Contains (Join-Path $AutomaticInstallDir ".env") "EXPLORER_ENABLE=false"
+    Assert-Contains (Join-Path $AutomaticInstallDir ".env") "NODE_MEMORY_LIMIT_MB=12288"
+    Assert-NotContains (Join-Path $AutomaticInstallDir "compose.yaml") "image: postgres:18.1-alpine"
 
     $env:GOLDENERA_P2P_HOST = "203.0.113.20"
     $env:GOLDENERA_MINING_ENABLE = "true"

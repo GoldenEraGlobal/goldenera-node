@@ -17,12 +17,42 @@ NON_INTERACTIVE=false
 SKIP_DOCKER_CHECK=false
 RECONFIGURE=false
 TTY_DEVICE="/dev/tty"
+INSTALL_MODE=""
+USE_ANSI=false
+USE_COLOR=false
 
-info() { printf '[goldenera] %s\n' "$*"; }
-warn() { printf '[goldenera] WARNING: %s\n' "$*" >&2; }
-die() { printf '[goldenera] ERROR: %s\n' "$*" >&2; exit 1; }
+if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
+  USE_ANSI=true
+fi
+if "$USE_ANSI" && [ -z "${NO_COLOR:-}" ]; then USE_COLOR=true; fi
+
+if "$USE_COLOR"; then
+  readonly COLOR_GOLD=$'\033[38;5;220m'
+  readonly COLOR_GREEN=$'\033[32m'
+  readonly COLOR_RED=$'\033[31m'
+  readonly COLOR_DIM=$'\033[2m'
+  readonly COLOR_BOLD=$'\033[1m'
+  readonly COLOR_RESET=$'\033[0m'
+else
+  readonly COLOR_GOLD="" COLOR_GREEN="" COLOR_RED="" COLOR_DIM="" COLOR_BOLD="" COLOR_RESET=""
+fi
+
+info() { printf '%s[goldenera]%s %s\n' "$COLOR_GREEN" "$COLOR_RESET" "$*"; }
+warn() { printf '%s[goldenera] WARNING:%s %s\n' "$COLOR_GOLD" "$COLOR_RESET" "$*" >&2; }
+die() { printf '%s[goldenera] ERROR:%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$*" >&2; exit 1; }
 lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
+
+print_banner() {
+  "$NON_INTERACTIVE" && return
+  printf '\n%s%sGoldenEra Node%s\n' "$COLOR_GOLD" "$COLOR_BOLD" "$COLOR_RESET"
+  printf '%sSecure node installer%s\n\n' "$COLOR_DIM" "$COLOR_RESET"
+}
+
+print_section() {
+  "$NON_INTERACTIVE" && return
+  printf '\n%s%s%s%s\n' "$COLOR_BOLD" "$COLOR_GOLD" "$1" "$COLOR_RESET"
+}
 
 usage() {
   cat <<'EOF'
@@ -36,12 +66,13 @@ Options:
   --install-dir PATH       installation directory
   --image IMAGE            Docker image (default: public latest image)
   --local-image            use goldenera-node:sandbox-local without pulling
+  --mode MODE              automatic or manual interactive configuration
   --non-interactive        read configuration from GOLDENERA_* variables
   --skip-docker-check      intended only for installer tests
   --help
 
 Non-interactive variables:
-  GOLDENERA_INSTALL_DIR, GOLDENERA_IMAGE, GOLDENERA_NETWORK,
+  GOLDENERA_INSTALL_MODE, GOLDENERA_INSTALL_DIR, GOLDENERA_IMAGE, GOLDENERA_NETWORK,
   GOLDENERA_P2P_HOST, GOLDENERA_P2P_PORT, GOLDENERA_API_PORT,
   GOLDENERA_MINING_ENABLE, GOLDENERA_BENEFICIARY_ADDRESS,
   GOLDENERA_MINING_THREADS, GOLDENERA_CONFIGURE_HUGEPAGES,
@@ -84,9 +115,9 @@ prompt() {
   fi
   [ -r "$TTY_DEVICE" ] || die "No interactive terminal is available. Use --non-interactive."
   if [ -n "$default_value" ]; then
-    printf '%s [%s]: ' "$message" "$default_value" >"$TTY_DEVICE"
+    printf '%s›%s %s %s[%s]%s: ' "$COLOR_GOLD" "$COLOR_RESET" "$message" "$COLOR_DIM" "$default_value" "$COLOR_RESET" >"$TTY_DEVICE"
   else
-    printf '%s: ' "$message" >"$TTY_DEVICE"
+    printf '%s›%s %s: ' "$COLOR_GOLD" "$COLOR_RESET" "$message" >"$TTY_DEVICE"
   fi
   IFS= read -r input_value <"$TTY_DEVICE" || true
   printf -v "$target" '%s' "${input_value:-$default_value}"
@@ -98,7 +129,8 @@ prompt_secret() {
     printf -v "$target" '%s' "${3:-}"
     return
   fi
-  printf '%s: ' "$message" >"$TTY_DEVICE"
+  [ -r "$TTY_DEVICE" ] || die "No interactive terminal is available. Use --non-interactive."
+  printf '%s›%s %s: ' "$COLOR_GOLD" "$COLOR_RESET" "$message" >"$TTY_DEVICE"
   IFS= read -r -s answer <"$TTY_DEVICE" || true
   printf '\n' >"$TTY_DEVICE"
   printf -v "$target" '%s' "$answer"
@@ -110,14 +142,79 @@ prompt_yes_no() {
     printf -v "$target" '%s' "$default_value"
     return
   fi
+  [ -r "$TTY_DEVICE" ] || die "No interactive terminal is available. Use --non-interactive."
   while true; do
-    prompt answer "$message (yes/no)" "$default_value"
+    printf '%s›%s %s %s(y/N)%s: ' "$COLOR_GOLD" "$COLOR_RESET" "$message" "$COLOR_BOLD" "$COLOR_RESET" >"$TTY_DEVICE"
+    IFS= read -r answer <"$TTY_DEVICE" || true
     case "$(lower "$answer")" in
       y|yes|true) printf -v "$target" 'true'; return ;;
-      n|no|false) printf -v "$target" 'false'; return ;;
-      *) warn "Enter yes or no." ;;
+      ""|n|no|false) printf -v "$target" 'false'; return ;;
+      *) warn "Enter y or n (yes/no, true/false are also supported)." ;;
     esac
   done
+}
+
+prompt_choice() {
+  local target="$1" message="$2" default_index="$3"
+  shift 3
+  local -a items=("$@")
+  local selected="$default_index" key="" escape="" index label value letter
+
+  [ -r "$TTY_DEVICE" ] || die "No interactive terminal is available. Use --non-interactive."
+  printf '%s?%s %s%s%s\n' "$COLOR_GOLD" "$COLOR_RESET" "$COLOR_BOLD" "$message" "$COLOR_RESET" >"$TTY_DEVICE"
+  for index in "${!items[@]}"; do
+    label="${items[$index]%%|*}"
+    printf '  %s%s)%s %s\n' "$COLOR_GOLD" "$(printf "\\$(printf '%03o' "$((65 + index))")")" "$COLOR_RESET" "$label" >"$TTY_DEVICE"
+  done
+
+  if "$USE_ANSI"; then
+    while true; do
+      label="${items[$selected]%%|*}"
+      letter="$(printf "\\$(printf '%03o' "$((65 + selected))")")"
+      printf '\r\033[2K%s›%s Use ↑/↓ or A-%s, then Enter: %s%s — %s%s' \
+        "$COLOR_GOLD" "$COLOR_RESET" \
+        "$(printf "\\$(printf '%03o' "$((64 + ${#items[@]}))")")" \
+        "$COLOR_BOLD" "$letter" "$label" "$COLOR_RESET" >"$TTY_DEVICE"
+      IFS= read -r -s -n 1 key <"$TTY_DEVICE" || true
+      case "$key" in
+        "") break ;;
+        $'\033')
+          escape=""
+          IFS= read -r -s -n 2 -t 0.2 escape <"$TTY_DEVICE" || true
+          case "$escape" in
+            '[A') selected=$(((selected - 1 + ${#items[@]}) % ${#items[@]})) ;;
+            '[B') selected=$(((selected + 1) % ${#items[@]})) ;;
+          esac
+          ;;
+        *)
+          key="$(upper "$key")"
+          if [[ "$key" =~ ^[A-Z]$ ]]; then
+            index=$(($(printf '%d' "'$key") - 65))
+            if [ "$index" -ge 0 ] && [ "$index" -lt "${#items[@]}" ]; then
+              selected="$index"
+            fi
+          fi
+          ;;
+      esac
+    done
+    printf '\n' >"$TTY_DEVICE"
+  else
+    while true; do
+      letter="$(printf "\\$(printf '%03o' "$((65 + default_index))")")"
+      prompt key "Choose A-$(printf "\\$(printf '%03o' "$((64 + ${#items[@]}))")")" "$letter"
+      key="$(upper "$key")"
+      [[ "$key" =~ ^[A-Z]$ ]] || { warn "Choose one of the listed letters."; continue; }
+      index=$(($(printf '%d' "'$key") - 65))
+      if [ "$index" -ge 0 ] && [ "$index" -lt "${#items[@]}" ]; then
+        selected="$index"
+        break
+      fi
+      warn "Choose one of the listed letters."
+    done
+  fi
+
+  value="${items[$selected]#*|}"
+  printf -v "$target" '%s' "$value"
 }
 
 validate_port() {
@@ -242,9 +339,33 @@ existing_env_value() {
   printf '%s' "${value:-$fallback}"
 }
 
+select_install_mode() {
+  if "$NON_INTERACTIVE"; then
+    INSTALL_MODE="non-interactive"
+    return
+  fi
+
+  INSTALL_MODE="${INSTALL_MODE:-${GOLDENERA_INSTALL_MODE:-}}"
+  case "$(lower "$INSTALL_MODE")" in
+    a|automatic) INSTALL_MODE="automatic" ;;
+    b|manual) INSTALL_MODE="manual" ;;
+    "")
+      print_banner
+      prompt_choice INSTALL_MODE "How would you like to configure the node?" 0 \
+        "Automatic — miner defaults, without Explorer; asks for reward address|automatic" \
+        "Manual — review and customize every setting|manual"
+      ;;
+    *) die "Installation mode must be automatic or manual." ;;
+  esac
+}
+
 select_configuration() {
-  local default_dir="$HOME/goldenera-node" dir_mode="automatic" detected_ip=""
-  local identity_mode="automatic"
+  local default_dir="$HOME/goldenera-node" detected_ip="" identity_mode="automatic"
+  local image_mode="recommended" network_mode="mainnet" image_preconfigured=false
+  local manual_configuration=false mining_fallback=false
+  if [ "$INSTALL_MODE" = manual ]; then manual_configuration=true; fi
+
+  print_section "Installation"
 
   if [ -n "${GOLDENERA_INSTALL_DIR:-}" ]; then
     INSTALL_DIR="$GOLDENERA_INSTALL_DIR"
@@ -252,20 +373,40 @@ select_configuration() {
     :
   elif "$NON_INTERACTIVE"; then
     INSTALL_DIR="$default_dir"
+  elif "$manual_configuration"; then
+    prompt INSTALL_DIR "Installation directory" "$default_dir"
   else
-    prompt dir_mode "Data location (automatic/manual)" "automatic"
-    case "$(lower "$dir_mode")" in
-      m|manual) prompt INSTALL_DIR "Absolute path" "$default_dir" ;;
-      *) INSTALL_DIR="$default_dir" ;;
-    esac
+    INSTALL_DIR="$default_dir"
   fi
   [[ "$INSTALL_DIR" = /* ]] || die "The installation directory must be an absolute path: $INSTALL_DIR"
 
+  if [ -n "$NODE_IMAGE" ] || [ -n "${GOLDENERA_IMAGE:-}" ] || is_true "${GOLDENERA_LOCAL_IMAGE:-false}"; then
+    image_preconfigured=true
+  fi
   NODE_IMAGE="${GOLDENERA_IMAGE:-${NODE_IMAGE:-$(existing_env_value GOLDENERA_IMAGE "$DEFAULT_IMAGE")}}"
   if [ "$NODE_IMAGE" = "$LOCAL_IMAGE" ] || is_true "${GOLDENERA_LOCAL_IMAGE:-false}"; then
     NODE_IMAGE="$LOCAL_IMAGE"
   fi
-  prompt NODE_IMAGE "Docker image" "$NODE_IMAGE"
+  if "$manual_configuration" && ! "$image_preconfigured"; then
+    [ "$NODE_IMAGE" = "$DEFAULT_IMAGE" ] || image_mode="custom"
+    if [ "$image_mode" = custom ]; then
+      prompt_choice image_mode "Which Docker image would you like to use?" 1 \
+        "Recommended — $DEFAULT_IMAGE|recommended" "Custom image|custom"
+    else
+      prompt_choice image_mode "Which Docker image would you like to use?" 0 \
+        "Recommended — $DEFAULT_IMAGE|recommended" "Custom image|custom"
+    fi
+    if [ "$image_mode" = custom ]; then
+      if [ "$NODE_IMAGE" = "$DEFAULT_IMAGE" ]; then
+        prompt NODE_IMAGE "Custom Docker image" ""
+      else
+        prompt NODE_IMAGE "Custom Docker image" "$NODE_IMAGE"
+      fi
+      [ -n "$NODE_IMAGE" ] || die "A custom Docker image is required."
+    else
+      NODE_IMAGE="$DEFAULT_IMAGE"
+    fi
+  fi
   if [ "$NODE_IMAGE" = "$LOCAL_IMAGE" ]; then
     PULL_POLICY="never"
   else
@@ -273,48 +414,73 @@ select_configuration() {
   fi
 
   NETWORK="${GOLDENERA_NETWORK:-$(existing_env_value NETWORK MAINNET)}"
-  if ! "$NON_INTERACTIVE"; then
-    prompt NETWORK "Network (MAINNET/TESTNET)" "$NETWORK"
+  if "$manual_configuration"; then
+    if [ "$(upper "$NETWORK")" = TESTNET ]; then network_mode="testnet"; fi
+    if [ "$network_mode" = testnet ]; then
+      prompt_choice network_mode "Select network" 1 "MAINNET|mainnet" "TESTNET|testnet"
+    else
+      prompt_choice network_mode "Select network" 0 "MAINNET|mainnet" "TESTNET|testnet"
+    fi
+    NETWORK="$network_mode"
   fi
   NETWORK="$(upper "$NETWORK")"
   case "$NETWORK" in MAINNET|TESTNET) ;; *) die "Network must be MAINNET or TESTNET." ;; esac
 
+  print_section "Connectivity"
   if [ -z "${GOLDENERA_P2P_HOST:-}" ]; then detected_ip="$(detect_public_ip)"; fi
   P2P_HOST="${GOLDENERA_P2P_HOST:-$(existing_env_value P2P_HOST "$detected_ip")}"
-  prompt P2P_HOST "Public IPv4 address for P2P" "$P2P_HOST"
-  [ -n "$P2P_HOST" ] || die "P2P host is required."
+  if "$manual_configuration" || { [ "$INSTALL_MODE" = automatic ] && [ -z "$P2P_HOST" ]; }; then
+    prompt P2P_HOST "Public IPv4 address for P2P" "$P2P_HOST"
+  fi
+  [ -n "$P2P_HOST" ] || die "P2P host is required. Set GOLDENERA_P2P_HOST or use manual mode."
   validate_ipv4 "$P2P_HOST" || die "P2P host must be a valid IPv4 address."
 
   EXPLORER_ENABLE="${GOLDENERA_EXPLORER_ENABLE:-$(existing_env_value EXPLORER_ENABLE false)}"
-  prompt_yes_no EXPLORER_ENABLE "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" "$EXPLORER_ENABLE"
+  if "$manual_configuration"; then
+    prompt_yes_no EXPLORER_ENABLE "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" "$EXPLORER_ENABLE"
+  fi
 
   P2P_PORT="${GOLDENERA_P2P_PORT:-$(existing_env_value P2P_PORT 9000)}"
   API_PORT="${GOLDENERA_API_PORT:-$(existing_env_value LISTEN_PORT 8080)}"
-  prompt P2P_PORT "P2P port" "$P2P_PORT"
-  if is_true "$EXPLORER_ENABLE"; then
+  if "$manual_configuration"; then
+    prompt P2P_PORT "P2P port" "$P2P_PORT"
+  fi
+  if "$manual_configuration" && is_true "$EXPLORER_ENABLE"; then
     prompt API_PORT "API/Explorer port" "$API_PORT"
   fi
   validate_port "$P2P_PORT" || die "Invalid P2P port: $P2P_PORT"
   validate_port "$API_PORT" || die "Invalid API port: $API_PORT"
   [ "$P2P_PORT" != "$API_PORT" ] || die "P2P and API ports must be different."
 
-  MINING_ENABLE="${GOLDENERA_MINING_ENABLE:-$(existing_env_value MINING_ENABLE false)}"
-  prompt_yes_no MINING_ENABLE "Enable mining" "$MINING_ENABLE"
+  print_section "Mining"
+  if [ "$INSTALL_MODE" = automatic ]; then mining_fallback=true; fi
+  MINING_ENABLE="${GOLDENERA_MINING_ENABLE:-$(existing_env_value MINING_ENABLE "$mining_fallback")}"
+  if "$manual_configuration"; then
+    prompt_yes_no MINING_ENABLE "Enable mining" "$MINING_ENABLE"
+  fi
   BENEFICIARY_ADDRESS="${GOLDENERA_BENEFICIARY_ADDRESS:-$(existing_env_value BENEFICIARY_ADDRESS "$ZERO_ADDRESS")}"
   MINING_THREADS="${GOLDENERA_MINING_THREADS:-$(existing_env_value MINING_HASHING_THREADS -1)}"
   if is_true "$MINING_ENABLE"; then
-    prompt BENEFICIARY_ADDRESS "Reward address (0x...)" "$BENEFICIARY_ADDRESS"
+    if "$manual_configuration" || [ "$BENEFICIARY_ADDRESS" = "$ZERO_ADDRESS" ]; then
+      if [ "$BENEFICIARY_ADDRESS" = "$ZERO_ADDRESS" ]; then
+        prompt BENEFICIARY_ADDRESS "Mining reward address (0x...)" ""
+      else
+        prompt BENEFICIARY_ADDRESS "Mining reward address (0x...)" "$BENEFICIARY_ADDRESS"
+      fi
+    fi
     validate_address "$BENEFICIARY_ADDRESS" || die "The reward address must be 0x followed by 40 hexadecimal characters."
     [ "$BENEFICIARY_ADDRESS" != "$ZERO_ADDRESS" ] || die "The reward address must not be the zero address when mining is enabled."
-    prompt MINING_THREADS "Mining threads (-1 = automatic)" "$MINING_THREADS"
+    if "$manual_configuration"; then
+      prompt MINING_THREADS "Mining threads (-1 = automatic)" "$MINING_THREADS"
+    fi
     [[ "$MINING_THREADS" =~ ^-1$|^[1-9][0-9]*$ ]] || die "Mining threads must be -1 or a positive integer."
   fi
 
   CONFIGURE_HUGEPAGES="${GOLDENERA_CONFIGURE_HUGEPAGES:-$(existing_env_value CONFIGURE_RANDOMX_HUGEPAGES false)}"
-  if is_true "$MINING_ENABLE" && [ "$(uname -s)" = Linux ]; then
+  if "$manual_configuration" && is_true "$MINING_ENABLE" && [ "$(uname -s)" = Linux ]; then
     prompt_yes_no CONFIGURE_HUGEPAGES \
       "Reserve RandomX huge pages (at least 1280 pages, usually 2.5GB host RAM)" "$CONFIGURE_HUGEPAGES"
-  else
+  elif ! is_true "$MINING_ENABLE" || [ "$(uname -s)" != Linux ]; then
     CONFIGURE_HUGEPAGES=false
   fi
 
@@ -328,17 +494,21 @@ select_configuration() {
     fi
   fi
   NODE_MEMORY_LIMIT_MB="${GOLDENERA_NODE_MEMORY_LIMIT_MB:-$(existing_env_value NODE_MEMORY_LIMIT_MB "$default_node_memory_mb")}"
-  prompt NODE_MEMORY_LIMIT_MB "Node container memory limit in MB" "$NODE_MEMORY_LIMIT_MB"
+  if "$manual_configuration"; then
+    prompt NODE_MEMORY_LIMIT_MB "Node container memory limit in MB" "$NODE_MEMORY_LIMIT_MB"
+  fi
   [[ "$NODE_MEMORY_LIMIT_MB" =~ ^[1-9][0-9]*$ ]] || die "Node memory limit must be a positive integer."
   [ "$NODE_MEMORY_LIMIT_MB" -ge "$minimum_node_memory_mb" ] \
     || die "This profile requires a node memory limit of at least ${minimum_node_memory_mb} MB."
   POSTGRESQL_MEMORY_LIMIT_MB=1024
   IDENTITY_MNEMONIC="${GOLDENERA_IDENTITY_MNEMONIC:-}"
-  if [ -z "$IDENTITY_MNEMONIC" ] && ! "$NON_INTERACTIVE"; then
-    prompt identity_mode "Node identity (automatic/import mnemonic)" "automatic"
-    case "$(lower "$identity_mode")" in
-      i|import|mnemonic) prompt_secret IDENTITY_MNEMONIC "Node identity mnemonic (input is hidden)" ;;
-    esac
+  if [ -z "$IDENTITY_MNEMONIC" ] && "$manual_configuration"; then
+    prompt_choice identity_mode "Node identity" 0 \
+      "Automatic — create a new identity|automatic" \
+      "Import an existing mnemonic|import"
+    if [ "$identity_mode" = import ]; then
+      prompt_secret IDENTITY_MNEMONIC "Node identity mnemonic (input is hidden)"
+    fi
   fi
   if [ -n "$IDENTITY_MNEMONIC" ]; then
     [ "$(printf '%s' "$IDENTITY_MNEMONIC" | wc -w | tr -d ' ')" -ge 12 ] \
@@ -631,6 +801,7 @@ main() {
       --install-dir) [ "$#" -ge 2 ] || die "--install-dir requires a value"; INSTALL_DIR="$2"; shift ;;
       --image) [ "$#" -ge 2 ] || die "--image requires a value"; NODE_IMAGE="$2"; shift ;;
       --local-image) NODE_IMAGE="$LOCAL_IMAGE" ;;
+      --mode) [ "$#" -ge 2 ] || die "--mode requires a value"; INSTALL_MODE="$2"; shift ;;
       --non-interactive) NON_INTERACTIVE=true ;;
       --skip-docker-check) SKIP_DOCKER_CHECK=true ;;
       --help|-h) usage; exit 0 ;;
@@ -639,6 +810,7 @@ main() {
     shift
   done
   [ "$command_name" = install ] || RECONFIGURE=true
+  select_install_mode
   ensure_docker
   select_configuration
   install_node

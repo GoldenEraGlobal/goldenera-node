@@ -47,25 +47,20 @@ import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.entities.BridgeSubscription;
 import global.goldenera.node.bridge.repositories.BridgeDeliveryRepository;
 import global.goldenera.node.bridge.repositories.BridgeDeliveryRepositoryCustom.BridgeDeliveryReservation;
 import global.goldenera.node.bridge.repositories.BridgeSubscriptionRepository;
 import global.goldenera.node.bridge.webhook.dtos.BridgeWebhookEventDtoV1;
-import global.goldenera.node.bridge.webhook.dtos.BridgeWebhookEventDtoV1.ReorgDataDtoV1;
 import global.goldenera.node.bridge.webhook.dtos.BridgeWebhookEventType;
 import global.goldenera.node.bridge.webhook.dtos.BridgeWebhookSource;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockchainTxDtoV1;
-import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainBlockHeaderMapper;
 import global.goldenera.node.core.api.v1.blockchain.mappers.BlockchainTxMapper;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
-import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStream;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.enums.WebhookTxStatus;
 import global.goldenera.node.shared.exceptions.GEFailedException;
-import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -82,10 +77,7 @@ public class BridgeLifecycleCoordinator {
 	private final BridgeSubscriptionRepository subscriptionRepository;
 	private final BridgeDeliveryRepository deliveryRepository;
 	private final BlockchainTxMapper txMapper;
-	private final BlockchainBlockHeaderMapper blockHeaderMapper;
 	private final ObjectMapper objectMapper;
-	private final GeneralProperties generalProperties;
-	private final BridgeGlobalRoutingPolicy globalRoutingPolicy;
 
 	@Transactional(rollbackFor = Exception.class)
 	public void pending(MempoolEntry entry, String reason) {
@@ -191,35 +183,21 @@ public class BridgeLifecycleCoordinator {
 	}
 
 	@Transactional(rollbackFor = Exception.class)
-	public void confirmedBlock(Block block, List<BlockEvent> blockEvents) {
-		confirmedBlock(block, blockEvents, Long.MAX_VALUE);
+	public void confirmedBlock(Block block) {
+		confirmedBlock(block, Long.MAX_VALUE);
 	}
 
 	@Transactional(rollbackFor = Exception.class)
-	public void confirmedBlock(Block block, List<BlockEvent> blockEvents, long sourceSequence) {
-		confirmedBlock(block, blockEvents, BridgeSourcePosition.live(sourceSequence));
+	public void confirmedBlock(Block block, long sourceSequence) {
+		confirmedBlock(block, BridgeSourcePosition.live(sourceSequence));
 	}
 
 	@Transactional(rollbackFor = Exception.class)
-	public void confirmedBlock(Block block, List<BlockEvent> blockEvents, BridgeSourcePosition position) {
-		Network network = generalProperties.getNetwork();
-		UUID blockEventId = eventId(position, "block", network, block.getHash(), BridgeWebhookEventType.NEW_BLOCK);
-		BridgeWebhookEventDtoV1 blockPayload = BridgeWebhookEventDtoV1.builder()
-				.eventId(blockEventId)
-				.occurredAt(block.getHeader().getTimestamp())
-				.network(network)
-				.type(BridgeWebhookEventType.NEW_BLOCK)
-					.source(BridgeWebhookSource.CORE)
-				.block(blockHeaderMapper.mapBlockWithEvents(block, blockEvents))
-				.build();
-		if (globalRoutingPolicy.shouldRoute(BridgeWebhookEventType.NEW_BLOCK)) {
-			routeGlobal(blockEventId, blockPayload, LifecycleJournalStream.CANONICAL, position, block.getHeight());
-		}
-
+	public void confirmedBlock(Block block, BridgeSourcePosition position) {
 		int index = 0;
 		for (Tx tx : block.getTxs()) {
 			UUID eventId = eventId(position,
-					"tx", network, tx.getHash(), WebhookTxStatus.CONFIRMED, block.getHash());
+					"tx", tx.getNetwork(), tx.getHash(), WebhookTxStatus.CONFIRMED, block.getHash());
 			routeTransaction(
 					eventId,
 					block.getHeader().getTimestamp(),
@@ -246,11 +224,10 @@ public class BridgeLifecycleCoordinator {
 
 	@Transactional(rollbackFor = Exception.class)
 	public void revertedBlock(Block orphanBlock, BridgeSourcePosition position) {
-		Network network = generalProperties.getNetwork();
 		int index = 0;
 		for (Tx tx : orphanBlock.getTxs()) {
 			UUID eventId = eventId(position,
-					"tx", network, tx.getHash(), WebhookTxStatus.REVERTED, orphanBlock.getHash());
+					"tx", tx.getNetwork(), tx.getHash(), WebhookTxStatus.REVERTED, orphanBlock.getHash());
 			routeTransaction(
 					eventId,
 					Instant.now(),
@@ -262,39 +239,6 @@ public class BridgeLifecycleCoordinator {
 					LifecycleJournalStream.CANONICAL,
 					position,
 					null);
-		}
-	}
-
-	@Transactional(rollbackFor = Exception.class)
-	public void reorg(Long oldHeight, Hash oldHash, Long newHeight, Hash newHash) {
-		reorg(oldHeight, oldHash, newHeight, newHash, Long.MAX_VALUE);
-	}
-
-	@Transactional(rollbackFor = Exception.class)
-	public void reorg(Long oldHeight, Hash oldHash, Long newHeight, Hash newHash, long sourceSequence) {
-		reorg(oldHeight, oldHash, newHeight, newHash, BridgeSourcePosition.live(sourceSequence));
-	}
-
-	@Transactional(rollbackFor = Exception.class)
-	public void reorg(Long oldHeight, Hash oldHash, Long newHeight, Hash newHash, BridgeSourcePosition position) {
-		Network network = generalProperties.getNetwork();
-		UUID eventId = eventId(position, "chain", network, BridgeWebhookEventType.REORG, oldHash, newHash);
-		BridgeWebhookEventDtoV1 payload = BridgeWebhookEventDtoV1.builder()
-				.eventId(eventId)
-				.occurredAt(Instant.now())
-				.network(network)
-				.type(BridgeWebhookEventType.REORG)
-					.source(BridgeWebhookSource.CORE)
-				.reason("REORG")
-				.reorg(ReorgDataDtoV1.builder()
-						.oldHeight(oldHeight)
-						.oldHash(oldHash)
-						.newHeight(newHeight)
-						.newHash(newHash)
-						.build())
-				.build();
-		if (globalRoutingPolicy.shouldRoute(BridgeWebhookEventType.REORG)) {
-			routeGlobal(eventId, payload, LifecycleJournalStream.CANONICAL, position, null);
 		}
 	}
 
@@ -314,7 +258,7 @@ public class BridgeLifecycleCoordinator {
 					.occurredAt(occurredAt)
 					.network(tx.getNetwork())
 					.type(BridgeWebhookEventType.ADDRESS_ACTIVITY)
-					.source(BridgeWebhookSource.CORE)
+					.source(BridgeWebhookSource.BLOCKCHAIN)
 					.status(status)
 					.reason(reason)
 					.subscriptionIds(route.subscriptionIds())
@@ -323,34 +267,6 @@ public class BridgeLifecycleCoordinator {
 					.build();
 			reserveAndStore(route.destination(), eventId, payload);
 		}
-	}
-
-	private void routeGlobal(UUID eventId, BridgeWebhookEventDtoV1 template,
-			LifecycleJournalStream stream, BridgeSourcePosition position, Long canonicalHeight) {
-		for (DestinationRoute route : groupByDestination(
-				subscriptionRepository.findAllEnabledWithDestination(
-						template.getNetwork(), stream.code(), position.epoch(), position.sequence(),
-						canonicalHeight)).values()) {
-			BridgeWebhookEventDtoV1 payload = copyForRoute(template, route.subscriptionIds());
-			reserveAndStore(route.destination(), eventId, payload);
-		}
-	}
-
-	private BridgeWebhookEventDtoV1 copyForRoute(BridgeWebhookEventDtoV1 template, List<UUID> subscriptionIds) {
-		return BridgeWebhookEventDtoV1.builder()
-				.eventId(template.getEventId())
-				.occurredAt(template.getOccurredAt())
-				.network(template.getNetwork())
-				.type(template.getType())
-				.source(template.getSource())
-				.status(template.getStatus())
-				.reason(template.getReason())
-				.subscriptionIds(subscriptionIds)
-				.data(template.getData())
-				.reorg(template.getReorg())
-				.block(template.getBlock())
-				.replacementTxHash(template.getReplacementTxHash())
-				.build();
 	}
 
 	private void reserveAndStore(Webhook destination, UUID eventId, BridgeWebhookEventDtoV1 payload) {

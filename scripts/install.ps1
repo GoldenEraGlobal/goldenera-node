@@ -5,6 +5,8 @@ param(
     [string]$InstallDir,
     [string]$Image,
     [switch]$LocalImage,
+    [ValidateSet("Automatic", "Manual")]
+    [string]$InstallMode,
     [switch]$NonInteractive,
     [switch]$SkipDockerCheck
 )
@@ -15,8 +17,11 @@ $LocalImageName = "goldenera-node:sandbox-local"
 $ZeroAddress = "0x0000000000000000000000000000000000000000"
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-function Write-Info([string]$Message) { Write-Host "[goldenera] $Message" }
+function Write-Info([string]$Message) { Write-Host "[goldenera]" -ForegroundColor Green -NoNewline; Write-Host " $Message" }
 function Fail([string]$Message) { throw "[goldenera] ERROR: $Message" }
+function Write-Section([string]$Message) {
+    if (-not $NonInteractive) { Write-Host "`n$Message" -ForegroundColor Yellow }
+}
 function Env-OrDefault([string]$Name, [string]$Default) {
     $value = [Environment]::GetEnvironmentVariable($Name)
     if ([string]::IsNullOrWhiteSpace($value)) { return $Default }
@@ -24,18 +29,56 @@ function Env-OrDefault([string]$Name, [string]$Default) {
 }
 function Ask([string]$Message, [string]$Default) {
     if ($NonInteractive) { return $Default }
-    $answer = Read-Host "$Message [$Default]"
+    $suffix = if ([string]::IsNullOrWhiteSpace($Default)) { "" } else { " [$Default]" }
+    $answer = Read-Host "› $Message$suffix"
     if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
     return $answer.Trim()
 }
 function Ask-YesNo([string]$Message, [bool]$Default) {
     if ($NonInteractive) { return $Default }
-    $label = if ($Default) { "yes" } else { "no" }
     while ($true) {
-        $answer = (Read-Host "$Message (yes/no) [$label]").Trim().ToLowerInvariant()
-        if ([string]::IsNullOrWhiteSpace($answer)) { return $Default }
-        if ($answer -in @("y", "yes")) { return $true }
-        if ($answer -in @("n", "no")) { return $false }
+        $answer = (Read-Host "› $Message (y/N)").Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($answer)) { return $false }
+        if ($answer -in @("y", "yes", "true")) { return $true }
+        if ($answer -in @("n", "no", "false")) { return $false }
+        Write-Warning "Enter y or n (yes/no, true/false are also supported)."
+    }
+}
+function Ask-Choice([string]$Message, [string[]]$Options, [int]$DefaultIndex = 0) {
+    if ($NonInteractive) { return $DefaultIndex }
+    Write-Host "?" -ForegroundColor Yellow -NoNewline
+    Write-Host " $Message"
+    for ($index = 0; $index -lt $Options.Count; $index++) {
+        $letter = [char]([int][char]'A' + $index)
+        Write-Host "  $letter)" -ForegroundColor Yellow -NoNewline
+        Write-Host " $($Options[$index])"
+    }
+
+    $selected = $DefaultIndex
+    try {
+        while ($true) {
+            $letter = [char]([int][char]'A' + $selected)
+            $lastLetter = [char]([int][char]'A' + $Options.Count - 1)
+            Write-Host "`r$(' ' * [Math]::Max(0, [Console]::WindowWidth - 1))`r" -NoNewline
+            Write-Host "›" -ForegroundColor Yellow -NoNewline
+            Write-Host " Use ↑/↓ or A-$lastLetter, then Enter: $letter — $($Options[$selected])" -NoNewline
+            $key = [Console]::ReadKey($true)
+            if ($key.Key -eq [ConsoleKey]::UpArrow) { $selected = ($selected - 1 + $Options.Count) % $Options.Count; continue }
+            if ($key.Key -eq [ConsoleKey]::DownArrow) { $selected = ($selected + 1) % $Options.Count; continue }
+            if ($key.Key -eq [ConsoleKey]::Enter) { Write-Host; return $selected }
+            $choice = [char]::ToUpperInvariant($key.KeyChar)
+            $choiceIndex = [int]$choice - [int][char]'A'
+            if ($choiceIndex -ge 0 -and $choiceIndex -lt $Options.Count) { $selected = $choiceIndex }
+        }
+    } catch {
+        while ($true) {
+            $defaultLetter = [char]([int][char]'A' + $DefaultIndex)
+            $lastLetter = [char]([int][char]'A' + $Options.Count - 1)
+            $answer = (Ask "Choose A-$lastLetter" $defaultLetter).ToUpperInvariant()
+            $choiceIndex = [int][char]$answer[0] - [int][char]'A'
+            if ($choiceIndex -ge 0 -and $choiceIndex -lt $Options.Count) { return $choiceIndex }
+            Write-Warning "Choose one of the listed letters."
+        }
     }
 }
 function New-Secret([int]$Bytes = 32) {
@@ -91,22 +134,40 @@ function Ensure-Docker {
     if ($LASTEXITCODE -ne 0) { Fail "The Docker Compose plugin is missing." }
 }
 
+if ($NonInteractive) {
+    $InstallMode = "NonInteractive"
+} else {
+    if ([string]::IsNullOrWhiteSpace($InstallMode)) { $InstallMode = Env-OrDefault "GOLDENERA_INSTALL_MODE" "" }
+    $normalizedInstallMode = if ([string]::IsNullOrWhiteSpace($InstallMode)) { "" } else { $InstallMode.ToLowerInvariant() }
+    switch ($normalizedInstallMode) {
+        "a" { $InstallMode = "Automatic" }
+        "automatic" { $InstallMode = "Automatic" }
+        "b" { $InstallMode = "Manual" }
+        "manual" { $InstallMode = "Manual" }
+        "" {
+            Write-Host "`nGoldenEra Node" -ForegroundColor Yellow
+            Write-Host "Secure node installer`n" -ForegroundColor DarkGray
+            $modeIndex = Ask-Choice "How would you like to configure the node?" @(
+                "Automatic — miner defaults, without Explorer; asks for reward address",
+                "Manual — review and customize every setting"
+            ) 0
+            $InstallMode = if ($modeIndex -eq 0) { "Automatic" } else { "Manual" }
+        }
+        default { Fail "Installation mode must be Automatic or Manual." }
+    }
+}
+$manualConfiguration = $InstallMode -eq "Manual"
+
 Ensure-Docker
 
 $localAppData = if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { $HOME } else { $env:LOCALAPPDATA }
 $defaultDir = Join-Path $localAppData "GoldenEra\Node"
+Write-Section "Installation"
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     $InstallDir = Env-OrDefault "GOLDENERA_INSTALL_DIR" ""
 }
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-    if ($NonInteractive) {
-        $InstallDir = $defaultDir
-    } else {
-        $mode = Ask "Data location (automatic/manual)" "automatic"
-        $InstallDir = if ($mode.ToLowerInvariant() -in @("m", "manual")) {
-            Ask "Absolute path" $defaultDir
-        } else { $defaultDir }
-    }
+    $InstallDir = if ($manualConfiguration) { Ask "Installation directory" $defaultDir } else { $defaultDir }
 }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 $envFile = Join-Path $InstallDir ".env"
@@ -114,58 +175,96 @@ if ((Test-Path $envFile) -and $Action -ne "Reconfigure") {
     Fail "An installation already exists in $InstallDir. Use .\goldenera.ps1 update or -Action Reconfigure."
 }
 
+$imagePreconfigured = $PSBoundParameters.ContainsKey("Image") -or $LocalImage.IsPresent -or
+    -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("GOLDENERA_IMAGE")) -or
+    ((Env-OrDefault "GOLDENERA_LOCAL_IMAGE" "false") -eq "true")
 if ([string]::IsNullOrWhiteSpace($Image)) {
     $Image = Env-OrDefault "GOLDENERA_IMAGE" (Get-ExistingValue "GOLDENERA_IMAGE" $DefaultImage)
 }
 if ($LocalImage -or ((Env-OrDefault "GOLDENERA_LOCAL_IMAGE" "false") -eq "true")) { $Image = $LocalImageName }
-$Image = Ask "Docker image" $Image
+if ($manualConfiguration -and -not $imagePreconfigured) {
+    $imageDefault = if ($Image -eq $DefaultImage) { 0 } else { 1 }
+    $imageMode = Ask-Choice "Which Docker image would you like to use?" @(
+        "Recommended — $DefaultImage",
+        "Custom image"
+    ) $imageDefault
+    if ($imageMode -eq 0) {
+        $Image = $DefaultImage
+    } else {
+        $customImageDefault = if ($Image -eq $DefaultImage) { "" } else { $Image }
+        $Image = Ask "Custom Docker image" $customImageDefault
+        if ([string]::IsNullOrWhiteSpace($Image)) { Fail "A custom Docker image is required." }
+    }
+}
 $pullPolicy = if ($Image -eq $LocalImageName) { "never" } else { "always" }
 
-$network = (Ask "Network (MAINNET/TESTNET)" (Env-OrDefault "GOLDENERA_NETWORK" (Get-ExistingValue "NETWORK" "MAINNET"))).ToUpperInvariant()
+$network = (Env-OrDefault "GOLDENERA_NETWORK" (Get-ExistingValue "NETWORK" "MAINNET")).ToUpperInvariant()
+if ($manualConfiguration) {
+    $networkDefault = if ($network -eq "TESTNET") { 1 } else { 0 }
+    $networkIndex = Ask-Choice "Select network" @("MAINNET", "TESTNET") $networkDefault
+    $network = if ($networkIndex -eq 0) { "MAINNET" } else { "TESTNET" }
+}
 if ($network -notin @("MAINNET", "TESTNET")) { Fail "Network must be MAINNET or TESTNET." }
+
+Write-Section "Connectivity"
 $p2pHost = Env-OrDefault "GOLDENERA_P2P_HOST" (Get-ExistingValue "P2P_HOST" "")
 if ([string]::IsNullOrWhiteSpace($p2pHost) -and -not $NonInteractive) {
     try { $p2pHost = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 5).Trim() } catch { }
 }
-$p2pHost = Ask "Public IPv4 address for P2P" $p2pHost
-if ([string]::IsNullOrWhiteSpace($p2pHost)) { Fail "P2P host is required." }
+if ($manualConfiguration -or ($InstallMode -eq "Automatic" -and [string]::IsNullOrWhiteSpace($p2pHost))) {
+    $p2pHost = Ask "Public IPv4 address for P2P" $p2pHost
+}
+if ([string]::IsNullOrWhiteSpace($p2pHost)) { Fail "P2P host is required. Set GOLDENERA_P2P_HOST or use manual mode." }
 $parsedIp = $null
 if (-not [Net.IPAddress]::TryParse($p2pHost, [ref]$parsedIp) -or $parsedIp.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
     Fail "P2P host must be a valid IPv4 address."
 }
 $explorerDefault = (Env-OrDefault "GOLDENERA_EXPLORER_ENABLE" (Get-ExistingValue "EXPLORER_ENABLE" "false")) -eq "true"
-$explorerEnabled = Ask-YesNo "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" $explorerDefault
+$explorerEnabled = if ($manualConfiguration) {
+    Ask-YesNo "Enable the built-in Explorer/indexer, PostgreSQL, and webhooks" $explorerDefault
+} else { $explorerDefault }
 
-$p2pPort = [int](Ask "P2P port" (Env-OrDefault "GOLDENERA_P2P_PORT" (Get-ExistingValue "P2P_PORT" "9000")))
+$p2pPortValue = Env-OrDefault "GOLDENERA_P2P_PORT" (Get-ExistingValue "P2P_PORT" "9000")
+if ($manualConfiguration) { $p2pPortValue = Ask "P2P port" $p2pPortValue }
+$p2pPort = [int]$p2pPortValue
 $apiPort = [int](Env-OrDefault "GOLDENERA_API_PORT" (Get-ExistingValue "LISTEN_PORT" "8080"))
-if ($explorerEnabled) {
+if ($manualConfiguration -and $explorerEnabled) {
     $apiPort = [int](Ask "API/Explorer port" $apiPort)
 }
 if ($p2pPort -lt 1 -or $p2pPort -gt 65535 -or $apiPort -lt 1 -or $apiPort -gt 65535 -or $p2pPort -eq $apiPort) {
     Fail "Ports must be different numbers from 1 to 65535."
 }
 
-$miningDefault = (Env-OrDefault "GOLDENERA_MINING_ENABLE" (Get-ExistingValue "MINING_ENABLE" "false")) -eq "true"
-$miningEnabled = Ask-YesNo "Enable mining" $miningDefault
+Write-Section "Mining"
+$miningFallback = if ($InstallMode -eq "Automatic") { "true" } else { "false" }
+$miningDefault = (Env-OrDefault "GOLDENERA_MINING_ENABLE" (Get-ExistingValue "MINING_ENABLE" $miningFallback)) -eq "true"
+$miningEnabled = if ($manualConfiguration) { Ask-YesNo "Enable mining" $miningDefault } else { $miningDefault }
 $beneficiary = Env-OrDefault "GOLDENERA_BENEFICIARY_ADDRESS" (Get-ExistingValue "BENEFICIARY_ADDRESS" $ZeroAddress)
 $miningThreads = Env-OrDefault "GOLDENERA_MINING_THREADS" (Get-ExistingValue "MINING_HASHING_THREADS" "-1")
 if ($miningEnabled) {
-    $beneficiary = Ask "Reward address (0x...)" $beneficiary
+    if ($manualConfiguration -or $beneficiary -eq $ZeroAddress) {
+        $beneficiaryDefault = if ($beneficiary -eq $ZeroAddress) { "" } else { $beneficiary }
+        $beneficiary = Ask "Mining reward address (0x...)" $beneficiaryDefault
+    }
     if ($beneficiary -notmatch '^0x[0-9a-fA-F]{40}$' -or $beneficiary -eq $ZeroAddress) { Fail "The reward address is invalid or is the zero address." }
-    $miningThreads = Ask "Mining threads (-1 = automatic)" $miningThreads
+    if ($manualConfiguration) { $miningThreads = Ask "Mining threads (-1 = automatic)" $miningThreads }
     if ($miningThreads -notmatch '^-1$|^[1-9][0-9]*$') { Fail "Mining threads must be -1 or a positive integer." }
 }
 $defaultNodeMemoryMb = if ($miningEnabled) { "12288" } else { "8192" }
 $minimumNodeMemoryMb = if ($miningEnabled) { 12288 } else { 8192 }
-$nodeMemoryLimitMb = Ask "Node container memory limit in MB" (Env-OrDefault "GOLDENERA_NODE_MEMORY_LIMIT_MB" (Get-ExistingValue "NODE_MEMORY_LIMIT_MB" $defaultNodeMemoryMb))
+$nodeMemoryLimitMb = Env-OrDefault "GOLDENERA_NODE_MEMORY_LIMIT_MB" (Get-ExistingValue "NODE_MEMORY_LIMIT_MB" $defaultNodeMemoryMb)
+if ($manualConfiguration) { $nodeMemoryLimitMb = Ask "Node container memory limit in MB" $nodeMemoryLimitMb }
 if ($nodeMemoryLimitMb -notmatch '^[1-9][0-9]*$' -or [int64]$nodeMemoryLimitMb -lt $minimumNodeMemoryMb) {
     Fail "This profile requires a node memory limit of at least $minimumNodeMemoryMb MB."
 }
 $postgresMemoryLimitMb = "1024"
 $identityMnemonic = Env-OrDefault "GOLDENERA_IDENTITY_MNEMONIC" ""
-if ([string]::IsNullOrWhiteSpace($identityMnemonic) -and -not $NonInteractive) {
-    $identityMode = Ask "Node identity (automatic/import mnemonic)" "automatic"
-    if ($identityMode.ToLowerInvariant() -in @("i", "import", "mnemonic")) {
+if ([string]::IsNullOrWhiteSpace($identityMnemonic) -and $manualConfiguration) {
+    $identityMode = Ask-Choice "Node identity" @(
+        "Automatic — create a new identity",
+        "Import an existing mnemonic"
+    ) 0
+    if ($identityMode -eq 1) {
         $secure = Read-Host "Node identity mnemonic (input is hidden)" -AsSecureString
         $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
         try { $identityMnemonic = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }

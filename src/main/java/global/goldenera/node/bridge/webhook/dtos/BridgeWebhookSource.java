@@ -24,6 +24,6 @@
 package global.goldenera.node.bridge.webhook.dtos;
 
 public enum BridgeWebhookSource {
-	CORE,
+	BLOCKCHAIN,
 	EXPLORER
 }

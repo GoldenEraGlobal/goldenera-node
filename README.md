@@ -45,10 +45,13 @@ plugin when they are missing. For a manual installation, install them first.
 
 ### Automated installer (recommended)
 
-The installer detects the operating system, installs Docker when it is missing,
-asks for the installation directory, Docker image, network, public P2P address,
-ports, mining settings, reward address, node identity, and the built-in
-Explorer/indexer. It generates secrets and starts the node from Docker Compose.
+The installer first offers an **Automatic** or **Manual** setup. Automatic setup
+uses the recommended public image and MAINNET defaults, enables mining, and
+leaves the Explorer/indexer disabled. It only asks for required values that
+cannot be safely generated, such as the mining reward address (and the public
+P2P address if it cannot be detected). Manual setup exposes every setting with
+arrow-key menus and consistent `(y/N)` confirmations. It generates secrets and
+starts the node from Docker Compose.
 
 Ubuntu, Debian, or macOS:
 

@@ -87,12 +87,12 @@ class BridgeLifecycleProjectionServiceTest {
 		service.applyCanonicalGroup(List.of(connect));
 
 		verify(coordinator).confirmedBlock(
-				block, List.of(), new BridgeSourcePosition(EPOCH, 101L, connect.eventKey()));
+				block, new BridgeSourcePosition(EPOCH, 101L, connect.eventKey()));
 		verify(cursorStore).advance(LifecycleJournalStream.CANONICAL, EPOCH, 101L);
 	}
 
 	@Test
-	void reorgGroupIsProjectedAsSummaryThenRevertsThenNewCanonicalBlocks() {
+	void reorgGroupProjectsAddressLifecycleWithoutGlobalSummary() {
 		UUID groupId = UUID.randomUUID();
 		Hash oldHash = hash(3);
 		Hash newHash = hash(4);
@@ -112,13 +112,11 @@ class BridgeLifecycleProjectionServiceTest {
 		service.applyCanonicalGroup(List.of(disconnect, connect, commit));
 
 		InOrder order = inOrder(coordinator, reorgPendingGate, cursorStore);
-		order.verify(coordinator).reorg(
-				12L, oldHash, 12L, newHash, new BridgeSourcePosition(EPOCH, 203L, commit.eventKey()));
 		order.verify(coordinator).revertedBlock(
 				orphan, new BridgeSourcePosition(EPOCH, 201L, disconnect.eventKey()));
 		order.verify(reorgPendingGate).canonicalRevertCommitted(orphan, 201L);
 		order.verify(coordinator).confirmedBlock(
-				connected, List.of(), new BridgeSourcePosition(EPOCH, 202L, connect.eventKey()));
+				connected, new BridgeSourcePosition(EPOCH, 202L, connect.eventKey()));
 		order.verify(cursorStore).advance(LifecycleJournalStream.CANONICAL, EPOCH, 203L);
 	}
 
@@ -167,7 +165,7 @@ class BridgeLifecycleProjectionServiceTest {
 		service.applyMempool(readd);
 
 		verify(coordinator).confirmedBlock(
-				connected, List.of(), new BridgeSourcePosition(EPOCH, 401L, connect.eventKey()));
+				connected, new BridgeSourcePosition(EPOCH, 401L, connect.eventKey()));
 		verify(reorgPendingGate).discard(txHash);
 		verify(reorgPendingGate, never()).coreReadded(any(), any(BridgeSourcePosition.class));
 		verify(cursorStore).advance(LifecycleJournalStream.MEMPOOL, EPOCH, 402L);

@@ -18,10 +18,12 @@ This directory contains build and deployment scripts for the GoldenEra Node.
 
 - **`install.sh`** - Interactive Ubuntu, Debian, and macOS installer
   - Installs Docker when needed
+  - Offers an automatic miner profile or a polished manual configuration flow
   - Generates a secure Compose deployment and management command
   - Supports public-image updates and local sandbox images
 
 - **`install.ps1`** - Equivalent Windows PowerShell installer
+  - Uses the same automatic/manual profiles, arrow-key menus, and `(y/N)` prompts
 
 - **`tests/install-smoke.sh`** and **`tests/install-smoke.ps1`**
   - Validate generated configuration without changing the host
