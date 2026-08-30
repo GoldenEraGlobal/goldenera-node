@@ -33,10 +33,12 @@ import static org.mockito.Mockito.when;
 import java.time.Duration;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -51,16 +53,16 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 class BridgeLifecycleJournalProjectorBootstrapOrderTest {
 
 	private static final AtomicBoolean BOOTSTRAPPED = new AtomicBoolean();
-	private static final AtomicBoolean SCHEDULED_AFTER_BOOTSTRAP = new AtomicBoolean();
+	private static final AtomicInteger SCHEDULED_AFTER_BOOTSTRAP = new AtomicInteger();
 
 	@BeforeEach
 	void resetOrderMarkers() {
 		BOOTSTRAPPED.set(false);
-		SCHEDULED_AFTER_BOOTSTRAP.set(false);
+		SCHEDULED_AFTER_BOOTSTRAP.set(0);
 	}
 
 	@Test
-	void schedulesProjectionOnlyAfterLifecycleJournalBootstrapCompletes() {
+	void schedulesProjectionOnlyAfterApplicationReadyAndLifecycleJournalBootstrap() {
 		new ApplicationContextRunner()
 				.withPropertyValues(
 						"ge.general.postgresql-enable=true",
@@ -70,7 +72,12 @@ class BridgeLifecycleJournalProjectorBootstrapOrderTest {
 					assertThat(context).hasNotFailed();
 					assertThat(context).hasSingleBean(BridgeLifecycleJournalProjector.class);
 					assertThat(BOOTSTRAPPED).isTrue();
-					assertThat(SCHEDULED_AFTER_BOOTSTRAP).isTrue();
+					assertThat(SCHEDULED_AFTER_BOOTSTRAP).hasValue(0);
+
+					context.publishEvent(mock(ApplicationReadyEvent.class));
+					context.publishEvent(mock(ApplicationReadyEvent.class));
+
+					assertThat(SCHEDULED_AFTER_BOOTSTRAP).hasValue(1);
 				});
 	}
 
@@ -103,7 +110,9 @@ class BridgeLifecycleJournalProjectorBootstrapOrderTest {
 			TaskScheduler scheduler = mock(TaskScheduler.class);
 			when(scheduler.scheduleWithFixedDelay(any(Runnable.class), any(Duration.class)))
 					.thenAnswer(invocation -> {
-						SCHEDULED_AFTER_BOOTSTRAP.set(BOOTSTRAPPED.get());
+						if (BOOTSTRAPPED.get()) {
+							SCHEDULED_AFTER_BOOTSTRAP.incrementAndGet();
+						}
 						return null;
 					});
 			return scheduler;

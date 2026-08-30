@@ -31,6 +31,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -66,6 +67,21 @@ class WebhookDispatchServiceTest {
 				.singleElement()
 				.satisfies(constructor -> assertThat(constructor.isAnnotationPresent(Autowired.class)).isTrue());
 	}
+
+	@Test
+	void startsRoutingAndDeliveryOnlyAfterApplicationReadyAndOnlyOnce() {
+		Fixture fixture = fixture();
+		verifyNoInteractions(fixture.scheduler);
+
+		fixture.dispatch.start();
+		fixture.dispatch.start();
+
+		verify(fixture.scheduler).scheduleWithFixedDelay(
+				any(Runnable.class), eq(WebhookDispatchService.ROUTE_INTERVAL));
+		verify(fixture.scheduler).scheduleWithFixedDelay(
+				any(Runnable.class), eq(WebhookDispatchService.DELIVERY_INTERVAL));
+	}
+
 	@Test
 	void preservesArrayContractAndRetriesTransientNetworkFailure() throws Exception {
 		Fixture fixture = fixture();
@@ -132,6 +148,7 @@ class WebhookDispatchServiceTest {
 		AESGCMComponent encryption = mock(AESGCMComponent.class);
 		when(encryption.decrypt(any(Bytes.class))).thenReturn(Bytes.wrap(new byte[32]));
 		OkHttpClient client = mock(OkHttpClient.class);
+		TaskScheduler scheduler = mock(TaskScheduler.class);
 		Call call = mock(Call.class);
 		AtomicReference<Callback> callback = new AtomicReference<>();
 		AtomicReference<Request> request = new AtomicReference<>();
@@ -144,14 +161,15 @@ class WebhookDispatchServiceTest {
 			return null;
 		}).when(call).enqueue(any());
 		WebhookDispatchService dispatch = new WebhookDispatchService(
-				client, new ObjectMapper(), mock(TaskScheduler.class), store,
+				client, new ObjectMapper(), scheduler, store,
 				new SimpleMeterRegistry(), encryption, mock(BlockchainTxMapper.class),
 				mock(BlockchainBlockHeaderMapper.class), "worker");
-		return new Fixture(dispatch, store, delivery, call, callback, request);
+		return new Fixture(dispatch, scheduler, store, delivery, call, callback, request);
 	}
 
 	private record Fixture(
 			WebhookDispatchService dispatch,
+			TaskScheduler scheduler,
 			DurableUniversalWebhookStore store,
 			ClaimedDelivery delivery,
 			Call call,

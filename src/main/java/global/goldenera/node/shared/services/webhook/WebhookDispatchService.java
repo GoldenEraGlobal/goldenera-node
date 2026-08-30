@@ -44,6 +44,8 @@ import org.apache.tuweni.bytes.Bytes;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -67,7 +69,6 @@ import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStor
 import global.goldenera.node.shared.services.webhook.dtos.WebhookEventDtoV1;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -103,6 +104,7 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 	private final BlockchainTxMapper txMapper;
 	private final BlockchainBlockHeaderMapper blockHeaderMapper;
 	private final String workerId;
+	private final AtomicBoolean started = new AtomicBoolean();
 	private final AtomicBoolean routing = new AtomicBoolean();
 	private final AtomicBoolean dispatching = new AtomicBoolean();
 	private final Semaphore inFlight = new Semaphore(MAX_IN_FLIGHT);
@@ -142,8 +144,11 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 		this.workerId = workerId;
 	}
 
-	@PostConstruct
-	public void init() {
+	@EventListener(ApplicationReadyEvent.class)
+	void start() {
+		if (!started.compareAndSet(false, true)) {
+			return;
+		}
 		scheduler.scheduleWithFixedDelay(this::routePendingEvents, ROUTE_INTERVAL);
 		scheduler.scheduleWithFixedDelay(this::dispatchPendingBatches, DELIVERY_INTERVAL);
 	}

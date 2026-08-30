@@ -35,7 +35,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -50,7 +52,6 @@ import global.goldenera.node.core.storage.blockchain.mempool.PersistentMempoolSt
 import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStore.JournalCursor;
 import io.micrometer.core.instrument.MeterRegistry;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -69,6 +70,7 @@ public class CoreLifecycleJournalWebhookConsumer {
 	private final Executor executor;
 	private final MeterRegistry registry;
 	private final PersistentMempoolStore persistentMempool;
+	private final AtomicBoolean started = new AtomicBoolean();
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final AtomicBoolean scheduled = new AtomicBoolean();
 	private final AtomicBoolean dirty = new AtomicBoolean();
@@ -101,8 +103,11 @@ public class CoreLifecycleJournalWebhookConsumer {
 		this(journal, store, projector, scheduler, executor, registry, null);
 	}
 
-	@PostConstruct
-	void schedule() {
+	@EventListener(ApplicationReadyEvent.class)
+	void start() {
+		if (!started.compareAndSet(false, true)) {
+			return;
+		}
 		scheduler.scheduleWithFixedDelay(this::wake, POLL_INTERVAL);
 	}
 

@@ -44,13 +44,14 @@ import org.apache.tuweni.bytes.Bytes;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.node.bridge.webhook.BridgeDeliveryRetryPolicy.Outcome;
 import global.goldenera.node.bridge.webhook.BridgeDeliveryStore.ClaimedDelivery;
 import global.goldenera.node.shared.components.AESGCMComponent;
-import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
@@ -88,6 +89,7 @@ public class BridgeDeliveryWorker {
 	BridgeDeliveryRetryPolicy retryPolicy;
 	String workerId;
 	Executor deliveryExecutor;
+	AtomicBoolean started = new AtomicBoolean();
 	AtomicBoolean running = new AtomicBoolean();
 	Semaphore deliveryPermits = new Semaphore(CLAIM_LIMIT);
 
@@ -133,8 +135,11 @@ public class BridgeDeliveryWorker {
 		this.deliveryExecutor = deliveryExecutor;
 	}
 
-	@PostConstruct
-	void schedule() {
+	@EventListener(ApplicationReadyEvent.class)
+	void start() {
+		if (!started.compareAndSet(false, true)) {
+			return;
+		}
 		scheduler.scheduleWithFixedDelay(this::processAvailable, POLL_INTERVAL);
 	}
 

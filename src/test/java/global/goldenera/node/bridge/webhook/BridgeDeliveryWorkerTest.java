@@ -30,6 +30,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -66,9 +67,10 @@ class BridgeDeliveryWorkerTest {
 	private final AESGCMComponent encryption = mock(AESGCMComponent.class);
 	private final BridgeWebhookSignatureService signatures = mock(BridgeWebhookSignatureService.class);
 	private final BridgeDeliveryRetryPolicy retryPolicy = new BridgeDeliveryRetryPolicy();
+	private final TaskScheduler scheduler = mock(TaskScheduler.class);
 	private final BridgeDeliveryWorker worker = new BridgeDeliveryWorker(
 			httpClient,
-			mock(TaskScheduler.class),
+			scheduler,
 			store,
 			encryption,
 			signatures,
@@ -87,6 +89,16 @@ class BridgeDeliveryWorkerTest {
 		assertThat(BridgeDeliveryWorker.class.getConstructors())
 				.filteredOn(constructor -> constructor.isAnnotationPresent(Autowired.class))
 				.hasSize(1);
+	}
+
+	@Test
+	void startsPollingOnlyAfterApplicationReadyAndOnlyOnce() {
+		verifyNoInteractions(scheduler);
+
+		worker.start();
+		worker.start();
+
+		verify(scheduler).scheduleWithFixedDelay(any(Runnable.class), eq(BridgeDeliveryWorker.POLL_INTERVAL));
 	}
 
 	@Test

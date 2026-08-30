@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -55,6 +56,25 @@ import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStor
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class CoreLifecycleJournalWebhookConsumerTest {
+	@Test
+	void startsPollingOnlyAfterApplicationReadyAndOnlyOnce() {
+		TaskScheduler scheduler = mock(TaskScheduler.class);
+		CoreLifecycleJournalWebhookConsumer consumer = new CoreLifecycleJournalWebhookConsumer(
+				mock(LifecycleJournalQuery.class),
+				mock(DurableUniversalWebhookStore.class),
+				mock(CoreLifecycleJournalWebhookProjector.class),
+				scheduler,
+				Runnable::run,
+				new SimpleMeterRegistry());
+		verifyNoInteractions(scheduler);
+
+		consumer.start();
+		consumer.start();
+
+		verify(scheduler).scheduleWithFixedDelay(
+				any(Runnable.class), eq(CoreLifecycleJournalWebhookConsumer.POLL_INTERVAL));
+	}
+
 	@Test
 	void epochMismatchReanchorsAtHeadWithoutReplayingForeignLineage() {
 		LifecycleJournalQuery journal = mock(LifecycleJournalQuery.class);

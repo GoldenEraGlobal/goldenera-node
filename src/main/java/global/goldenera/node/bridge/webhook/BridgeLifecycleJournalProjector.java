@@ -36,7 +36,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.annotation.DependsOn;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -50,7 +52,6 @@ import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStr
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.bridge.webhook.BridgeLifecycleProjectionCursorStore.Cursor;
 import io.micrometer.core.instrument.MeterRegistry;
-import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -73,6 +74,7 @@ public class BridgeLifecycleJournalProjector implements BridgeCoreJournalConsume
 	private final TaskScheduler scheduler;
 	private final Executor journalExecutor;
 	private final MeterRegistry registry;
+	private final AtomicBoolean started = new AtomicBoolean();
 	private final AtomicBoolean running = new AtomicBoolean();
 	private final AtomicBoolean dirty = new AtomicBoolean();
 	private final AtomicBoolean projectionSubmitted = new AtomicBoolean();
@@ -92,8 +94,11 @@ public class BridgeLifecycleJournalProjector implements BridgeCoreJournalConsume
 		this.registry = registry;
 	}
 
-	@PostConstruct
-	void schedule() {
+	@EventListener(ApplicationReadyEvent.class)
+	void start() {
+		if (!started.compareAndSet(false, true)) {
+			return;
+		}
 		scheduler.scheduleWithFixedDelay(this::wake, POLL_INTERVAL);
 	}
 
