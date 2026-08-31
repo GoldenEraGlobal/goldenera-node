@@ -21,27 +21,30 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.bridge.api.v1.mappers;
 
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.data.domain.Page;
+import org.springframework.stereotype.Component;
 
-import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.bridge.services.BridgeBlockService;
+import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscriptionDtoV1;
+import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscriptionDtoV1_Page;
+import global.goldenera.node.bridge.entities.BridgeSubscription;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
-@RestController
+@Component
 @RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/block")
-public class BridgeBlockApiV1 {
+public class BridgeSubscriptionMapper {
 
-    private final BridgeBlockService bridgeBlockService;
+    private final GeneralProperties generalProperties;
 
-    @GetMapping("last")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_BLOCK')")
-    public BridgeLastBlockDtoV1 getLastBlock() {
-        return bridgeBlockService.getLastBlock();
+    public BridgeSubscriptionDtoV1 map(BridgeSubscription in) {
+        return new BridgeSubscriptionDtoV1(in.getId().toString(), in.getDestination().getId().toString(), in.getAddress().toChecksumAddress(),
+                in.getDestination().getUrl(), in.isEnabled(), in.getCreatedAt());
+    }
+
+    public BridgeSubscriptionDtoV1_Page map(Page<BridgeSubscription> in) {
+        return new BridgeSubscriptionDtoV1_Page(generalProperties.getNetwork(), in.getContent().stream().map(this::map).toList(),
+                in.getTotalPages(), in.getTotalElements());
     }
 }

@@ -21,28 +21,26 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.services;
+package global.goldenera.node.admin.api.v1.bridgedelivery.mappers;
 
+import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Component;
 
-import global.goldenera.cryptoj.enums.Network;
-import global.goldenera.node.shared.exceptions.GEValidationException;
-import global.goldenera.node.shared.properties.GeneralProperties;
-import lombok.RequiredArgsConstructor;
+import global.goldenera.node.admin.api.v1.bridgedelivery.dtos.AdminBridgeDeliveryDtoV1;
+import global.goldenera.node.admin.api.v1.bridgedelivery.dtos.AdminBridgeDeliveryDtoV1_Page;
+import global.goldenera.node.bridge.entities.BridgeDelivery;
 
 @Component
-@RequiredArgsConstructor
-public class BridgeNetworkValidator {
+public class AdminBridgeDeliveryMapper {
 
-    private final GeneralProperties generalProperties;
+    public AdminBridgeDeliveryDtoV1 map(BridgeDelivery in) {
+        return new AdminBridgeDeliveryDtoV1(in.getDeliveryId().toString(), in.getEventId().toString(), in.getDestination().getId().toString(),
+                in.getDestination().getUrl(), in.getState(), in.getAttempts(), in.getLastHttpStatus(), in.getLastError(),
+                in.getNextAttemptAt(), in.getCreatedAt(), in.getUpdatedAt(), in.getBody(), in.getDestination().getCreatedByApiKey().getId());
+    }
 
-    public Network validate(Network requestedNetwork) {
-        if (requestedNetwork == null) {
-            throw new GEValidationException("Network is required");
-        }
-        if (requestedNetwork != generalProperties.getNetwork()) {
-            throw new GEValidationException("Requested network does not match this node's network");
-        }
-        return requestedNetwork;
+    public AdminBridgeDeliveryDtoV1_Page map(Page<BridgeDelivery> in) {
+        return new AdminBridgeDeliveryDtoV1_Page(in.getContent().stream().map(this::map).toList(),
+                in.getTotalPages(), in.getTotalElements());
     }
 }

@@ -38,15 +38,16 @@ import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
 import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1.FeeLevel;
+import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
 import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 
 class BridgeBlockServiceTest {
 
-    private final BridgeNetworkValidator networkValidator = mock(BridgeNetworkValidator.class);
+    private final GeneralProperties generalProperties = new GeneralProperties();
     private final ChainQuery chainQuery = mock(ChainQuery.class);
     private final MempoolTxMapper mempoolTxMapper = mock(MempoolTxMapper.class);
 
@@ -54,18 +55,20 @@ class BridgeBlockServiceTest {
 
     @BeforeEach
     void setUp() {
+        generalProperties.setNetwork(Network.MAINNET);
         FeeLevel fast = new FeeLevel(Wei.ZERO, Wei.ZERO, Wei.valueOf(123L));
         when(mempoolTxMapper.mapRecommendedFees())
                 .thenReturn(new RecommendedFeesDtoV1(fast, fast, fast, 0L));
-		service = new BridgeBlockService(networkValidator, chainQuery, mempoolTxMapper);
+		service = new BridgeBlockService(generalProperties, chainQuery, mempoolTxMapper);
     }
 
     @Test
 	void coreCanonicalHeightWinsOverLaggingExplorerHeight() {
 		when(chainQuery.getLatestBlockHeight()).thenReturn(Optional.of(101L));
 
-        BridgeLastBlockDtoV1 result = service.getLastBlock(Network.MAINNET);
+        BridgeLastBlockDtoV1 result = service.getLastBlock();
 
+		assertThat(result.network()).isEqualTo(Network.MAINNET);
 		assertThat(result.blockNumber()).isEqualTo(101L);
 		assertThat(result.fee()).isEqualTo(BigInteger.valueOf(123L));
 		verify(chainQuery).getLatestBlockHeight();
@@ -75,7 +78,7 @@ class BridgeBlockServiceTest {
 	void noCanonicalCoreHeadIsNotFound() {
 		when(chainQuery.getLatestBlockHeight()).thenReturn(Optional.empty());
 
-		assertThatThrownBy(() -> service.getLastBlock(Network.TESTNET))
+		assertThatThrownBy(() -> service.getLastBlock())
 				.isInstanceOf(GENotFoundException.class);
 	}
 }

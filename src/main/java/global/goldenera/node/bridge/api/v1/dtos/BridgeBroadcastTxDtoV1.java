@@ -23,5 +23,7 @@
  */
 package global.goldenera.node.bridge.api.v1.dtos;
 
-public record BridgeBroadcastTxDtoV1(String txHash, Boolean accepted, String status, String message) {
+import global.goldenera.cryptoj.enums.Network;
+
+public record BridgeBroadcastTxDtoV1(Network network, String txHash, Boolean accepted, String status, String message) {
 }

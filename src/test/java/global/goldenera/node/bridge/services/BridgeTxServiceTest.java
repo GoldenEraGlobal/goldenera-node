@@ -51,18 +51,20 @@ import global.goldenera.cryptoj.serialization.tx.TxEncoder;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeBroadcastTxDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeBroadcastTxInDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeTxDtoV1;
-import global.goldenera.node.bridge.mappers.BridgeTxMapper;
 import global.goldenera.node.bridge.exceptions.BridgeCapabilityException;
+import global.goldenera.node.bridge.mappers.BridgeTxMapper;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 
 class BridgeTxServiceTest {
 
-    private final BridgeNetworkValidator networkValidator = mock(BridgeNetworkValidator.class);
+    private final GeneralProperties generalProperties = new GeneralProperties();
     private final ChainQuery chainQuery = mock(ChainQuery.class);
     private final MempoolStore mempool = mock(MempoolStore.class);
     private final MempoolManager manager = mock(MempoolManager.class);
@@ -72,7 +74,8 @@ class BridgeTxServiceTest {
 
     @BeforeEach
     void setUp() {
-		service = new BridgeTxService(networkValidator, chainQuery, mempool, manager, mapper);
+        generalProperties.setNetwork(Network.MAINNET);
+		service = new BridgeTxService(generalProperties, chainQuery, mempool, manager, mapper);
     }
 
     @Test
@@ -89,7 +92,7 @@ class BridgeTxServiceTest {
 		when(chainQuery.getTransactionConfirmations(hash)).thenReturn(Optional.of(7L));
 		when(mapper.mapConfirmed(tx, 9L, hash(2).toHexString(), 3, 7L)).thenReturn(expected);
 
-        assertThat(service.getByHash(hash, Network.MAINNET)).isSameAs(expected);
+        assertThat(service.getByHash(hash)).isSameAs(expected);
 		verify(mempool, never()).getTxByHash(hash);
     }
 
@@ -103,7 +106,7 @@ class BridgeTxServiceTest {
         when(mempool.getTxByHash(hash)).thenReturn(Optional.of(entry));
         when(mapper.mapMempool(tx)).thenReturn(expected);
 
-		assertThat(service.getByHash(hash, Network.TESTNET)).isSameAs(expected);
+		assertThat(service.getByHash(hash)).isSameAs(expected);
     }
 
     @Test
@@ -112,7 +115,7 @@ class BridgeTxServiceTest {
         when(chainQuery.getTransactionBlock(hash)).thenReturn(Optional.empty());
         when(mempool.getTxByHash(hash)).thenReturn(Optional.empty());
 
-		assertThatThrownBy(() -> service.getByHash(hash, Network.MAINNET))
+		assertThatThrownBy(() -> service.getByHash(hash))
 				.isInstanceOf(GENotFoundException.class);
 	}
 
@@ -124,7 +127,7 @@ class BridgeTxServiceTest {
 		when(block.getTransactionByHash(hash)).thenReturn(mock(Tx.class));
 		when(block.getTransactionIndex()).thenReturn(Map.of());
 
-		assertThatThrownBy(() -> service.getByHash(hash, Network.MAINNET))
+		assertThatThrownBy(() -> service.getByHash(hash))
 				.isInstanceOf(BridgeCapabilityException.class);
 	}
 
@@ -139,13 +142,12 @@ class BridgeTxServiceTest {
                 .fee(Wei.valueOf(1L))
                 .nonce(0L)
                 .sign(key);
-        when(networkValidator.validate(Network.MAINNET)).thenReturn(Network.MAINNET);
         when(chainQuery.getTransactionBlock(tx.getHash())).thenReturn(Optional.of(mock(StoredBlock.class)));
 
         BridgeBroadcastTxDtoV1 result = service.broadcast(new BridgeBroadcastTxInDtoV1(
-                Network.MAINNET,
                 TxEncoder.INSTANCE.encode(tx, true).toHexString()));
 
+        assertThat(result.network()).isEqualTo(Network.MAINNET);
         assertThat(result.accepted()).isTrue();
         assertThat(result.status()).isEqualTo("ACCEPTED");
         assertThat(result.txHash()).isEqualTo(tx.getHash().toHexString());
@@ -163,7 +165,6 @@ class BridgeTxServiceTest {
                 .fee(Wei.valueOf(1L))
                 .nonce(0L)
                 .sign(key);
-        when(networkValidator.validate(Network.MAINNET)).thenReturn(Network.MAINNET);
         when(chainQuery.getTransactionByHash(tx.getHash())).thenReturn(Optional.of(tx));
         when(chainQuery.getTransactionBlock(tx.getHash())).thenReturn(Optional.empty());
         when(mempool.getTxByHash(tx.getHash())).thenReturn(Optional.empty());
@@ -173,12 +174,28 @@ class BridgeTxServiceTest {
                 null));
 
         BridgeBroadcastTxDtoV1 result = service.broadcast(new BridgeBroadcastTxInDtoV1(
-                Network.MAINNET,
                 TxEncoder.INSTANCE.encode(tx, true).toHexString()));
 
+        assertThat(result.network()).isEqualTo(Network.MAINNET);
         assertThat(result.accepted()).isTrue();
         verify(manager).addTx(argThat(decoded -> decoded.getHash().equals(tx.getHash())));
         verify(chainQuery, never()).getTransactionByHash(tx.getHash());
+    }
+
+    @Test
+    void broadcastRejectsTransactionFromAnotherNetworkWithoutRequestNetwork() throws Exception {
+        PrivateKey key = PrivateKey.wrap(Bytes32.fromHexString(String.format("0x%064x", 14)));
+        Tx tx = TxBuilder.create()
+                .type(TxType.TRANSFER)
+                .network(Network.TESTNET)
+                .recipient(Address.fromHexString(String.format("0x%040x", 15)))
+                .amount(Wei.valueOf(1L)).fee(Wei.valueOf(1L)).nonce(0L).sign(key);
+
+        assertThatThrownBy(() -> service.broadcast(new BridgeBroadcastTxInDtoV1(
+                TxEncoder.INSTANCE.encode(tx, true).toHexString())))
+                .isInstanceOf(GEValidationException.class)
+                .hasMessageContaining("this node's network");
+        verify(manager, never()).addTx(any(Tx.class));
     }
 
     private static Hash hash(int value) {

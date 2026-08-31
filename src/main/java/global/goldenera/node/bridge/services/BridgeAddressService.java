@@ -28,7 +28,9 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import org.springframework.beans.factory.ObjectProvider;
@@ -40,12 +42,13 @@ import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeAddressNonceDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscribeAddressDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscribeAddressInDtoV1;
+import global.goldenera.node.bridge.api.v1.dtos.BridgeUnsubscribeDtoV1;
 import global.goldenera.node.bridge.entities.BridgeSubscription;
 import global.goldenera.node.bridge.exceptions.BridgeCapabilityException;
 import global.goldenera.node.bridge.repositories.BridgeSubscriptionRepository;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
-import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalQuery;
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalHead;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalQuery;
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStream;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
@@ -53,10 +56,10 @@ import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
-import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.properties.GeneralProperties;
-import global.goldenera.node.shared.utils.WebhookValidator;
+import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.utils.WebhookValidator.UrlData;
+import global.goldenera.node.shared.utils.WebhookValidator;
 import lombok.RequiredArgsConstructor;
 
 @Service
@@ -65,18 +68,16 @@ public class BridgeAddressService {
 
     static final String WEBHOOK_LABEL_PREFIX = "bridge_";
 
-    private final BridgeNetworkValidator networkValidator;
     private final ChainHeadStateCache chainHeadStateCache;
 	private final GeneralProperties generalProperties;
 	private final ObjectProvider<WebhookCoreService> webhookCoreService;
 	private final ObjectProvider<BridgeSubscriptionRepository> bridgeSubscriptionRepository;
 	private final ObjectProvider<LifecycleJournalQuery> lifecycleJournalQuery;
 
-    public BridgeAddressNonceDtoV1 getNonce(Address address, Network network) {
-        networkValidator.validate(network);
+    public BridgeAddressNonceDtoV1 getNonce(Address address) {
         long nextNonce = chainHeadStateCache.getHeadState().getNonce(address).getNonce() + 1L;
         return new BridgeAddressNonceDtoV1(
-                network,
+                generalProperties.getNetwork(),
                 address.toChecksumAddress(),
                 BigInteger.valueOf(nextNonce));
     }
@@ -89,7 +90,6 @@ public class BridgeAddressService {
         if (input.webhookUrl() == null || input.webhookUrl().isBlank()) {
             throw new GEValidationException("webhookUrl is required");
         }
-        networkValidator.validate(input.network());
         requirePermission(apiKey);
 		if (!generalProperties.isWebhookEnable()) {
 			throw new BridgeCapabilityException("Bridge subscriptions require webhooks to be enabled");
@@ -104,6 +104,7 @@ public class BridgeAddressService {
 		BridgeSubscriptionRepository subscriptionRepository = requireSubscriptionRepository();
 		LifecycleJournalQuery journalQuery = requireLifecycleJournalQuery();
 		String destinationKey = destinationKey(urlData);
+		subscriptionRepository.lockApiKey(apiKey.getId());
 		subscriptionRepository.lockDestination(apiKey.getId(), destinationKey);
 		LifecycleJournalHead canonicalHead = journalQuery.head(LifecycleJournalStream.CANONICAL);
 		LifecycleJournalHead mempoolHead = journalQuery.head(LifecycleJournalStream.MEMPOOL);
@@ -119,17 +120,18 @@ public class BridgeAddressService {
         }
 
 		UUID subscriptionId = subscriptionRepository.upsertEnabled(
-				UUID.randomUUID(), destination.getId(), input.network(), address,
+				UUID.randomUUID(), destination.getId(), generalProperties.getNetwork(), address,
 				canonicalHead.epoch(), canonicalHead.sequence(),
 				mempoolHead.epoch(), mempoolHead.sequence(), canonicalHeight, Instant.now());
-		return new BridgeSubscribeAddressDtoV1(subscriptionId.toString());
+		return new BridgeSubscribeAddressDtoV1(generalProperties.getNetwork(), subscriptionId.toString());
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void unsubscribe(UUID subscriptionId, Network network, ApiKey apiKey) {
-		networkValidator.validate(network);
+    public BridgeUnsubscribeDtoV1 unsubscribe(UUID subscriptionId, ApiKey apiKey) {
+		Network network = generalProperties.getNetwork();
 		requirePermission(apiKey);
 		BridgeSubscriptionRepository subscriptionRepository = requireSubscriptionRepository();
+		subscriptionRepository.lockApiKey(apiKey.getId());
 		BridgeSubscription subscription = subscriptionRepository.findById(subscriptionId).orElse(null);
         if (subscription == null
                 || subscription.getNetwork() != network
@@ -138,7 +140,7 @@ public class BridgeAddressService {
             throw new GENotFoundException("Bridge subscription not found");
         }
         if (!subscription.isEnabled()) {
-            return;
+            return new BridgeUnsubscribeDtoV1(network, 0L);
         }
         subscription.setEnabled(false);
 		subscriptionRepository.update(subscription);
@@ -147,6 +149,25 @@ public class BridgeAddressService {
             destination.setEnabled(false);
             requireWebhookCoreService().update(destination);
         }
+        return new BridgeUnsubscribeDtoV1(network, 1L);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public BridgeUnsubscribeDtoV1 unsubscribeBatch(List<UUID> subscriptionIds, ApiKey apiKey) {
+        requirePermission(apiKey);
+        Network network = generalProperties.getNetwork();
+        if (subscriptionIds != null) {
+            if (subscriptionIds.stream().anyMatch(Objects::isNull)) {
+                throw new GEValidationException("Subscription IDs must not be null");
+            }
+            if (subscriptionIds.isEmpty()) {
+                return new BridgeUnsubscribeDtoV1(network, 0L);
+            }
+        }
+        BridgeSubscriptionRepository repository = requireSubscriptionRepository();
+        repository.lockApiKey(apiKey.getId());
+        long count = repository.disableSubscriptions(apiKey.getId(), network, subscriptionIds);
+        return new BridgeUnsubscribeDtoV1(network, count);
     }
 
     private WebhookCoreService requireWebhookCoreService() {

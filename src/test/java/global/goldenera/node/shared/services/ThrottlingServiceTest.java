@@ -53,12 +53,15 @@ class ThrottlingServiceTest {
 
 	@ParameterizedTest
 	@CsvSource({
-			"/api/bridge/v1/block/last?network=MAINNET, 3",
-			"/api/bridge/v1/tx/by-hash/0x123?network=MAINNET, 5",
+			"/api/bridge/v1/block/last, 3",
+			"/api/bridge/v1/tx/by-hash/0x123, 5",
 			"/api/bridge/v1/tx/broadcast, 10",
 			"/api/bridge/v1/address/subscribe, 10",
-			"/api/bridge/v1/address/subscription/123?network=MAINNET, 5",
-			"/api/bridge/v1/address/0x123/nonce?network=MAINNET, 2"
+			"/api/bridge/v1/address/subscription/123, 5",
+            "/api/bridge/v1/address/subscription, 5",
+            "/api/bridge/v1/address/subscription/page?pageNumber=0&pageSize=10, 5",
+            "/api/bridge/v1/delivery/page?pageNumber=0&pageSize=10, 5",
+			"/api/bridge/v1/address/0x123/nonce, 2"
 	})
 	void bridgeEndpointsConsumeConfiguredCost(String uri, long cost) {
 		ThrottlingProperties properties = new ThrottlingProperties();

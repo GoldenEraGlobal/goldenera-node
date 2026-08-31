@@ -28,6 +28,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.ListCrudRepository;
 import org.springframework.data.repository.query.Param;
@@ -41,7 +46,12 @@ import io.hypersistence.utils.spring.repository.BaseJpaRepository;
 
 @Repository
 public interface BridgeSubscriptionRepository extends BaseJpaRepository<BridgeSubscription, UUID>,
-		ListCrudRepository<BridgeSubscription, UUID>, BridgeSubscriptionRepositoryCustom {
+		ListCrudRepository<BridgeSubscription, UUID>, JpaSpecificationExecutor<BridgeSubscription>,
+		BridgeSubscriptionRepositoryCustom {
+
+	@Override
+	@EntityGraph(attributePaths = { "destination", "destination.createdByApiKey" })
+	Page<BridgeSubscription> findAll(Specification<BridgeSubscription> spec, Pageable pageable);
 
     @Query("""
             SELECT subscription

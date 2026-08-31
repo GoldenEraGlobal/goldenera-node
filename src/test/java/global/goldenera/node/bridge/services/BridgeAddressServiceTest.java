@@ -31,9 +31,12 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -51,8 +54,8 @@ import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscribeAddressDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeSubscribeAddressInDtoV1;
 import global.goldenera.node.bridge.entities.BridgeSubscription;
 import global.goldenera.node.bridge.repositories.BridgeSubscriptionRepository;
-import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache.HeadStateSnapshot;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalHead;
@@ -63,6 +66,7 @@ import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
 import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.utils.WebhookValidator;
@@ -72,7 +76,6 @@ class BridgeAddressServiceTest {
     @Test
     void returnsZeroAsNextNonceForFreshAccount() {
         Address address = Address.fromHexString(String.format("0x%040x", 1));
-        BridgeNetworkValidator validator = mock(BridgeNetworkValidator.class);
         ChainHeadStateCache cache = mock(ChainHeadStateCache.class);
         WorldState state = mock(WorldState.class);
         AccountNonceState nonce = mock(AccountNonceState.class);
@@ -80,14 +83,13 @@ class BridgeAddressServiceTest {
         when(state.getNonce(address)).thenReturn(nonce);
         when(nonce.getNonce()).thenReturn(-1L);
 		BridgeAddressService service = new BridgeAddressService(
-				validator,
 				cache,
-				mock(GeneralProperties.class),
+				properties(),
 				webhookProvider(),
 				subscriptionProvider(mock(BridgeSubscriptionRepository.class)),
 				journalProvider());
 
-        BridgeAddressNonceDtoV1 result = service.getNonce(address, Network.MAINNET);
+        BridgeAddressNonceDtoV1 result = service.getNonce(address);
 
         assertThat(result.network()).isEqualTo(Network.MAINNET);
         assertThat(result.address()).isEqualTo(address.toChecksumAddress());
@@ -97,7 +99,6 @@ class BridgeAddressServiceTest {
     @Test
     void incrementsStoredChainNonce() {
         Address address = Address.fromHexString(String.format("0x%040x", 2));
-        BridgeNetworkValidator validator = mock(BridgeNetworkValidator.class);
         ChainHeadStateCache cache = mock(ChainHeadStateCache.class);
         WorldState state = mock(WorldState.class);
         AccountNonceState nonce = mock(AccountNonceState.class);
@@ -105,29 +106,27 @@ class BridgeAddressServiceTest {
         when(state.getNonce(address)).thenReturn(nonce);
         when(nonce.getNonce()).thenReturn(11L);
 		BridgeAddressService service = new BridgeAddressService(
-				validator,
 				cache,
-				mock(GeneralProperties.class),
+				properties(),
 				webhookProvider(),
 				subscriptionProvider(mock(BridgeSubscriptionRepository.class)),
 				journalProvider());
 
-        assertThat(service.getNonce(address, Network.TESTNET).nonce()).isEqualTo(12L);
+        assertThat(service.getNonce(address).nonce()).isEqualTo(12L);
     }
 
     @Test
     void createsBridgeDestinationAndDurableSubscriptionWithoutApplyingWebhookLimit() {
         Address address = Address.fromHexString(String.format("0x%040x", 3));
         UUID subscriptionId = UUID.randomUUID();
-        BridgeNetworkValidator validator = mock(BridgeNetworkValidator.class);
         ChainHeadStateCache cache = mock(ChainHeadStateCache.class);
-        GeneralProperties properties = mock(GeneralProperties.class);
+        GeneralProperties properties = properties();
         ApiKey apiKey = mock(ApiKey.class);
         WebhookCoreService core = mock(WebhookCoreService.class);
         @SuppressWarnings("unchecked")
         ObjectProvider<WebhookCoreService> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(core);
-        when(properties.isWebhookEnable()).thenReturn(true);
+        properties.setWebhookEnable(true);
         when(apiKey.hasPermission(ApiKeyPermission.BRIDGE_MANAGE_SUBSCRIPTIONS)).thenReturn(true);
         when(apiKey.getWebhookSecretKey()).thenReturn(Bytes.of(1));
         when(apiKey.getMaxWebhooks()).thenReturn(0L);
@@ -140,8 +139,6 @@ class BridgeAddressServiceTest {
         BridgeSubscriptionRepository repository = mock(BridgeSubscriptionRepository.class);
         when(repository.findReusableDestination(9L, "https://consumer.example/webhook"))
                 .thenReturn(Optional.empty());
-        when(repository.findByDestinationIdAndNetworkAndAddress(destinationId, Network.MAINNET, address))
-                .thenReturn(Optional.empty());
 		when(repository.upsertEnabled(
 				any(UUID.class), eq(destinationId), eq(Network.MAINNET), eq(address),
 				any(UUID.class), anyLong(), any(UUID.class), anyLong(),
@@ -152,15 +149,15 @@ class BridgeAddressServiceTest {
 		when(headSnapshot.head()).thenReturn(head);
 		when(cache.getHeadSnapshot()).thenReturn(headSnapshot);
 		BridgeAddressService service = new BridgeAddressService(
-				validator, cache, properties, provider, subscriptionProvider(repository), journalProvider());
+				cache, properties, provider, subscriptionProvider(repository), journalProvider());
 
         BridgeSubscribeAddressDtoV1 result = service.subscribe(
                 new BridgeSubscribeAddressInDtoV1(
-                        Network.MAINNET,
                         address.toChecksumAddress(),
                         "https://consumer.example/webhook"),
                 apiKey);
 
+        assertThat(result.network()).isEqualTo(Network.MAINNET);
         assertThat(result.subscriptionId()).isEqualTo(subscriptionId.toString());
         ArgumentCaptor<Webhook> webhookCaptor = ArgumentCaptor.forClass(Webhook.class);
         verify(core).create(webhookCaptor.capture());
@@ -180,7 +177,6 @@ class BridgeAddressServiceTest {
     @Test
     void hidesSubscriptionOwnedByAnotherApiKey() {
         UUID id = UUID.randomUUID();
-        BridgeNetworkValidator validator = mock(BridgeNetworkValidator.class);
         ApiKey caller = mock(ApiKey.class);
         ApiKey owner = mock(ApiKey.class);
         when(caller.hasPermission(ApiKeyPermission.BRIDGE_MANAGE_SUBSCRIPTIONS)).thenReturn(true);
@@ -197,14 +193,13 @@ class BridgeAddressServiceTest {
         BridgeSubscriptionRepository repository = mock(BridgeSubscriptionRepository.class);
         when(repository.findById(id)).thenReturn(Optional.of(subscription));
 		BridgeAddressService service = new BridgeAddressService(
-				validator,
 				mock(ChainHeadStateCache.class),
-				mock(GeneralProperties.class),
+				properties(),
 				provider,
 				subscriptionProvider(repository),
 				journalProvider());
 
-        assertThatThrownBy(() -> service.unsubscribe(id, Network.MAINNET, caller))
+        assertThatThrownBy(() -> service.unsubscribe(id, caller))
                 .isInstanceOf(GENotFoundException.class);
     }
 
@@ -219,14 +214,13 @@ class BridgeAddressServiceTest {
     @Test
     void storesCanonicalFullUrlOnInternalDestination() {
         Address address = Address.fromHexString(String.format("0x%040x", 4));
-        BridgeNetworkValidator validator = mock(BridgeNetworkValidator.class);
-        GeneralProperties properties = mock(GeneralProperties.class);
+        GeneralProperties properties = properties();
         ApiKey apiKey = mock(ApiKey.class);
         WebhookCoreService core = mock(WebhookCoreService.class);
         @SuppressWarnings("unchecked")
         ObjectProvider<WebhookCoreService> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(core);
-        when(properties.isWebhookEnable()).thenReturn(true);
+        properties.setWebhookEnable(true);
         when(apiKey.hasPermission(ApiKeyPermission.BRIDGE_MANAGE_SUBSCRIPTIONS)).thenReturn(true);
         when(apiKey.getWebhookSecretKey()).thenReturn(Bytes.of(1));
         when(apiKey.getId()).thenReturn(10L);
@@ -239,19 +233,16 @@ class BridgeAddressServiceTest {
         BridgeSubscriptionRepository repository = mock(BridgeSubscriptionRepository.class);
         String canonicalUrl = "https://consumer.example/webhook?a=hello+world&z=last";
         when(repository.findReusableDestination(10L, canonicalUrl)).thenReturn(Optional.empty());
-        when(repository.findByDestinationIdAndNetworkAndAddress(destinationId, Network.MAINNET, address))
-                .thenReturn(Optional.empty());
         when(repository.upsertEnabled(
 				any(UUID.class), eq(destinationId), eq(Network.MAINNET), eq(address),
 				any(UUID.class), anyLong(), any(UUID.class), anyLong(),
 				anyLong(), any())).thenReturn(subscriptionId);
 		BridgeAddressService service = new BridgeAddressService(
-				validator, mock(ChainHeadStateCache.class), properties, provider,
+				mock(ChainHeadStateCache.class), properties, provider,
 				subscriptionProvider(repository), journalProvider());
 
         service.subscribe(
                 new BridgeSubscribeAddressInDtoV1(
-                        Network.MAINNET,
                         address.toChecksumAddress(),
                         "https://consumer.example/webhook?z=last&a=hello%20world"),
                 apiKey);
@@ -267,7 +258,6 @@ class BridgeAddressServiceTest {
     void unsubscribeDisablesLastSubscriptionAndDestinationWithoutDeletingHistory() {
         UUID subscriptionId = UUID.randomUUID();
         UUID destinationId = UUID.randomUUID();
-        BridgeNetworkValidator validator = mock(BridgeNetworkValidator.class);
         ApiKey apiKey = mock(ApiKey.class);
         when(apiKey.hasPermission(ApiKeyPermission.BRIDGE_MANAGE_SUBSCRIPTIONS)).thenReturn(true);
         Webhook destination = mock(Webhook.class);
@@ -286,20 +276,51 @@ class BridgeAddressServiceTest {
         when(repository.findById(subscriptionId)).thenReturn(Optional.of(subscription));
         when(repository.countEnabledByDestinationId(destinationId)).thenReturn(0L);
 		BridgeAddressService service = new BridgeAddressService(
-				validator,
 				mock(ChainHeadStateCache.class),
-				mock(GeneralProperties.class),
+				properties(),
 				provider,
 				subscriptionProvider(repository),
 				journalProvider());
 
-        service.unsubscribe(subscriptionId, Network.MAINNET, apiKey);
+        service.unsubscribe(subscriptionId, apiKey);
 
         verify(subscription).setEnabled(false);
         verify(repository).update(subscription);
         verify(destination).setEnabled(false);
         verify(core).update(destination);
         verify(repository, never()).delete(subscription);
+    }
+
+    @Test
+    void emptyBatchDoesNotTouchRepositoryAndInvalidArrayDoesNotMeanAll() {
+        ApiKey apiKey = mock(ApiKey.class);
+        when(apiKey.hasPermission(ApiKeyPermission.BRIDGE_MANAGE_SUBSCRIPTIONS)).thenReturn(true);
+        BridgeSubscriptionRepository repository = mock(BridgeSubscriptionRepository.class);
+        BridgeAddressService service = new BridgeAddressService(mock(ChainHeadStateCache.class), properties(),
+                webhookProvider(), subscriptionProvider(repository), journalProvider());
+
+        var result = service.unsubscribeBatch(List.of(), apiKey);
+        assertThat(result.network()).isEqualTo(Network.MAINNET);
+        assertThat(result.unsubscribedCount()).isZero();
+        assertThatThrownBy(() -> service.unsubscribeBatch(Arrays.asList(UUID.randomUUID(), null), apiKey))
+                .isInstanceOf(GEValidationException.class);
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    void batchChecksPermissionBeforeAnyWrite() {
+        BridgeSubscriptionRepository repository = mock(BridgeSubscriptionRepository.class);
+        BridgeAddressService service = new BridgeAddressService(mock(ChainHeadStateCache.class), properties(),
+                webhookProvider(), subscriptionProvider(repository), journalProvider());
+        assertThatThrownBy(() -> service.unsubscribeBatch(null, mock(ApiKey.class)))
+                .isInstanceOf(GEValidationException.class);
+        verifyNoInteractions(repository);
+    }
+
+    private static GeneralProperties properties() {
+        GeneralProperties properties = new GeneralProperties();
+        properties.setNetwork(Network.MAINNET);
+        return properties;
     }
 
     @SuppressWarnings("unchecked")

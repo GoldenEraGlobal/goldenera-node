@@ -23,7 +23,5 @@
  */
 package global.goldenera.node.bridge.api.v1.dtos;
 
-import global.goldenera.cryptoj.enums.Network;
-
-public record BridgeSubscribeAddressInDtoV1(Network network, String address, String webhookUrl) {
+public record BridgeSubscribeAddressInDtoV1(String address, String webhookUrl) {
 }

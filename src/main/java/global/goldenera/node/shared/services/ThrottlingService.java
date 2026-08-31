@@ -78,7 +78,8 @@ public class ThrottlingService {
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/tx/by-hash/.*"), 5);
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/tx/broadcast.*"), 10);
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/address/subscribe.*"), 10);
-        ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/address/subscription/.*"), 5);
+        ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/address/subscription(?:/.*|\\?.*)?"), 5);
+        ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/delivery/page.*"), 5);
         ENDPOINT_COSTS.put(Pattern.compile("/api/bridge/v1/address/.*/nonce.*"), 2);
 
         // ============= HEAVY IO / Range Scans (highest cost) =============

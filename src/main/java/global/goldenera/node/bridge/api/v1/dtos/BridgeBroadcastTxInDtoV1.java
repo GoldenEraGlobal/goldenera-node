@@ -23,7 +23,5 @@
  */
 package global.goldenera.node.bridge.api.v1.dtos;
 
-import global.goldenera.cryptoj.enums.Network;
-
-public record BridgeBroadcastTxInDtoV1(Network network, String rawDataHex) {
+public record BridgeBroadcastTxInDtoV1(String rawDataHex) {
 }

@@ -23,5 +23,7 @@
  */
 package global.goldenera.node.bridge.api.v1.dtos;
 
-public record BridgeSubscribeAddressDtoV1(String subscriptionId) {
+import global.goldenera.cryptoj.enums.Network;
+
+public record BridgeSubscribeAddressDtoV1(Network network, String subscriptionId) {
 }

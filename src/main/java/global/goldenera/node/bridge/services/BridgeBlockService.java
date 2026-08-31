@@ -25,29 +25,28 @@ package global.goldenera.node.bridge.services;
 
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
 import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
 public class BridgeBlockService {
 
-	private final BridgeNetworkValidator networkValidator;
+	private final GeneralProperties generalProperties;
 	private final ChainQuery chainQuery;
     private final MempoolTxMapper mempoolTxMapper;
 
-	public BridgeLastBlockDtoV1 getLastBlock(Network network) {
-		networkValidator.validate(network);
+	public BridgeLastBlockDtoV1 getLastBlock() {
 		Long height = chainQuery.getLatestBlockHeight().orElse(null);
         if (height == null) {
             throw new GENotFoundException("Latest canonical block not found");
         }
         return new BridgeLastBlockDtoV1(
-                network,
+                generalProperties.getNetwork(),
                 height,
                 mempoolTxMapper.mapRecommendedFees().getFast().getTotalForAverageTx().toBigInteger());
     }

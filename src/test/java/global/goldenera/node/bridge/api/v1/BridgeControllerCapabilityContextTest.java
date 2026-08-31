@@ -29,13 +29,30 @@ import static org.mockito.Mockito.mock;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import global.goldenera.node.admin.api.v1.bridgedelivery.AdminBridgeDeliveryApiV1;
+import global.goldenera.node.admin.api.v1.bridgedelivery.mappers.AdminBridgeDeliveryMapper;
+import global.goldenera.node.admin.api.v1.bridgesubscription.AdminBridgeSubscriptionApiV1;
+import global.goldenera.node.admin.api.v1.bridgesubscription.mappers.AdminBridgeSubscriptionMapper;
+import global.goldenera.node.bridge.api.v1.mappers.BridgeDeliveryMapper;
+import global.goldenera.node.bridge.api.v1.mappers.BridgeSubscriptionMapper;
 import global.goldenera.node.bridge.services.BridgeAddressService;
 import global.goldenera.node.bridge.services.BridgeBlockService;
+import global.goldenera.node.bridge.services.BridgeDeliveryService;
+import global.goldenera.node.bridge.services.BridgeSubscriptionService;
 import global.goldenera.node.bridge.services.BridgeTxService;
 
 class BridgeControllerCapabilityContextTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withBean(ObjectMapper.class, ObjectMapper::new)
+            .withBean(BridgeDeliveryService.class, () -> mock(BridgeDeliveryService.class))
+            .withBean(BridgeDeliveryMapper.class, () -> mock(BridgeDeliveryMapper.class))
+            .withBean(AdminBridgeSubscriptionMapper.class, () -> mock(AdminBridgeSubscriptionMapper.class))
+            .withBean(AdminBridgeDeliveryMapper.class, () -> mock(AdminBridgeDeliveryMapper.class))
+            .withBean(BridgeSubscriptionService.class, () -> mock(BridgeSubscriptionService.class))
+            .withBean(BridgeSubscriptionMapper.class, () -> mock(BridgeSubscriptionMapper.class))
             .withBean(BridgeAddressService.class, () -> mock(BridgeAddressService.class))
             .withBean(BridgeBlockService.class, () -> mock(BridgeBlockService.class))
             .withBean(BridgeTxService.class, () -> mock(BridgeTxService.class))
@@ -43,7 +60,10 @@ class BridgeControllerCapabilityContextTest {
                     BridgeAddressApiV1.class,
                     BridgeBlockApiV1.class,
                     BridgeTxApiV1.class,
-                    BridgeSubscriptionApiV1.class);
+                    BridgeSubscriptionApiV1.class,
+                    BridgeDeliveryApiV1.class,
+                    AdminBridgeSubscriptionApiV1.class,
+                    AdminBridgeDeliveryApiV1.class);
 
     @Test
     void coreBridgeControllersRemainAvailableWithoutPostgresql() {
@@ -56,6 +76,9 @@ class BridgeControllerCapabilityContextTest {
                     assertThat(context).hasSingleBean(BridgeBlockApiV1.class);
                     assertThat(context).hasSingleBean(BridgeTxApiV1.class);
                     assertThat(context).doesNotHaveBean(BridgeSubscriptionApiV1.class);
+                    assertThat(context).doesNotHaveBean(BridgeDeliveryApiV1.class);
+                    assertThat(context).doesNotHaveBean(AdminBridgeSubscriptionApiV1.class);
+                    assertThat(context).doesNotHaveBean(AdminBridgeDeliveryApiV1.class);
                 });
     }
 
@@ -65,7 +88,12 @@ class BridgeControllerCapabilityContextTest {
                 .withPropertyValues(
                         "ge.general.postgresql-enable=true",
                         "ge.general.webhook-enable=false")
-                .run(context -> assertThat(context).doesNotHaveBean(BridgeSubscriptionApiV1.class));
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(BridgeSubscriptionApiV1.class);
+                    assertThat(context).hasSingleBean(BridgeDeliveryApiV1.class);
+                    assertThat(context).hasSingleBean(AdminBridgeSubscriptionApiV1.class);
+                    assertThat(context).hasSingleBean(AdminBridgeDeliveryApiV1.class);
+                });
     }
 
     @Test

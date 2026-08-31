@@ -21,29 +21,41 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.admin.api.v1.bridgesubscription;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.bridge.api.v1.dtos.BridgeAddressNonceDtoV1;
-import global.goldenera.node.bridge.services.BridgeAddressService;
+import global.goldenera.node.admin.api.v1.bridgesubscription.dtos.AdminBridgeSubscriptionDtoV1_Page;
+import global.goldenera.node.admin.api.v1.bridgesubscription.mappers.AdminBridgeSubscriptionMapper;
+import global.goldenera.node.bridge.enums.BridgeSubscriptionStatus;
+import global.goldenera.node.bridge.services.BridgeSubscriptionService;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/address")
-public class BridgeAddressApiV1 {
+@PreAuthorize("hasRole('ADMIN')")
+@RequestMapping("/api/admin/v1/bridge-subscription")
+@ConditionalOnProperty(prefix = "ge.general", name = "postgresql-enable", havingValue = "true")
+public class AdminBridgeSubscriptionApiV1 {
 
-    private final BridgeAddressService bridgeAddressService;
+    private final BridgeSubscriptionService bridgeSubscriptionService;
+    private final AdminBridgeSubscriptionMapper mapper;
 
-    @GetMapping("{address}/nonce")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_NONCE')")
-    public BridgeAddressNonceDtoV1 getNonce(@PathVariable Address address) {
-        return bridgeAddressService.getNonce(address);
+    @GetMapping("page")
+    public AdminBridgeSubscriptionDtoV1_Page getPage(
+            @RequestParam int pageNumber,
+            @RequestParam int pageSize,
+            @RequestParam(required = false) Sort.Direction direction,
+            @RequestParam(required = false) Long apiKeyId,
+            @RequestParam(required = false) Address address,
+            @RequestParam(defaultValue = "ACTIVE") BridgeSubscriptionStatus status) {
+        return mapper.map(bridgeSubscriptionService.getAdminPage(pageNumber, pageSize, direction, apiKeyId, address, status));
     }
 }

@@ -29,11 +29,9 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeBroadcastTxDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeBroadcastTxInDtoV1;
 import global.goldenera.node.bridge.api.v1.dtos.BridgeTxDtoV1;
@@ -49,8 +47,8 @@ public class BridgeTxApiV1 {
 
     @GetMapping("by-hash/{txHash}")
     @PreAuthorize("hasAuthority('BRIDGE_READ_TX')")
-    public BridgeTxDtoV1 getByHash(@PathVariable Hash txHash, @RequestParam Network network) {
-        return bridgeTxService.getByHash(txHash, network);
+    public BridgeTxDtoV1 getByHash(@PathVariable Hash txHash) {
+        return bridgeTxService.getByHash(txHash);
     }
 
     @PostMapping("broadcast")

@@ -21,27 +21,31 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.bridge.api.v1.mappers;
 
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.data.domain.Page;
+import org.springframework.stereotype.Component;
 
-import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.bridge.services.BridgeBlockService;
+import global.goldenera.node.bridge.api.v1.dtos.BridgeDeliveryDtoV1;
+import global.goldenera.node.bridge.api.v1.dtos.BridgeDeliveryDtoV1_Page;
+import global.goldenera.node.bridge.entities.BridgeDelivery;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
-@RestController
+@Component
 @RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/block")
-public class BridgeBlockApiV1 {
+public class BridgeDeliveryMapper {
 
-    private final BridgeBlockService bridgeBlockService;
+    private final GeneralProperties generalProperties;
 
-    @GetMapping("last")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_BLOCK')")
-    public BridgeLastBlockDtoV1 getLastBlock() {
-        return bridgeBlockService.getLastBlock();
+    public BridgeDeliveryDtoV1 map(BridgeDelivery in) {
+        return new BridgeDeliveryDtoV1(in.getDeliveryId().toString(), in.getEventId().toString(), in.getDestination().getId().toString(),
+                in.getDestination().getUrl(), in.getState(), in.getAttempts(), in.getLastHttpStatus(), in.getLastError(),
+                in.getNextAttemptAt(), in.getCreatedAt(), in.getUpdatedAt(), in.getBody());
+    }
+
+    public BridgeDeliveryDtoV1_Page map(Page<BridgeDelivery> in) {
+        return new BridgeDeliveryDtoV1_Page(generalProperties.getNetwork(), in.getContent().stream().map(this::map).toList(),
+                in.getTotalPages(), in.getTotalElements());
     }
 }

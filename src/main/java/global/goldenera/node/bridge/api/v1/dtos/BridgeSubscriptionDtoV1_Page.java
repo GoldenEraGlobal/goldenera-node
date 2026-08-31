@@ -21,27 +21,21 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.bridge.api.v1.dtos;
 
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import java.util.List;
 
-import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.bridge.services.BridgeBlockService;
-import lombok.RequiredArgsConstructor;
+import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.explorer.api.v1.PaginatedDtoV1;
+import lombok.Getter;
 
-@RestController
-@RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/block")
-public class BridgeBlockApiV1 {
+public class BridgeSubscriptionDtoV1_Page extends PaginatedDtoV1<BridgeSubscriptionDtoV1> {
 
-    private final BridgeBlockService bridgeBlockService;
+    @Getter
+    private final Network network;
 
-    @GetMapping("last")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_BLOCK')")
-    public BridgeLastBlockDtoV1 getLastBlock() {
-        return bridgeBlockService.getLastBlock();
+    public BridgeSubscriptionDtoV1_Page(Network network, List<BridgeSubscriptionDtoV1> list, int totalPages, long totalElements) {
+        super(list, totalPages, totalElements);
+        this.network = network;
     }
 }

@@ -21,27 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.bridge.api.v1.dtos;
 
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import java.time.Instant;
 
-import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.bridge.services.BridgeBlockService;
-import lombok.RequiredArgsConstructor;
+import global.goldenera.node.bridge.enums.BridgeDeliveryState;
 
-@RestController
-@RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/block")
-public class BridgeBlockApiV1 {
-
-    private final BridgeBlockService bridgeBlockService;
-
-    @GetMapping("last")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_BLOCK')")
-    public BridgeLastBlockDtoV1 getLastBlock() {
-        return bridgeBlockService.getLastBlock();
-    }
+public record BridgeDeliveryDtoV1(String deliveryId, String eventId, String destinationId, String webhookUrl,
+        BridgeDeliveryState state, int attempts, Integer lastHttpStatus, String lastError,
+        Instant nextAttemptAt, Instant createdAt, Instant updatedAt, String body) {
 }

@@ -21,27 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.bridge.enums;
 
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.bridge.services.BridgeBlockService;
-import lombok.RequiredArgsConstructor;
-
-@RestController
-@RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/block")
-public class BridgeBlockApiV1 {
-
-    private final BridgeBlockService bridgeBlockService;
-
-    @GetMapping("last")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_BLOCK')")
-    public BridgeLastBlockDtoV1 getLastBlock() {
-        return bridgeBlockService.getLastBlock();
-    }
+public enum BridgeSubscriptionStatus {
+    ACTIVE,
+    INACTIVE,
+    ALL
 }

@@ -36,28 +36,28 @@ import global.goldenera.node.bridge.api.v1.dtos.BridgeTxDtoV1;
 import global.goldenera.node.bridge.exceptions.BridgeCapabilityException;
 import global.goldenera.node.bridge.mappers.BridgeTxMapper;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
-import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolManager.MempoolAddResult;
 import global.goldenera.node.core.mempool.MempoolManager.MempoolReasonCode;
+import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
 import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
 public class BridgeTxService {
 
-	private final BridgeNetworkValidator networkValidator;
+	private final GeneralProperties generalProperties;
     private final ChainQuery chainQuery;
     private final MempoolStore mempoolStore;
     private final MempoolManager mempoolManager;
     private final BridgeTxMapper bridgeTxMapper;
 
-	public BridgeTxDtoV1 getByHash(Hash hash, Network network) {
-		networkValidator.validate(network);
+	public BridgeTxDtoV1 getByHash(Hash hash) {
 
 		StoredBlock block = chainQuery.getTransactionBlock(hash).orElse(null);
 		if (block != null) {
@@ -87,15 +87,15 @@ public class BridgeTxService {
         if (input == null || input.rawDataHex() == null || input.rawDataHex().isBlank()) {
             throw new GEValidationException("rawDataHex is required");
         }
-        Network network = networkValidator.validate(input.network());
+        Network network = generalProperties.getNetwork();
         Tx tx = TxDecoder.INSTANCE.decode(Bytes.fromHexString(input.rawDataHex()));
         if (tx.getNetwork() != network) {
-            throw new GEValidationException("Transaction network does not match requested network");
+            throw new GEValidationException("Transaction network does not match this node's network");
         }
 
         if (chainQuery.getTransactionBlock(tx.getHash()).isPresent()
                 || mempoolStore.getTxByHash(tx.getHash()).isPresent()) {
-            return new BridgeBroadcastTxDtoV1(tx.getHash().toHexString(), true, "ACCEPTED", null);
+            return new BridgeBroadcastTxDtoV1(network, tx.getHash().toHexString(), true, "ACCEPTED", null);
         }
 
         MempoolManager.MempoolResult result = mempoolManager.addTx(tx);
@@ -104,6 +104,6 @@ public class BridgeTxService {
         if (!result.status().isSuccess() && !duplicate) {
             throw new GEValidationException(result.message() == null ? "Transaction rejected" : result.message());
         }
-        return new BridgeBroadcastTxDtoV1(tx.getHash().toHexString(), true, "ACCEPTED", null);
+        return new BridgeBroadcastTxDtoV1(network, tx.getHash().toHexString(), true, "ACCEPTED", null);
     }
 }

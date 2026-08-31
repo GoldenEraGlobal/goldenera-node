@@ -24,12 +24,17 @@
 package global.goldenera.node.bridge.repositories;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
 
 public interface BridgeSubscriptionRepositoryCustom {
+
+	void lockApiKey(long apiKeyId);
+
+	long disableSubscriptions(long apiKeyId, Network network, List<UUID> subscriptionIds);
 
 	void lockDestination(long apiKeyId, String destinationKey);
 

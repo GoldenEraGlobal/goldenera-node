@@ -23,8 +23,10 @@
  */
 package global.goldenera.node.bridge.repositories;
 
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -32,12 +34,68 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
+import global.goldenera.node.shared.enums.WebhookType;
 import lombok.RequiredArgsConstructor;
 
 @RequiredArgsConstructor
 public class BridgeSubscriptionRepositoryImpl implements BridgeSubscriptionRepositoryCustom {
 
 	private final JdbcTemplate jdbcTemplate;
+
+	@Override
+	public void lockApiKey(long apiKeyId) {
+		// Serialize subscribe and unsubscribe before either reads destination state.
+		lockDestination(apiKeyId, "bridge-subscriptions");
+	}
+
+	@Override
+	public long disableSubscriptions(long apiKeyId, Network network, List<UUID> subscriptionIds) {
+		requireTransaction();
+		if (subscriptionIds != null && subscriptionIds.isEmpty()) {
+			return 0L;
+		}
+		String idFilter = subscriptionIds == null ? "" : " AND subscription.id = ANY (?)";
+		List<UUID> destinations = jdbcTemplate.query(connection -> {
+			PreparedStatement statement = connection.prepareStatement("""
+					UPDATE bridge_subscription subscription
+					SET enabled = FALSE
+					FROM webhook destination
+					WHERE subscription.destination_id = destination.id
+					  AND destination.created_by_api_key_id = ?
+					  AND destination.type = ?
+					  AND subscription.network = ?
+					  AND subscription.enabled = TRUE
+					""" + idFilter + " RETURNING subscription.destination_id");
+			statement.setLong(1, apiKeyId);
+			statement.setInt(2, WebhookType.BRIDGE.getCode());
+			statement.setInt(3, network.getCode());
+			if (subscriptionIds != null) {
+				statement.setArray(4, connection.createArrayOf("uuid", subscriptionIds.toArray()));
+			}
+			return statement;
+		}, (row, index) -> row.getObject("destination_id", UUID.class));
+		if (!destinations.isEmpty()) {
+			jdbcTemplate.update(connection -> {
+				PreparedStatement statement = connection.prepareStatement("""
+						UPDATE webhook destination
+						SET enabled = FALSE, version = version + 1
+						WHERE destination.id = ANY (?)
+						  AND destination.created_by_api_key_id = ?
+						  AND destination.type = ?
+						  AND destination.enabled = TRUE
+						  AND NOT EXISTS (
+						      SELECT 1 FROM bridge_subscription subscription
+						      WHERE subscription.destination_id = destination.id
+						        AND subscription.enabled = TRUE)
+						""");
+				statement.setArray(1, connection.createArrayOf("uuid", destinations.stream().distinct().toArray()));
+				statement.setLong(2, apiKeyId);
+				statement.setInt(3, WebhookType.BRIDGE.getCode());
+				return statement;
+			});
+		}
+		return destinations.size();
+	}
 
 	@Override
 	public void lockDestination(long apiKeyId, String destinationKey) {

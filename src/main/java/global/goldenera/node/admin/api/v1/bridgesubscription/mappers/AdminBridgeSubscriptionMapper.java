@@ -21,27 +21,25 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.bridge.api.v1;
+package global.goldenera.node.admin.api.v1.bridgesubscription.mappers;
 
-import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.data.domain.Page;
+import org.springframework.stereotype.Component;
 
-import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
-import global.goldenera.node.bridge.services.BridgeBlockService;
-import lombok.RequiredArgsConstructor;
+import global.goldenera.node.admin.api.v1.bridgesubscription.dtos.AdminBridgeSubscriptionDtoV1;
+import global.goldenera.node.admin.api.v1.bridgesubscription.dtos.AdminBridgeSubscriptionDtoV1_Page;
+import global.goldenera.node.bridge.entities.BridgeSubscription;
 
-@RestController
-@RequiredArgsConstructor
-@RequestMapping("/api/bridge/v1/block")
-public class BridgeBlockApiV1 {
+@Component
+public class AdminBridgeSubscriptionMapper {
 
-    private final BridgeBlockService bridgeBlockService;
+    public AdminBridgeSubscriptionDtoV1 map(BridgeSubscription in) {
+        return new AdminBridgeSubscriptionDtoV1(in.getId().toString(), in.getDestination().getId().toString(), in.getAddress().toChecksumAddress(),
+                in.getDestination().getUrl(), in.isEnabled(), in.getCreatedAt(), in.getDestination().getCreatedByApiKey().getId());
+    }
 
-    @GetMapping("last")
-    @PreAuthorize("hasAuthority('BRIDGE_READ_BLOCK')")
-    public BridgeLastBlockDtoV1 getLastBlock() {
-        return bridgeBlockService.getLastBlock();
+    public AdminBridgeSubscriptionDtoV1_Page map(Page<BridgeSubscription> in) {
+        return new AdminBridgeSubscriptionDtoV1_Page(in.getContent().stream().map(this::map).toList(),
+                in.getTotalPages(), in.getTotalElements());
     }
 }
