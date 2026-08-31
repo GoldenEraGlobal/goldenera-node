@@ -15,7 +15,7 @@
 
     <groupId>global.goldenera.node</groupId>
     <artifactId>goldenera-node</artifactId>
-    <version>0.1.1</version>
+    <version>0.2.0</version>
     <name>goldenera-node</name>
 
     <properties>
