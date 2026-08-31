@@ -42,8 +42,8 @@
         <hibernate-validator.version>9.1.0.Final</hibernate-validator.version>
         <okhttp.version>5.3.0</okhttp.version>
         <rocksdb.version>9.1.0</rocksdb.version>
-        <goldenera-randomx.version>0.0.3</goldenera-randomx.version>
-        <goldenera-randomx.source.commit>6b44edb16aab04163fc2706e45b656a5871700e3</goldenera-randomx.source.commit>
+        <goldenera-randomx.version>0.0.4</goldenera-randomx.version>
+        <goldenera-randomx.source.commit>23f56acaf94978667841cd89b12ed8a0b347fd3a</goldenera-randomx.source.commit>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
         <goldenera-merkletrie.version>0.0.2</goldenera-merkletrie.version>
         <goldenera-cryptoj.version>0.0.5</goldenera-cryptoj.version>
