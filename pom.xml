@@ -43,7 +43,7 @@
         <okhttp.version>5.3.0</okhttp.version>
         <rocksdb.version>9.1.0</rocksdb.version>
         <goldenera-randomx.version>0.0.3</goldenera-randomx.version>
-        <goldenera-randomx.source.commit>a408c6b948de5fdfd6bae8ca920117a89ae49fb3</goldenera-randomx.source.commit>
+        <goldenera-randomx.source.commit>ca736264aea07957ba869c296634b40fc0b8b3bb</goldenera-randomx.source.commit>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
         <goldenera-merkletrie.version>0.0.2</goldenera-merkletrie.version>
         <goldenera-cryptoj.version>0.0.5</goldenera-cryptoj.version>
