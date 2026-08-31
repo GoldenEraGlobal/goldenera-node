@@ -25,7 +25,16 @@ try {
     Assert-Contains (Join-Path $DefaultInstallDir ".env") "POSTGRESQL_ENABLE=false"
     Assert-Contains (Join-Path $DefaultInstallDir ".env") "LISTEN_PORT=8080"
     Assert-Contains (Join-Path $DefaultInstallDir ".env") "NODE_MEMORY_LIMIT_MB=8192"
+    Assert-Contains (Join-Path $DefaultInstallDir ".env") "MINING_ENABLE=false"
     Assert-NotContains (Join-Path $DefaultInstallDir "compose.yaml") "image: postgres:18.1-alpine"
+
+    # NonInteractive takes precedence over either explicit interactive mode.
+    foreach ($Mode in @("Automatic", "Manual")) {
+        $NonInteractiveDir = Join-Path $TestRoot "non-interactive-$Mode"
+        & (Join-Path $RootDir "scripts\install.ps1") -InstallDir $NonInteractiveDir -InstallMode $Mode -LocalImage -NonInteractive -SkipDockerCheck
+        Assert-Contains (Join-Path $NonInteractiveDir ".env") "MINING_ENABLE=false"
+        Assert-Contains (Join-Path $NonInteractiveDir ".env") "NODE_MEMORY_LIMIT_MB=8192"
+    }
 
     $AutomaticInstallDir = Join-Path $TestRoot "automatic-node"
     $env:GOLDENERA_P2P_HOST = "203.0.113.22"
@@ -36,6 +45,17 @@ try {
     Assert-Contains (Join-Path $AutomaticInstallDir ".env") "EXPLORER_ENABLE=false"
     Assert-Contains (Join-Path $AutomaticInstallDir ".env") "NODE_MEMORY_LIMIT_MB=12288"
     Assert-NotContains (Join-Path $AutomaticInstallDir "compose.yaml") "image: postgres:18.1-alpine"
+
+    # Environment aliases must be normalized before applying mode validation.
+    $EnvironmentInstallDir = Join-Path $TestRoot "environment-mode-node"
+    $env:GOLDENERA_INSTALL_MODE = "a"
+    try {
+        & (Join-Path $RootDir "scripts\install.ps1") -InstallDir $EnvironmentInstallDir -SkipDockerCheck
+        Assert-Contains (Join-Path $EnvironmentInstallDir ".env") "MINING_ENABLE=true"
+        Assert-Contains (Join-Path $EnvironmentInstallDir ".env") "NODE_MEMORY_LIMIT_MB=12288"
+    } finally {
+        Remove-Item Env:GOLDENERA_INSTALL_MODE
+    }
 
     $env:GOLDENERA_P2P_HOST = "203.0.113.20"
     $env:GOLDENERA_MINING_ENABLE = "true"

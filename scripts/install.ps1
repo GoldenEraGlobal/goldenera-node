@@ -134,16 +134,18 @@ function Ensure-Docker {
     if ($LASTEXITCODE -ne 0) { Fail "The Docker Compose plugin is missing." }
 }
 
+# ValidateSet also applies to assignments, so resolve internal modes separately.
+$resolvedInstallMode = $InstallMode
 if ($NonInteractive) {
-    $InstallMode = "NonInteractive"
+    $resolvedInstallMode = "NonInteractive"
 } else {
-    if ([string]::IsNullOrWhiteSpace($InstallMode)) { $InstallMode = Env-OrDefault "GOLDENERA_INSTALL_MODE" "" }
-    $normalizedInstallMode = if ([string]::IsNullOrWhiteSpace($InstallMode)) { "" } else { $InstallMode.ToLowerInvariant() }
+    if ([string]::IsNullOrWhiteSpace($resolvedInstallMode)) { $resolvedInstallMode = Env-OrDefault "GOLDENERA_INSTALL_MODE" "" }
+    $normalizedInstallMode = if ([string]::IsNullOrWhiteSpace($resolvedInstallMode)) { "" } else { $resolvedInstallMode.ToLowerInvariant() }
     switch ($normalizedInstallMode) {
-        "a" { $InstallMode = "Automatic" }
-        "automatic" { $InstallMode = "Automatic" }
-        "b" { $InstallMode = "Manual" }
-        "manual" { $InstallMode = "Manual" }
+        "a" { $resolvedInstallMode = "Automatic" }
+        "automatic" { $resolvedInstallMode = "Automatic" }
+        "b" { $resolvedInstallMode = "Manual" }
+        "manual" { $resolvedInstallMode = "Manual" }
         "" {
             Write-Host "`nGoldenEra Node" -ForegroundColor Yellow
             Write-Host "Secure node installer`n" -ForegroundColor DarkGray
@@ -151,12 +153,12 @@ if ($NonInteractive) {
                 "Automatic — miner defaults, without Explorer; asks for reward address",
                 "Manual — review and customize every setting"
             ) 0
-            $InstallMode = if ($modeIndex -eq 0) { "Automatic" } else { "Manual" }
+            $resolvedInstallMode = if ($modeIndex -eq 0) { "Automatic" } else { "Manual" }
         }
         default { Fail "Installation mode must be Automatic or Manual." }
     }
 }
-$manualConfiguration = $InstallMode -eq "Manual"
+$manualConfiguration = $resolvedInstallMode -eq "Manual"
 
 Ensure-Docker
 
@@ -211,7 +213,7 @@ $p2pHost = Env-OrDefault "GOLDENERA_P2P_HOST" (Get-ExistingValue "P2P_HOST" "")
 if ([string]::IsNullOrWhiteSpace($p2pHost) -and -not $NonInteractive) {
     try { $p2pHost = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 5).Trim() } catch { }
 }
-if ($manualConfiguration -or ($InstallMode -eq "Automatic" -and [string]::IsNullOrWhiteSpace($p2pHost))) {
+if ($manualConfiguration -or ($resolvedInstallMode -eq "Automatic" -and [string]::IsNullOrWhiteSpace($p2pHost))) {
     $p2pHost = Ask "Public IPv4 address for P2P" $p2pHost
 }
 if ([string]::IsNullOrWhiteSpace($p2pHost)) { Fail "P2P host is required. Set GOLDENERA_P2P_HOST or use manual mode." }
@@ -236,7 +238,7 @@ if ($p2pPort -lt 1 -or $p2pPort -gt 65535 -or $apiPort -lt 1 -or $apiPort -gt 65
 }
 
 Write-Section "Mining"
-$miningFallback = if ($InstallMode -eq "Automatic") { "true" } else { "false" }
+$miningFallback = if ($resolvedInstallMode -eq "Automatic") { "true" } else { "false" }
 $miningDefault = (Env-OrDefault "GOLDENERA_MINING_ENABLE" (Get-ExistingValue "MINING_ENABLE" $miningFallback)) -eq "true"
 $miningEnabled = if ($manualConfiguration) { Ask-YesNo "Enable mining" $miningDefault } else { $miningDefault }
 $beneficiary = Env-OrDefault "GOLDENERA_BENEFICIARY_ADDRESS" (Get-ExistingValue "BENEFICIARY_ADDRESS" $ZeroAddress)

@@ -32,8 +32,14 @@ assert_file "$install_dir/node_data/.node_identity"
 assert_contains "$install_dir/.env" "GOLDENERA_IMAGE=goldenera-node:sandbox-local"
 assert_contains "$install_dir/.env" "GOLDENERA_PULL_POLICY=never"
 assert_contains "$install_dir/.env" "MINING_ENABLE=true"
-assert_contains "$install_dir/.env" "CONFIGURE_RANDOMX_HUGEPAGES=true"
-assert_contains "$install_dir/.env" "NODE_MEMORY_LIMIT_MB=9216"
+# Only Linux supports reserving host huge pages; other platforms use standard memory.
+if [ "$(uname -s)" = Linux ]; then
+  assert_contains "$install_dir/.env" "CONFIGURE_RANDOMX_HUGEPAGES=true"
+  assert_contains "$install_dir/.env" "NODE_MEMORY_LIMIT_MB=9216"
+else
+  assert_contains "$install_dir/.env" "CONFIGURE_RANDOMX_HUGEPAGES=false"
+  assert_contains "$install_dir/.env" "NODE_MEMORY_LIMIT_MB=12288"
+fi
 assert_contains "$install_dir/.env" "ROCKSDB_WRITE_BUFFER_MB=32"
 assert_contains "$install_dir/.env" "ROCKSDB_MAX_WRITE_BUFFERS=2"
 assert_contains "$install_dir/.env" "SYNC_RANDOMX_VERIFICATION_MODE=LIGHT"
