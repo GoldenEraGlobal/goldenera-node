@@ -329,12 +329,13 @@
 
     <build>
         <resources>
-            <!-- Enable filtering only for version.properties -->
+            <!-- Filter build metadata and the startup banner for the project version -->
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
                 <includes>
                     <include>version.properties</include>
+                    <include>banner.txt</include>
                 </includes>
             </resource>
             <!-- Disable filtering for all other resources -->
@@ -343,6 +344,7 @@
                 <filtering>false</filtering>
                 <excludes>
                     <exclude>version.properties</exclude>
+                    <exclude>banner.txt</exclude>
                 </excludes>
             </resource>
         </resources>
