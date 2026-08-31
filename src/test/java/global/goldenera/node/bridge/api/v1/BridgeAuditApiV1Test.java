@@ -45,15 +45,14 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import global.goldenera.cryptoj.enums.Network;
-import global.goldenera.node.admin.api.v1.bridgedelivery.AdminBridgeDeliveryApiV1;
-import global.goldenera.node.admin.api.v1.bridgedelivery.mappers.AdminBridgeDeliveryMapper;
-import global.goldenera.node.admin.api.v1.bridgesubscription.AdminBridgeSubscriptionApiV1;
-import global.goldenera.node.admin.api.v1.bridgesubscription.mappers.AdminBridgeSubscriptionMapper;
+import global.goldenera.node.admin.api.v1.bridge.AdminBridgeApiV1;
+import global.goldenera.node.admin.api.v1.bridge.mappers.AdminBridgeDeliveryMapper;
+import global.goldenera.node.admin.api.v1.bridge.mappers.AdminBridgeSubscriptionMapper;
 import global.goldenera.node.bridge.api.v1.mappers.BridgeDeliveryMapper;
 import global.goldenera.node.bridge.enums.BridgeDeliveryState;
 import global.goldenera.node.bridge.enums.BridgeSubscriptionStatus;
-import global.goldenera.node.bridge.services.BridgeDeliveryService.DeliveryFilter;
 import global.goldenera.node.bridge.services.BridgeDeliveryService;
+import global.goldenera.node.bridge.services.BridgeDeliveryService.DeliveryFilter;
 import global.goldenera.node.bridge.services.BridgeSubscriptionService;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.properties.GeneralProperties;
@@ -73,8 +72,8 @@ class BridgeAuditApiV1Test {
         properties.setNetwork(Network.TESTNET);
         mvc = MockMvcBuilders.standaloneSetup(
                 new BridgeDeliveryApiV1(deliveries, new BridgeDeliveryMapper(properties)),
-                new AdminBridgeDeliveryApiV1(deliveries, new AdminBridgeDeliveryMapper()),
-                new AdminBridgeSubscriptionApiV1(subscriptions, new AdminBridgeSubscriptionMapper())).build();
+                new AdminBridgeApiV1(deliveries, subscriptions,
+                        new AdminBridgeDeliveryMapper(), new AdminBridgeSubscriptionMapper())).build();
     }
 
     @Test
@@ -95,7 +94,7 @@ class BridgeAuditApiV1Test {
     @Test
     void adminAuditAllowsApiKeyFilterAndOmitsNetwork() throws Exception {
         when(deliveries.getAdminPage(eq(0), eq(10), isNull(), any(), eq(999L))).thenReturn(Page.empty());
-        mvc.perform(get("/api/admin/v1/bridge-delivery/page")
+        mvc.perform(get("/api/admin/v1/bridge/delivery")
                 .param("pageNumber", "0").param("pageSize", "10").param("apiKeyId", "999"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.network").doesNotExist())
                 .andExpect(jsonPath("$.list").isEmpty());
@@ -106,7 +105,7 @@ class BridgeAuditApiV1Test {
     void adminSubscriptionsDefaultToActiveAndOmitNetwork() throws Exception {
         when(subscriptions.getAdminPage(0, 10, null, 999L, null, BridgeSubscriptionStatus.ACTIVE))
                 .thenReturn(Page.empty());
-        mvc.perform(get("/api/admin/v1/bridge-subscription/page")
+        mvc.perform(get("/api/admin/v1/bridge/subscription")
                 .param("pageNumber", "0").param("pageSize", "10").param("apiKeyId", "999"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.network").doesNotExist())
                 .andExpect(jsonPath("$.list").isEmpty());

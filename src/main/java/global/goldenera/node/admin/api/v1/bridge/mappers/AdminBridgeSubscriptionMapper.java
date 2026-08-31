@@ -21,13 +21,13 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.admin.api.v1.bridgesubscription.mappers;
+package global.goldenera.node.admin.api.v1.bridge.mappers;
 
 import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Component;
 
-import global.goldenera.node.admin.api.v1.bridgesubscription.dtos.AdminBridgeSubscriptionDtoV1;
-import global.goldenera.node.admin.api.v1.bridgesubscription.dtos.AdminBridgeSubscriptionDtoV1_Page;
+import global.goldenera.node.admin.api.v1.bridge.dtos.AdminBridgeSubscriptionDtoV1;
+import global.goldenera.node.admin.api.v1.bridge.dtos.AdminBridgeSubscriptionDtoV1_Page;
 import global.goldenera.node.bridge.entities.BridgeSubscription;
 
 @Component

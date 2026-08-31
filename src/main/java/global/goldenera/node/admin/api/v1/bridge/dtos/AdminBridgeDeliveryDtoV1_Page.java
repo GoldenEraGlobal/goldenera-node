@@ -21,15 +21,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.admin.api.v1.bridgesubscription.dtos;
+package global.goldenera.node.admin.api.v1.bridge.dtos;
 
 import java.util.List;
 
 import global.goldenera.node.explorer.api.v1.PaginatedDtoV1;
 
-public class AdminBridgeSubscriptionDtoV1_Page extends PaginatedDtoV1<AdminBridgeSubscriptionDtoV1> {
+public class AdminBridgeDeliveryDtoV1_Page extends PaginatedDtoV1<AdminBridgeDeliveryDtoV1> {
 
-    public AdminBridgeSubscriptionDtoV1_Page(List<AdminBridgeSubscriptionDtoV1> list, int totalPages, long totalElements) {
+    public AdminBridgeDeliveryDtoV1_Page(List<AdminBridgeDeliveryDtoV1> list, int totalPages, long totalElements) {
         super(list, totalPages, totalElements);
     }
 }

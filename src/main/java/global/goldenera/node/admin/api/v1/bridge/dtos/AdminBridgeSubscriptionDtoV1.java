@@ -21,26 +21,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.admin.api.v1.bridgedelivery.mappers;
+package global.goldenera.node.admin.api.v1.bridge.dtos;
 
-import org.springframework.data.domain.Page;
-import org.springframework.stereotype.Component;
+import java.time.Instant;
 
-import global.goldenera.node.admin.api.v1.bridgedelivery.dtos.AdminBridgeDeliveryDtoV1;
-import global.goldenera.node.admin.api.v1.bridgedelivery.dtos.AdminBridgeDeliveryDtoV1_Page;
-import global.goldenera.node.bridge.entities.BridgeDelivery;
-
-@Component
-public class AdminBridgeDeliveryMapper {
-
-    public AdminBridgeDeliveryDtoV1 map(BridgeDelivery in) {
-        return new AdminBridgeDeliveryDtoV1(in.getDeliveryId().toString(), in.getEventId().toString(), in.getDestination().getId().toString(),
-                in.getDestination().getUrl(), in.getState(), in.getAttempts(), in.getLastHttpStatus(), in.getLastError(),
-                in.getNextAttemptAt(), in.getCreatedAt(), in.getUpdatedAt(), in.getBody(), in.getDestination().getCreatedByApiKey().getId());
-    }
-
-    public AdminBridgeDeliveryDtoV1_Page map(Page<BridgeDelivery> in) {
-        return new AdminBridgeDeliveryDtoV1_Page(in.getContent().stream().map(this::map).toList(),
-                in.getTotalPages(), in.getTotalElements());
-    }
+public record AdminBridgeSubscriptionDtoV1(String subscriptionId, String destinationId, String address, String webhookUrl, boolean enabled, Instant createdAt, Long apiKeyId) {
 }

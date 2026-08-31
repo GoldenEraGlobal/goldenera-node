@@ -21,15 +21,26 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.admin.api.v1.bridgedelivery.dtos;
+package global.goldenera.node.admin.api.v1.bridge.mappers;
 
-import java.util.List;
+import org.springframework.data.domain.Page;
+import org.springframework.stereotype.Component;
 
-import global.goldenera.node.explorer.api.v1.PaginatedDtoV1;
+import global.goldenera.node.admin.api.v1.bridge.dtos.AdminBridgeDeliveryDtoV1;
+import global.goldenera.node.admin.api.v1.bridge.dtos.AdminBridgeDeliveryDtoV1_Page;
+import global.goldenera.node.bridge.entities.BridgeDelivery;
 
-public class AdminBridgeDeliveryDtoV1_Page extends PaginatedDtoV1<AdminBridgeDeliveryDtoV1> {
+@Component
+public class AdminBridgeDeliveryMapper {
 
-    public AdminBridgeDeliveryDtoV1_Page(List<AdminBridgeDeliveryDtoV1> list, int totalPages, long totalElements) {
-        super(list, totalPages, totalElements);
+    public AdminBridgeDeliveryDtoV1 map(BridgeDelivery in) {
+        return new AdminBridgeDeliveryDtoV1(in.getDeliveryId().toString(), in.getEventId().toString(), in.getDestination().getId().toString(),
+                in.getDestination().getUrl(), in.getState(), in.getAttempts(), in.getLastHttpStatus(), in.getLastError(),
+                in.getNextAttemptAt(), in.getCreatedAt(), in.getUpdatedAt(), in.getBody(), in.getDestination().getCreatedByApiKey().getId());
+    }
+
+    public AdminBridgeDeliveryDtoV1_Page map(Page<BridgeDelivery> in) {
+        return new AdminBridgeDeliveryDtoV1_Page(in.getContent().stream().map(this::map).toList(),
+                in.getTotalPages(), in.getTotalElements());
     }
 }

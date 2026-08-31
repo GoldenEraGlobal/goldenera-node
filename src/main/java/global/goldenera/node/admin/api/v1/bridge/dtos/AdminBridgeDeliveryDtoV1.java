@@ -21,7 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.admin.api.v1.bridgedelivery.dtos;
+package global.goldenera.node.admin.api.v1.bridge.dtos;
 
 import java.time.Instant;
 

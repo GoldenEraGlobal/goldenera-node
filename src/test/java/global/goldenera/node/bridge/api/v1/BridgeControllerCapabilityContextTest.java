@@ -31,10 +31,9 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import global.goldenera.node.admin.api.v1.bridgedelivery.AdminBridgeDeliveryApiV1;
-import global.goldenera.node.admin.api.v1.bridgedelivery.mappers.AdminBridgeDeliveryMapper;
-import global.goldenera.node.admin.api.v1.bridgesubscription.AdminBridgeSubscriptionApiV1;
-import global.goldenera.node.admin.api.v1.bridgesubscription.mappers.AdminBridgeSubscriptionMapper;
+import global.goldenera.node.admin.api.v1.bridge.AdminBridgeApiV1;
+import global.goldenera.node.admin.api.v1.bridge.mappers.AdminBridgeDeliveryMapper;
+import global.goldenera.node.admin.api.v1.bridge.mappers.AdminBridgeSubscriptionMapper;
 import global.goldenera.node.bridge.api.v1.mappers.BridgeDeliveryMapper;
 import global.goldenera.node.bridge.api.v1.mappers.BridgeSubscriptionMapper;
 import global.goldenera.node.bridge.services.BridgeAddressService;
@@ -62,8 +61,7 @@ class BridgeControllerCapabilityContextTest {
                     BridgeTxApiV1.class,
                     BridgeSubscriptionApiV1.class,
                     BridgeDeliveryApiV1.class,
-                    AdminBridgeSubscriptionApiV1.class,
-                    AdminBridgeDeliveryApiV1.class);
+                    AdminBridgeApiV1.class);
 
     @Test
     void coreBridgeControllersRemainAvailableWithoutPostgresql() {
@@ -77,8 +75,7 @@ class BridgeControllerCapabilityContextTest {
                     assertThat(context).hasSingleBean(BridgeTxApiV1.class);
                     assertThat(context).doesNotHaveBean(BridgeSubscriptionApiV1.class);
                     assertThat(context).doesNotHaveBean(BridgeDeliveryApiV1.class);
-                    assertThat(context).doesNotHaveBean(AdminBridgeSubscriptionApiV1.class);
-                    assertThat(context).doesNotHaveBean(AdminBridgeDeliveryApiV1.class);
+                    assertThat(context).doesNotHaveBean(AdminBridgeApiV1.class);
                 });
     }
 
@@ -91,8 +88,7 @@ class BridgeControllerCapabilityContextTest {
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(BridgeSubscriptionApiV1.class);
                     assertThat(context).hasSingleBean(BridgeDeliveryApiV1.class);
-                    assertThat(context).hasSingleBean(AdminBridgeSubscriptionApiV1.class);
-                    assertThat(context).hasSingleBean(AdminBridgeDeliveryApiV1.class);
+                    assertThat(context).hasSingleBean(AdminBridgeApiV1.class);
                 });
     }
 

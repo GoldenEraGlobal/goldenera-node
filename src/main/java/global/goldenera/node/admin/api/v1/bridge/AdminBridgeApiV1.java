@@ -21,10 +21,15 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.admin.api.v1.bridgesubscription;
+package global.goldenera.node.admin.api.v1.bridge;
+
+import java.time.Instant;
+import java.util.UUID;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.Sort;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.format.annotation.DateTimeFormat.ISO;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -32,30 +37,54 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.node.admin.api.v1.bridgesubscription.dtos.AdminBridgeSubscriptionDtoV1_Page;
-import global.goldenera.node.admin.api.v1.bridgesubscription.mappers.AdminBridgeSubscriptionMapper;
+import global.goldenera.node.admin.api.v1.bridge.dtos.AdminBridgeDeliveryDtoV1_Page;
+import global.goldenera.node.admin.api.v1.bridge.dtos.AdminBridgeSubscriptionDtoV1_Page;
+import global.goldenera.node.admin.api.v1.bridge.mappers.AdminBridgeDeliveryMapper;
+import global.goldenera.node.admin.api.v1.bridge.mappers.AdminBridgeSubscriptionMapper;
+import global.goldenera.node.bridge.enums.BridgeDeliveryState;
 import global.goldenera.node.bridge.enums.BridgeSubscriptionStatus;
+import global.goldenera.node.bridge.services.BridgeDeliveryService;
+import global.goldenera.node.bridge.services.BridgeDeliveryService.DeliveryFilter;
 import global.goldenera.node.bridge.services.BridgeSubscriptionService;
 import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequiredArgsConstructor
 @PreAuthorize("hasRole('ADMIN')")
-@RequestMapping("/api/admin/v1/bridge-subscription")
+@RequestMapping("/api/admin/v1/bridge")
 @ConditionalOnProperty(prefix = "ge.general", name = "postgresql-enable", havingValue = "true")
-public class AdminBridgeSubscriptionApiV1 {
+public class AdminBridgeApiV1 {
 
+    private final BridgeDeliveryService bridgeDeliveryService;
     private final BridgeSubscriptionService bridgeSubscriptionService;
-    private final AdminBridgeSubscriptionMapper mapper;
+    private final AdminBridgeDeliveryMapper deliveryMapper;
+    private final AdminBridgeSubscriptionMapper subscriptionMapper;
 
-    @GetMapping("page")
-    public AdminBridgeSubscriptionDtoV1_Page getPage(
+    @GetMapping("delivery")
+    public AdminBridgeDeliveryDtoV1_Page getDeliveryPage(
+            @RequestParam int pageNumber,
+            @RequestParam int pageSize,
+            @RequestParam(required = false) Sort.Direction direction,
+            @RequestParam(required = false) Long apiKeyId,
+            @RequestParam(required = false) UUID destinationId,
+            @RequestParam(required = false) UUID deliveryId,
+            @RequestParam(required = false) UUID eventId,
+            @RequestParam(required = false) BridgeDeliveryState state,
+            @RequestParam(required = false) @DateTimeFormat(iso = ISO.DATE_TIME) Instant createdFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = ISO.DATE_TIME) Instant createdTo) {
+        return deliveryMapper.map(bridgeDeliveryService.getAdminPage(pageNumber, pageSize, direction,
+                new DeliveryFilter(destinationId, deliveryId, eventId, state, createdFrom, createdTo), apiKeyId));
+    }
+
+    @GetMapping("subscription")
+    public AdminBridgeSubscriptionDtoV1_Page getSubscriptionPage(
             @RequestParam int pageNumber,
             @RequestParam int pageSize,
             @RequestParam(required = false) Sort.Direction direction,
             @RequestParam(required = false) Long apiKeyId,
             @RequestParam(required = false) Address address,
             @RequestParam(defaultValue = "ACTIVE") BridgeSubscriptionStatus status) {
-        return mapper.map(bridgeSubscriptionService.getAdminPage(pageNumber, pageSize, direction, apiKeyId, address, status));
+        return subscriptionMapper.map(bridgeSubscriptionService.getAdminPage(
+                pageNumber, pageSize, direction, apiKeyId, address, status));
     }
 }
