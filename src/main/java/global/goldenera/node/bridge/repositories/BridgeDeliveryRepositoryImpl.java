@@ -31,14 +31,33 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import lombok.RequiredArgsConstructor;
+import global.goldenera.node.bridge.webhook.BridgeDeliveryWakeup;
+import global.goldenera.node.shared.services.webhook.TransactionalWakeup;
 
-@RequiredArgsConstructor
 public class BridgeDeliveryRepositoryImpl implements BridgeDeliveryRepositoryCustom {
 
     private final JdbcTemplate jdbcTemplate;
+    private final BridgeDeliveryWakeup deliveryWakeup;
+
+    @Autowired
+    public BridgeDeliveryRepositoryImpl(
+            JdbcTemplate jdbcTemplate,
+            ObjectProvider<BridgeDeliveryWakeup> deliveryWakeup) {
+        this(jdbcTemplate, deliveryWakeup.getIfAvailable(() -> () -> { }));
+    }
+
+    public BridgeDeliveryRepositoryImpl(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, () -> { });
+    }
+
+    BridgeDeliveryRepositoryImpl(JdbcTemplate jdbcTemplate, BridgeDeliveryWakeup deliveryWakeup) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.deliveryWakeup = deliveryWakeup;
+    }
 
     @Override
     public Optional<BridgeDeliveryReservation> reserve(UUID eventId, UUID destinationId, Instant now) {
@@ -67,11 +86,15 @@ public class BridgeDeliveryRepositoryImpl implements BridgeDeliveryRepositoryCus
         if (body == null || body.isBlank()) {
             throw new IllegalArgumentException("Bridge delivery body is required");
         }
-        return jdbcTemplate.update(
+        boolean stored = jdbcTemplate.update(
                 "UPDATE bridge_delivery SET body = ?, updated_at = ?, version = version + 1 WHERE id = ? AND body IS NULL",
                 body,
                 Timestamp.from(now),
                 id) == 1;
+        if (stored) {
+            TransactionalWakeup.afterCommit(deliveryWakeup::wake);
+        }
+        return stored;
     }
 
     private BridgeDeliveryReservation mapReservation(ResultSet resultSet, int rowNumber) throws SQLException {

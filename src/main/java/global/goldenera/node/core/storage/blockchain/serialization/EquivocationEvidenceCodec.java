@@ -54,7 +54,6 @@ public class EquivocationEvidenceCodec {
 		checkArgument(evidence.signedHeaders().size() <= MAX_HEADERS, "Too many signed headers");
 		int encodedSize = FIXED_BYTES;
 		for (SignedHeader header : evidence.signedHeaders()) {
-			header.verify(evidence.height(), evidence.identity());
 			int headerSize = header.canonicalHeader().size();
 			checkArgument(headerSize <= MAX_CANONICAL_HEADER_BYTES, "Canonical signed header is too large");
 			encodedSize = Math.addExact(encodedSize, Math.addExact(Integer.BYTES, headerSize));
@@ -98,6 +97,31 @@ public class EquivocationEvidenceCodec {
 		}
 		checkArgument(!input.hasRemaining(), "Invalid equivocation evidence payload length");
 		return new EquivocationEvidence(height, Address.wrap(identityBytes), headers, firstSeenAt, lastSeenAt);
+	}
+
+	/**
+	 * Reads the persisted signed-header cardinality without decoding or
+	 * cryptographically verifying every header. Full validation remains in
+	 * {@link #decode(byte[])} for evidence that is returned to a caller.
+	 */
+	public boolean isEncodedConflict(byte[] encoded) {
+		checkArgument(encoded != null && encoded.length >= FIXED_BYTES + Integer.BYTES + 1,
+				"Invalid equivocation evidence length");
+		ByteBuffer input = ByteBuffer.wrap(encoded);
+		int version = input.getInt();
+		checkArgument(version == VERSION, "Unsupported equivocation evidence version: %s", version);
+		input.position(FIXED_BYTES - Integer.BYTES);
+		int count = input.getInt();
+		checkArgument(count > 0 && count <= MAX_HEADERS, "Invalid signed header count");
+		for (int index = 0; index < count; index++) {
+			checkArgument(input.remaining() >= Integer.BYTES, "Invalid equivocation evidence payload length");
+			int headerLength = input.getInt();
+			checkArgument(headerLength > 0 && headerLength <= MAX_CANONICAL_HEADER_BYTES
+					&& input.remaining() >= headerLength, "Invalid canonical signed header length");
+			input.position(input.position() + headerLength);
+		}
+		checkArgument(!input.hasRemaining(), "Invalid equivocation evidence payload length");
+		return count > 1;
 	}
 
 	private void putInstant(ByteBuffer output, Instant instant) {

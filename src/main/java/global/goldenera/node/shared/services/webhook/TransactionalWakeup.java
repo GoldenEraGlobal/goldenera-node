@@ -21,31 +21,36 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.repositories;
+package global.goldenera.node.shared.services.webhook;
 
-import java.util.Optional;
+import java.util.Objects;
 
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.ListPagingAndSortingRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import global.goldenera.node.shared.entities.ApiKey;
-import io.hypersistence.utils.spring.repository.BaseJpaRepository;
-import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 
-@Repository
-public interface ApiKeyCoreRepository
-		extends BaseJpaRepository<ApiKey, Long>, ListPagingAndSortingRepository<ApiKey, Long>,
-		JpaSpecificationExecutor<ApiKey> {
+@Slf4j
+public final class TransactionalWakeup {
+	private TransactionalWakeup() {
+	}
 
-	@Query("SELECT a FROM ApiKey a WHERE a.keyPrefix = :keyPrefix")
-	@Transactional(readOnly = true)
-	Optional<ApiKey> findByKeyPrefix(@NonNull String keyPrefix);
-
-	@Query(value = "SELECT epoch FROM api_key_auth_epoch WHERE singleton = TRUE", nativeQuery = true)
-	@Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
-	long findAuthenticationEpoch();
+	public static void afterCommit(Runnable wakeup) {
+		Objects.requireNonNull(wakeup);
+		if (!TransactionSynchronizationManager.isActualTransactionActive()
+				|| !TransactionSynchronizationManager.isSynchronizationActive()) {
+			wakeup.run();
+			return;
+		}
+		TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+			@Override
+			public void afterCommit() {
+				try {
+					wakeup.run();
+				} catch (RuntimeException failure) {
+					log.error("Cannot signal committed durable work", failure);
+				}
+			}
+		});
+	}
 }

@@ -34,7 +34,11 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.crypto.Mac;
@@ -69,6 +73,7 @@ import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStor
 import global.goldenera.node.shared.services.webhook.dtos.WebhookEventDtoV1;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -84,7 +89,11 @@ import okhttp3.Response;
 public class WebhookDispatchService implements UniversalWebhookEventSink {
 	static final Duration ROUTE_INTERVAL = Duration.ofMillis(250);
 	static final Duration DELIVERY_INTERVAL = Duration.ofSeconds(1);
+	// Direct database or remote-process appends are discovered within this idle recovery bound.
+	static final Duration ROUTE_RECOVERY_INTERVAL = Duration.ofSeconds(30);
+	static final Duration DELIVERY_RECOVERY_INTERVAL = Duration.ofSeconds(1);
 	static final Duration LEASE_DURATION = Duration.ofMinutes(2);
+	static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(5);
 	static final int ROUTE_LIMIT = 256;
 	static final int MAX_ROUTE_BATCHES = 8;
 	static final int CLAIM_LIMIT = 64;
@@ -97,17 +106,23 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 
 	private final OkHttpClient httpClient;
 	private final ObjectMapper objectMapper;
-	private final TaskScheduler scheduler;
 	private final DurableUniversalWebhookStore store;
 	private final MeterRegistry registry;
 	private final AESGCMComponent encryption;
 	private final BlockchainTxMapper txMapper;
 	private final BlockchainBlockHeaderMapper blockHeaderMapper;
 	private final String workerId;
-	private final AtomicBoolean started = new AtomicBoolean();
 	private final AtomicBoolean routing = new AtomicBoolean();
 	private final AtomicBoolean dispatching = new AtomicBoolean();
+	private final AtomicBoolean stopping = new AtomicBoolean();
 	private final Semaphore inFlight = new Semaphore(MAX_IN_FLIGHT);
+	private final Object claimMonitor = new Object();
+	private final Object completionMonitor = new Object();
+	private final Object completionFence = new Object();
+	private final ConcurrentMap<DeliveryLease, Call> activeCalls = new ConcurrentHashMap<>();
+	private boolean leasesReleased;
+	private final AdaptivePollingLoop routingLoop;
+	private final AdaptivePollingLoop deliveryLoop;
 
 	@Autowired
 	public WebhookDispatchService(
@@ -135,22 +150,47 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 			String workerId) {
 		this.httpClient = httpClient;
 		this.objectMapper = objectMapper;
-		this.scheduler = scheduler;
 		this.store = store;
 		this.registry = registry;
 		this.encryption = encryption;
 		this.txMapper = txMapper;
 		this.blockHeaderMapper = blockHeaderMapper;
 		this.workerId = workerId;
+		Executor schedulerExecutor = command -> scheduler.schedule(command, Instant.now());
+		this.routingLoop = new AdaptivePollingLoop(
+				scheduler, schedulerExecutor, this::routePendingIteration,
+				ROUTE_INTERVAL, ROUTE_RECOVERY_INTERVAL);
+		this.deliveryLoop = new AdaptivePollingLoop(
+				scheduler, schedulerExecutor, this::dispatchPendingIteration,
+				DELIVERY_INTERVAL, DELIVERY_RECOVERY_INTERVAL);
 	}
 
 	@EventListener(ApplicationReadyEvent.class)
 	void start() {
-		if (!started.compareAndSet(false, true)) {
+		routingLoop.start();
+		deliveryLoop.start();
+	}
+
+	@PreDestroy
+	void stop() {
+		if (!stopping.compareAndSet(false, true)) {
 			return;
 		}
-		scheduler.scheduleWithFixedDelay(this::routePendingEvents, ROUTE_INTERVAL);
-		scheduler.scheduleWithFixedDelay(this::dispatchPendingBatches, DELIVERY_INTERVAL);
+		routingLoop.stop();
+		deliveryLoop.stop();
+		synchronized (claimMonitor) {
+			// Wait until an active claim cycle has registered all of its in-flight work.
+		}
+		cancelActiveCalls();
+		awaitInFlight();
+		cancelActiveCalls();
+		synchronized (completionFence) {
+			try {
+				store.releaseLeases(workerId, Instant.now());
+			} finally {
+				leasesReleased = true;
+			}
+		}
 	}
 
 	@Override
@@ -249,55 +289,90 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 			store.append(eventId, source, eventType, status, objectMapper.writeValueAsString(payload),
 					addressA, addressB, tokenAddress, occurredAt == null ? Instant.now() : occurredAt,
 					originEpoch, originStream, originSequence, originBlockHeight);
+			TransactionalWakeup.afterCommit(routingLoop::wake);
 		} catch (JsonProcessingException exception) {
 			throw new GERuntimeException("Failed to serialize durable webhook event", exception);
 		}
 	}
 
 	void routePendingEvents() {
+		routePendingIteration();
+	}
+
+	private boolean routePendingIteration() {
 		if (!routing.compareAndSet(false, true)) {
-			return;
+			return false;
 		}
+		boolean continueImmediately = false;
+		boolean routedAny = false;
 		try {
 			for (int batch = 0; batch < MAX_ROUTE_BATCHES; batch++) {
-				if (store.routePending(ROUTE_LIMIT, Instant.now()) == 0) {
+				int routed = store.routePending(ROUTE_LIMIT, Instant.now());
+				if (routed == 0) {
 					break;
 				}
+				routedAny = true;
+				continueImmediately = batch == MAX_ROUTE_BATCHES - 1 && routed == ROUTE_LIMIT;
+			}
+			if (routedAny) {
+				TransactionalWakeup.afterCommit(deliveryLoop::wake);
 			}
 		} catch (RuntimeException exception) {
 			log.error("Durable webhook routing iteration failed", exception);
+			throw exception;
 		} finally {
 			routing.set(false);
 		}
+		return continueImmediately;
 	}
 
 	public void dispatchPendingBatches() {
-		if (!dispatching.compareAndSet(false, true)) {
-			return;
+		dispatchPendingIteration();
+	}
+
+	private boolean dispatchPendingIteration() {
+		if (stopping.get()) {
+			return false;
 		}
+		if (!dispatching.compareAndSet(false, true)) {
+			return false;
+		}
+		boolean continueImmediately = false;
 		try {
-			int available = Math.min(CLAIM_LIMIT, inFlight.availablePermits());
-			if (available == 0) {
-				return;
-			}
-			for (ClaimedDelivery delivery : store.claimAvailable(
-					workerId, Instant.now(), LEASE_DURATION, available)) {
-				inFlight.acquireUninterruptibly();
-				deliver(delivery);
+			synchronized (claimMonitor) {
+				if (stopping.get()) {
+					return false;
+				}
+				int available = Math.min(CLAIM_LIMIT, inFlight.availablePermits());
+				if (available == 0) {
+					return false;
+				}
+				List<ClaimedDelivery> claimed = store.claimAvailable(
+						workerId, Instant.now(), LEASE_DURATION, available);
+				for (ClaimedDelivery delivery : claimed) {
+					inFlight.acquireUninterruptibly();
+					if (stopping.get()) {
+						finishDelivery(delivery, null);
+						continue;
+					}
+					deliver(delivery);
+				}
+				continueImmediately = claimed.size() == available && inFlight.availablePermits() > 0;
 			}
 		} catch (RuntimeException exception) {
 			log.error("Durable webhook delivery iteration failed", exception);
+			throw exception;
 		} finally {
 			dispatching.set(false);
 		}
+		return continueImmediately;
 	}
 
 	private void deliver(ClaimedDelivery delivery) {
 		Instant now = Instant.now();
 		if (delivery.encryptedSecret() == null) {
-			store.markDead(delivery.deliveryId(), workerId, null,
-					"Webhook destination has no signing secret", now);
-			inFlight.release();
+			markDead(delivery, null, "Webhook destination has no signing secret", now);
+			finishDelivery(delivery, null);
 			return;
 		}
 		try {
@@ -316,22 +391,29 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 					.build();
 			execute(delivery, request);
 		} catch (Exception exception) {
-			store.markDead(delivery.deliveryId(), workerId, null,
+			markDead(delivery, null,
 					"Cannot prepare signed webhook request: " + exception.getMessage(), Instant.now());
-			inFlight.release();
+			finishDelivery(delivery, null);
 		}
 	}
 
 	private void execute(ClaimedDelivery delivery, Request request) {
 		Timer.Sample sample = Timer.start(registry);
-		httpClient.newCall(request).enqueue(new Callback() {
+		Call deliveryCall = httpClient.newCall(request);
+		DeliveryLease lease = new DeliveryLease(delivery.deliveryId(), delivery.attempt());
+		activeCalls.put(lease, deliveryCall);
+		if (stopping.get()) {
+			deliveryCall.cancel();
+		}
+		try {
+			deliveryCall.enqueue(new Callback() {
 			@Override
 			public void onFailure(Call call, IOException exception) {
 				try {
 					sample.stop(registry.timer("webhook.delivery.latency", "status", "error"));
 					complete(delivery, null, null, exception.getMessage(), true);
 				} finally {
-					inFlight.release();
+					finishDelivery(delivery, call);
 				}
 			}
 
@@ -342,27 +424,78 @@ public class WebhookDispatchService implements UniversalWebhookEventSink {
 					complete(delivery, response.code(), response.header("Retry-After"),
 							"HTTP " + response.code(), false);
 				} finally {
-					inFlight.release();
+					finishDelivery(delivery, call);
 				}
 			}
-		});
+			});
+		} catch (RuntimeException failure) {
+			activeCalls.remove(lease, deliveryCall);
+			throw failure;
+		}
 	}
 
 	private void complete(
 			ClaimedDelivery delivery, Integer httpStatus, String retryAfter, String error, boolean networkFailure) {
-		Instant now = Instant.now();
-		if (!networkFailure && httpStatus != null && httpStatus >= 200 && httpStatus < 300) {
-			store.markDelivered(delivery.deliveryId(), workerId, httpStatus, now);
-			return;
+		synchronized (completionFence) {
+			if (leasesReleased) {
+				return;
+			}
+			Instant now = Instant.now();
+			if (!networkFailure && httpStatus != null && httpStatus >= 200 && httpStatus < 300) {
+				store.markDelivered(delivery.deliveryId(), workerId, delivery.attempt(), httpStatus, now);
+				return;
+			}
+			boolean transientFailure = networkFailure || httpStatus == null || httpStatus == 408 || httpStatus == 429
+					|| httpStatus >= 500;
+			if (transientFailure) {
+				store.markRetry(delivery.deliveryId(), workerId, delivery.attempt(), httpStatus, error,
+						retryAt(delivery.attempt(), retryAfter, now), now);
+			} else {
+				store.markDead(delivery.deliveryId(), workerId, delivery.attempt(), httpStatus, error, now);
+			}
 		}
-		boolean transientFailure = networkFailure || httpStatus == null || httpStatus == 408 || httpStatus == 429
-				|| httpStatus >= 500;
-		if (transientFailure) {
-			store.markRetry(delivery.deliveryId(), workerId, httpStatus, error,
-					retryAt(delivery.attempt(), retryAfter, now), now);
-		} else {
-			store.markDead(delivery.deliveryId(), workerId, httpStatus, error, now);
+	}
+
+	private void markDead(ClaimedDelivery delivery, Integer httpStatus, String error, Instant now) {
+		synchronized (completionFence) {
+			if (!leasesReleased) {
+				store.markDead(delivery.deliveryId(), workerId, delivery.attempt(), httpStatus, error, now);
+			}
 		}
+	}
+
+	private void finishDelivery(ClaimedDelivery delivery, Call call) {
+		if (call != null) {
+			activeCalls.remove(new DeliveryLease(delivery.deliveryId(), delivery.attempt()), call);
+		}
+		inFlight.release();
+		synchronized (completionMonitor) {
+			completionMonitor.notifyAll();
+		}
+		deliveryLoop.wake();
+	}
+
+	private void cancelActiveCalls() {
+		activeCalls.values().forEach(Call::cancel);
+	}
+
+	private void awaitInFlight() {
+		long remainingNanos = SHUTDOWN_TIMEOUT.toNanos();
+		long deadline = System.nanoTime() + remainingNanos;
+		synchronized (completionMonitor) {
+			while (inFlight.availablePermits() < MAX_IN_FLIGHT && remainingNanos > 0L) {
+				try {
+					TimeUnit.NANOSECONDS.timedWait(completionMonitor, remainingNanos);
+				} catch (InterruptedException exception) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+				remainingNanos = deadline - System.nanoTime();
+			}
+		}
+	}
+
+	private record DeliveryLease(UUID deliveryId, int attempt) {
 	}
 
 	private Duration retryDelay(int attempt) {

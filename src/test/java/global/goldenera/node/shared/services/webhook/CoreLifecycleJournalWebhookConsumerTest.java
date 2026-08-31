@@ -37,6 +37,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.TaskScheduler;
@@ -59,20 +60,21 @@ class CoreLifecycleJournalWebhookConsumerTest {
 	@Test
 	void startsPollingOnlyAfterApplicationReadyAndOnlyOnce() {
 		TaskScheduler scheduler = mock(TaskScheduler.class);
+		Executor executor = mock(Executor.class);
 		CoreLifecycleJournalWebhookConsumer consumer = new CoreLifecycleJournalWebhookConsumer(
 				mock(LifecycleJournalQuery.class),
 				mock(DurableUniversalWebhookStore.class),
 				mock(CoreLifecycleJournalWebhookProjector.class),
 				scheduler,
-				Runnable::run,
+				executor,
 				new SimpleMeterRegistry());
+		verifyNoInteractions(scheduler, executor);
+
+		consumer.start();
+		consumer.start();
+
+		verify(executor).execute(any(Runnable.class));
 		verifyNoInteractions(scheduler);
-
-		consumer.start();
-		consumer.start();
-
-		verify(scheduler).scheduleWithFixedDelay(
-				any(Runnable.class), eq(CoreLifecycleJournalWebhookConsumer.POLL_INTERVAL));
 	}
 
 	@Test

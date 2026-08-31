@@ -42,11 +42,11 @@ import org.springframework.beans.factory.annotation.Value;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.cryptoj.datatypes.Signature;
-import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.node.core.storage.blockchain.EquivocationEvidenceRepository;
+import global.goldenera.node.core.storage.blockchain.EquivocationEvidenceRepository.SaveResult;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence;
 import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence.SignedHeader;
+import global.goldenera.node.core.storage.blockchain.domain.EquivocationEvidence.SignedHeader.AuthenticatedSignedHeader;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Counter;
@@ -217,17 +217,13 @@ public class EquivocationDetectionService {
 	 */
 	synchronized boolean observeValidatedHeader(BlockHeader header, Instant seenAt) {
 		try {
-			Signature signature = header.getSignature();
-			Address identity = header.getIdentity();
-			if (signature == null || signature.equals(Signature.ZERO)
-					|| identity == null || identity.equals(Address.ZERO)
-					|| !signature.validate(BlockHeaderUtil.hashForSigning(header), identity)) {
-				log.debug("Ignoring unauthenticated equivocation observation at height {}", header.getHeight());
-				return false;
-			}
+			AuthenticatedSignedHeader authenticated = SignedHeader.authenticate(header);
+			Address identity = authenticated.identity();
+			SignedHeader signedHeader = authenticated.signedHeader();
+			long height = signedHeader.height();
 
-			Hash blockHash = header.getHash();
-			EquivocationEvidence existing = repository.find(header.getHeight(), identity).orElse(null);
+			Hash blockHash = signedHeader.blockHash();
+			EquivocationEvidence existing = repository.find(height, identity).orElse(null);
 			if (existing != null && existing.signedHeaders().stream()
 					.anyMatch(observation -> observation.blockHash().equals(blockHash))) {
 				return false;
@@ -237,7 +233,7 @@ public class EquivocationDetectionService {
 			if (existing != null) {
 				observations.addAll(existing.signedHeaders());
 			}
-			observations.add(SignedHeader.from(header));
+			observations.add(signedHeader);
 			observations.sort(HEADER_ORDER);
 			if (observations.size() > MAX_SIGNED_HEADERS_PER_EVIDENCE) {
 				observations = new ArrayList<>(observations.subList(0, MAX_SIGNED_HEADERS_PER_EVIDENCE));
@@ -251,15 +247,15 @@ public class EquivocationDetectionService {
 			Instant lastSeenAt = existing == null || seenAt.isAfter(existing.lastSeenAt())
 					? seenAt : existing.lastSeenAt();
 			EquivocationEvidence updated = new EquivocationEvidence(
-					header.getHeight(), identity, observations, firstSeenAt, lastSeenAt);
-			repository.save(updated);
+					height, identity, observations, firstSeenAt, lastSeenAt);
+			SaveResult saveResult = repository.save(updated);
 
-			boolean newlyDetected = existing != null && !existing.isConflict() && updated.isConflict();
+			boolean newlyDetected = saveResult.newConflict();
 			if (newlyDetected) {
 				evidenceCount.incrementAndGet();
 				detectionCounter.increment();
 				log.warn("Equivocation detected at height {} for validator {} ({} distinct signed headers)",
-						header.getHeight(), identity.toChecksumAddress(), observations.size());
+						height, identity.toChecksumAddress(), observations.size());
 			}
 			return newlyDetected;
 		} catch (Exception e) {

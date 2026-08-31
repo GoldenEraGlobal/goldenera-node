@@ -50,8 +50,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.filters.ApiKeyAuthFilter;
+import global.goldenera.node.shared.filters.PreAuthenticationThrottleFilter;
 import global.goldenera.node.shared.filters.ThrottlingFilter;
 import global.goldenera.node.shared.properties.GeneralProperties;
+import global.goldenera.node.shared.services.ThrottlingService;
 import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -111,6 +113,7 @@ public class SecurityConfig {
         @Bean
         @Order(2)
         public SecurityFilterChain bridgeApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
                 http
@@ -123,6 +126,7 @@ public class SecurityConfig {
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -135,6 +139,7 @@ public class SecurityConfig {
         @Bean
         @Order(3)
         public SecurityFilterChain sharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
                 http
@@ -147,6 +152,7 @@ public class SecurityConfig {
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -163,6 +169,7 @@ public class SecurityConfig {
         @Bean
         @Order(4)
         public SecurityFilterChain explorerApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
                 http
@@ -182,6 +189,7 @@ public class SecurityConfig {
 
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -192,6 +200,7 @@ public class SecurityConfig {
         @Bean
         @Order(5)
         public SecurityFilterChain coreApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter) throws Exception {
                 http
                                 .securityMatcher("/api/core/**")
@@ -204,6 +213,7 @@ public class SecurityConfig {
 
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -218,6 +228,12 @@ public class SecurityConfig {
         public ApiKeyAuthFilter apiKeyAuthFilter(ApiKeyCoreService apiKeyCoreService, HmacComponent hmacComponent,
                         ObjectMapper objectMapper) {
                 return new ApiKeyAuthFilter(apiKeyCoreService, hmacComponent, objectMapper);
+        }
+
+        @Bean
+        public PreAuthenticationThrottleFilter preAuthenticationThrottleFilter(
+                        ThrottlingService throttlingService) {
+                return new PreAuthenticationThrottleFilter(throttlingService);
         }
 
         @Bean

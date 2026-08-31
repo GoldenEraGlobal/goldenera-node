@@ -100,6 +100,7 @@ import global.goldenera.node.shared.config.SecurityConfig;
 import global.goldenera.node.shared.filters.ThrottlingFilter;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.properties.SecurityProperties;
+import global.goldenera.node.shared.services.ThrottlingService;
 import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
@@ -610,6 +611,13 @@ class SandboxControlWebTest {
 		@Bean
 		ThrottlingFilter throttlingFilter() {
 			return mock(ThrottlingFilter.class);
+		}
+
+		@Bean
+		ThrottlingService throttlingService() {
+			ThrottlingService service = mock(ThrottlingService.class);
+			when(service.checkGlobalIpLimit(any())).thenReturn(true);
+			return service;
 		}
 	}
 

@@ -51,7 +51,9 @@ import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalQue
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStream;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.bridge.webhook.BridgeLifecycleProjectionCursorStore.Cursor;
+import global.goldenera.node.shared.services.webhook.AdaptivePollingLoop;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -66,18 +68,16 @@ public class BridgeLifecycleJournalProjector implements BridgeCoreJournalConsume
 
 	static final int READ_LIMIT = 256;
 	static final int MAX_PROJECTED_ENTRIES_PER_STREAM_RUN = 256;
-	static final Duration POLL_INTERVAL = Duration.ofSeconds(1);
+	static final Duration MINIMUM_POLL_INTERVAL = Duration.ofSeconds(1);
+	// Bounds detection latency for journal writes that do not produce a local wake signal.
+	static final Duration RECOVERY_POLL_INTERVAL = Duration.ofSeconds(30);
 
 	private final LifecycleJournalQuery journalQuery;
 	private final BridgeLifecycleProjectionCursorStore cursorStore;
 	private final BridgeLifecycleProjectionService projectionService;
-	private final TaskScheduler scheduler;
-	private final Executor journalExecutor;
 	private final MeterRegistry registry;
-	private final AtomicBoolean started = new AtomicBoolean();
 	private final AtomicBoolean running = new AtomicBoolean();
-	private final AtomicBoolean dirty = new AtomicBoolean();
-	private final AtomicBoolean projectionSubmitted = new AtomicBoolean();
+	private final AdaptivePollingLoop pollingLoop;
 
 	public BridgeLifecycleJournalProjector(
 			LifecycleJournalQuery journalQuery,
@@ -89,64 +89,42 @@ public class BridgeLifecycleJournalProjector implements BridgeCoreJournalConsume
 		this.journalQuery = journalQuery;
 		this.cursorStore = cursorStore;
 		this.projectionService = projectionService;
-		this.scheduler = scheduler;
-		this.journalExecutor = journalExecutor;
 		this.registry = registry;
+		this.pollingLoop = new AdaptivePollingLoop(
+				scheduler, journalExecutor, this::projectAvailable,
+				MINIMUM_POLL_INTERVAL, RECOVERY_POLL_INTERVAL);
 	}
 
 	@EventListener(ApplicationReadyEvent.class)
 	void start() {
-		if (!started.compareAndSet(false, true)) {
-			return;
-		}
-		scheduler.scheduleWithFixedDelay(this::wake, POLL_INTERVAL);
+		pollingLoop.start();
+	}
+
+	@PreDestroy
+	void stop() {
+		pollingLoop.stop();
 	}
 
 	@Override
 	public void wake() {
-		dirty.set(true);
-		submitProjection();
+		pollingLoop.wake();
 	}
 
-	void projectAvailable() {
+	boolean projectAvailable() {
 		if (!running.compareAndSet(false, true)) {
-			return;
+			return false;
 		}
-		dirty.set(false);
 		boolean moreAvailable = false;
 		try {
 			moreAvailable = projectCanonical();
 			moreAvailable |= projectMempool();
 		} catch (RuntimeException failure) {
 			log.error("Bridge lifecycle journal projection failed", failure);
+			throw failure;
 		} finally {
 			running.set(false);
 		}
-		if (moreAvailable) {
-			dirty.set(true);
-		}
-	}
-
-	private void submitProjection() {
-		if (!projectionSubmitted.compareAndSet(false, true)) {
-			return;
-		}
-		try {
-			journalExecutor.execute(() -> {
-				try {
-					projectAvailable();
-				} finally {
-					projectionSubmitted.set(false);
-					if (dirty.get()) {
-						submitProjection();
-					}
-				}
-			});
-		} catch (RuntimeException failure) {
-			projectionSubmitted.set(false);
-			dirty.set(true);
-			log.error("Cannot submit Bridge lifecycle projection", failure);
-		}
+		return moreAvailable;
 	}
 
 	private boolean projectCanonical() {

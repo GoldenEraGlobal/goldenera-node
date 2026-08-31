@@ -21,31 +21,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.repositories;
+package global.goldenera.node.bridge.webhook;
 
-import java.util.Optional;
+@FunctionalInterface
+public interface BridgeDeliveryWakeup {
 
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.ListPagingAndSortingRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
-
-import global.goldenera.node.shared.entities.ApiKey;
-import io.hypersistence.utils.spring.repository.BaseJpaRepository;
-import lombok.NonNull;
-
-@Repository
-public interface ApiKeyCoreRepository
-		extends BaseJpaRepository<ApiKey, Long>, ListPagingAndSortingRepository<ApiKey, Long>,
-		JpaSpecificationExecutor<ApiKey> {
-
-	@Query("SELECT a FROM ApiKey a WHERE a.keyPrefix = :keyPrefix")
-	@Transactional(readOnly = true)
-	Optional<ApiKey> findByKeyPrefix(@NonNull String keyPrefix);
-
-	@Query(value = "SELECT epoch FROM api_key_auth_epoch WHERE singleton = TRUE", nativeQuery = true)
-	@Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
-	long findAuthenticationEpoch();
+	void wake();
 }

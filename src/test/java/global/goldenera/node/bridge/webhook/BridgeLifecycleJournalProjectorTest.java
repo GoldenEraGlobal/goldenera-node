@@ -159,6 +159,7 @@ class BridgeLifecycleJournalProjectorTest {
 				scheduler,
 				executor,
 				new SimpleMeterRegistry());
+		projector.start();
 
 		for (int i = 0; i < 1_000; i++) {
 			projector.wake();

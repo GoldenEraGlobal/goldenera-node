@@ -64,7 +64,9 @@ public class ThrottlingFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        if (!throttlingService.checkGlobalIpLimit(request)) {
+        if (!Boolean.TRUE.equals(request.getAttribute(
+                PreAuthenticationThrottleFilter.GLOBAL_LIMIT_CHECKED_ATTRIBUTE))
+                && !throttlingService.checkGlobalIpLimit(request)) {
             sendErrorResponse(response, "Global Rate Limit Exceeded. You are sending too many requests.");
             return;
         }

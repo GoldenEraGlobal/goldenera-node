@@ -25,23 +25,21 @@ package global.goldenera.node.bridge.webhook;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import global.goldenera.node.bridge.entities.BridgeDelivery;
 import global.goldenera.node.bridge.enums.BridgeDeliveryState;
-import global.goldenera.node.bridge.repositories.BridgeDeliveryRepository;
-import global.goldenera.node.shared.entities.ApiKey;
-import global.goldenera.node.shared.entities.Webhook;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.experimental.FieldDefaults;
@@ -52,69 +50,125 @@ import lombok.experimental.FieldDefaults;
 @ConditionalOnProperty(name = "ge.general.postgresql-enable", havingValue = "true")
 public class BridgeDeliveryStore {
 
-	BridgeDeliveryRepository repository;
+	JdbcTemplate jdbcTemplate;
 
 	@Transactional
 	public List<ClaimedDelivery> claimAvailable(String owner, Instant now, Duration leaseDuration, int limit) {
-		List<BridgeDelivery> deliveries = repository.findClaimableForUpdate(now, PageRequest.of(0, limit));
-		List<ClaimedDelivery> claimed = new ArrayList<>(deliveries.size());
-		for (BridgeDelivery delivery : deliveries) {
-			delivery.claim(owner, now.plus(leaseDuration), now);
-			Webhook destination = delivery.getDestination();
-			ApiKey apiKey = destination.getCreatedByApiKey();
-			Bytes encryptedSecret = destination.getSecretKey() != null
-					? destination.getSecretKey()
-					: apiKey.getWebhookSecretKey();
-			claimed.add(new ClaimedDelivery(
-					delivery.getDeliveryId(),
-					delivery.getEventId(),
-					delivery.getId(),
-					delivery.getAttempts(),
-					delivery.getBody(),
-					destination.getBridgeDestinationKey() == null
-							? destination.getUrl()
-							: destination.getBridgeDestinationKey(),
-					encryptedSecret));
+		if (owner == null || owner.isBlank() || now == null || leaseDuration == null
+				|| leaseDuration.isZero() || leaseDuration.isNegative()) {
+			throw new IllegalArgumentException("A valid bridge delivery lease is required");
 		}
-		return claimed;
+		if (limit <= 0) {
+			return List.of();
+		}
+		Instant leaseUntil = now.plus(leaseDuration);
+		return jdbcTemplate.query("""
+				WITH candidates AS (
+				    SELECT delivery.id
+				    FROM bridge_delivery delivery
+				    JOIN webhook destination ON destination.id = delivery.destination_id
+				    JOIN api_key api_key_row ON api_key_row.id = destination.created_by_api_key_id
+				    WHERE delivery.body IS NOT NULL
+				      AND destination.enabled = TRUE
+				      AND api_key_row.enabled = TRUE
+				      AND (
+				          (delivery.state IN (?, ?) AND delivery.next_attempt_at <= ?)
+				          OR (delivery.state = ? AND delivery.lease_until < ?)
+				      )
+				      AND NOT EXISTS (
+				          SELECT 1
+				          FROM bridge_delivery older
+				          WHERE older.destination_id = delivery.destination_id
+				            AND older.id < delivery.id
+				            AND older.state NOT IN (?, ?)
+				      )
+				    ORDER BY delivery.id
+				    FOR UPDATE OF delivery SKIP LOCKED
+				    LIMIT ?
+				), claimed AS (
+				    UPDATE bridge_delivery delivery
+				    SET state = ?, attempts = attempts + 1, lease_owner = ?, lease_until = ?,
+				        updated_at = ?, version = version + 1
+				    FROM candidates
+				    WHERE delivery.id = candidates.id
+				    RETURNING delivery.*
+				)
+				SELECT claimed.delivery_id, claimed.event_id, claimed.id, claimed.attempts,
+				       claimed.body, COALESCE(destination.bridge_destination_key, destination.url) AS url,
+				       COALESCE(destination.secret_key, api_key_row.webhook_secret_key) AS encrypted_secret
+				FROM claimed
+				JOIN webhook destination ON destination.id = claimed.destination_id
+				JOIN api_key api_key_row ON api_key_row.id = destination.created_by_api_key_id
+				ORDER BY claimed.id
+				""", this::mapClaim,
+				BridgeDeliveryState.READY.getCode(), BridgeDeliveryState.RETRY.getCode(), Timestamp.from(now),
+				BridgeDeliveryState.IN_FLIGHT.getCode(), Timestamp.from(now),
+				BridgeDeliveryState.DELIVERED.getCode(), BridgeDeliveryState.DEAD.getCode(), limit,
+				BridgeDeliveryState.IN_FLIGHT.getCode(), owner, Timestamp.from(leaseUntil), Timestamp.from(now));
 	}
 
 	@Transactional
-	public boolean markDelivered(UUID deliveryId, String owner, int httpStatus, Instant now) {
-		BridgeDelivery delivery = ownedInFlight(deliveryId, owner);
-		if (delivery == null) {
-			return false;
-		}
-		delivery.markDelivered(httpStatus, now);
-		return true;
+	public boolean markDelivered(UUID deliveryId, String owner, int attempt, int httpStatus, Instant now) {
+		return jdbcTemplate.update("""
+				UPDATE bridge_delivery
+				SET state = ?, last_http_status = ?, last_error = NULL, next_attempt_at = ?,
+				    lease_owner = NULL, lease_until = NULL, updated_at = ?, version = version + 1
+				WHERE delivery_id = ? AND state = ? AND lease_owner = ? AND attempts = ?
+				""", BridgeDeliveryState.DELIVERED.getCode(), httpStatus, Timestamp.from(now), Timestamp.from(now),
+				deliveryId, BridgeDeliveryState.IN_FLIGHT.getCode(), owner, attempt) == 1;
 	}
 
 	@Transactional
-	public boolean markRetry(UUID deliveryId, String owner, Integer httpStatus, String error,
+	public boolean markRetry(UUID deliveryId, String owner, int attempt, Integer httpStatus, String error,
 			Instant nextAttemptAt, Instant now) {
-		BridgeDelivery delivery = ownedInFlight(deliveryId, owner);
-		if (delivery == null) {
-			return false;
-		}
-		delivery.markRetry(httpStatus, truncate(error), nextAttemptAt, now);
-		return true;
+		return updateFailure(deliveryId, owner, attempt, BridgeDeliveryState.RETRY,
+				httpStatus, error, nextAttemptAt, now);
 	}
 
 	@Transactional
-	public boolean markDead(UUID deliveryId, String owner, Integer httpStatus, String error, Instant now) {
-		BridgeDelivery delivery = ownedInFlight(deliveryId, owner);
-		if (delivery == null) {
-			return false;
-		}
-		delivery.markDead(httpStatus, truncate(error), now);
-		return true;
+	public boolean markDead(UUID deliveryId, String owner, int attempt, Integer httpStatus, String error, Instant now) {
+		return updateFailure(deliveryId, owner, attempt, BridgeDeliveryState.DEAD, httpStatus, error, now, now);
 	}
 
-	private BridgeDelivery ownedInFlight(UUID deliveryId, String owner) {
-		return repository.findByDeliveryId(deliveryId)
-				.filter(delivery -> delivery.getState() == BridgeDeliveryState.IN_FLIGHT)
-				.filter(delivery -> owner.equals(delivery.getLeaseOwner()))
-				.orElse(null);
+	private boolean updateFailure(
+			UUID deliveryId,
+			String owner,
+			int attempt,
+			BridgeDeliveryState state,
+			Integer httpStatus,
+			String error,
+			Instant nextAttemptAt,
+			Instant now) {
+		return jdbcTemplate.update("""
+				UPDATE bridge_delivery
+				SET state = ?, last_http_status = ?, last_error = ?, next_attempt_at = ?,
+				    lease_owner = NULL, lease_until = NULL, updated_at = ?, version = version + 1
+				WHERE delivery_id = ? AND state = ? AND lease_owner = ? AND attempts = ?
+				""", state.getCode(), httpStatus, truncate(error), Timestamp.from(nextAttemptAt), Timestamp.from(now),
+				deliveryId, BridgeDeliveryState.IN_FLIGHT.getCode(), owner, attempt) == 1;
+	}
+
+	@Transactional
+	public int releaseLeases(String owner, Instant now) {
+		return jdbcTemplate.update("""
+				UPDATE bridge_delivery
+				SET state = ?, next_attempt_at = ?, lease_owner = NULL, lease_until = NULL,
+				    updated_at = ?, version = version + 1
+				WHERE state = ? AND lease_owner = ?
+				""", BridgeDeliveryState.RETRY.getCode(), Timestamp.from(now), Timestamp.from(now),
+				BridgeDeliveryState.IN_FLIGHT.getCode(), owner);
+	}
+
+	private ClaimedDelivery mapClaim(ResultSet resultSet, int rowNumber) throws SQLException {
+		byte[] encryptedSecret = resultSet.getBytes("encrypted_secret");
+		return new ClaimedDelivery(
+				resultSet.getObject("delivery_id", UUID.class),
+				resultSet.getObject("event_id", UUID.class),
+				resultSet.getLong("id"),
+				resultSet.getInt("attempts"),
+				resultSet.getString("body"),
+				resultSet.getString("url"),
+				encryptedSecret == null ? null : Bytes.wrap(encryptedSecret));
 	}
 
 	private String truncate(String error) {

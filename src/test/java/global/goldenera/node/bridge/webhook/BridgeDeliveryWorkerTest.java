@@ -24,8 +24,10 @@
 package global.goldenera.node.bridge.webhook;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -40,6 +42,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 import org.apache.tuweni.bytes.Bytes;
@@ -98,7 +104,7 @@ class BridgeDeliveryWorkerTest {
 		worker.start();
 		worker.start();
 
-		verify(scheduler).scheduleWithFixedDelay(any(Runnable.class), eq(BridgeDeliveryWorker.POLL_INTERVAL));
+		verify(scheduler).schedule(any(Runnable.class), any(Instant.class));
 	}
 
 	@Test
@@ -123,7 +129,8 @@ class BridgeDeliveryWorkerTest {
 				eq(request.header(BridgeDeliveryWorker.TIMESTAMP_HEADER)),
 				signedBody.capture());
 		assertThat(new String(signedBody.getValue(), StandardCharsets.UTF_8)).isEqualTo(delivery.getBody());
-		verify(store).markDelivered(eq(delivery.getDeliveryId()), eq(OWNER), eq(204), any(Instant.class));
+		verify(store).markDelivered(
+				eq(delivery.getDeliveryId()), eq(OWNER), eq(delivery.getAttempt()), eq(204), any(Instant.class));
 	}
 
 	@Test
@@ -136,7 +143,7 @@ class BridgeDeliveryWorkerTest {
 		worker.deliver(delivery);
 
 		verify(store).markRetry(
-				eq(delivery.getDeliveryId()), eq(OWNER), eq(429), eq("HTTP 429"),
+				eq(delivery.getDeliveryId()), eq(OWNER), eq(delivery.getAttempt()), eq(429), eq("HTTP 429"),
 				retryAt.capture(), completedAt.capture());
 		assertThat(Duration.between(completedAt.getValue(), retryAt.getValue())).isEqualTo(Duration.ofSeconds(60));
 	}
@@ -149,7 +156,7 @@ class BridgeDeliveryWorkerTest {
 		worker.deliver(delivery);
 
 		verify(store).markRetry(
-				eq(delivery.getDeliveryId()), eq(OWNER), eq(null), eq("connection reset"),
+				eq(delivery.getDeliveryId()), eq(OWNER), eq(delivery.getAttempt()), eq(null), eq("connection reset"),
 				any(Instant.class), any(Instant.class));
 	}
 
@@ -160,7 +167,9 @@ class BridgeDeliveryWorkerTest {
 
 		worker.deliver(delivery);
 
-		verify(store).markDead(eq(delivery.getDeliveryId()), eq(OWNER), eq(400), eq("HTTP 400"), any(Instant.class));
+		verify(store).markDead(
+				eq(delivery.getDeliveryId()), eq(OWNER), eq(delivery.getAttempt()),
+				eq(400), eq("HTTP 400"), any(Instant.class));
 	}
 
 	@Test
@@ -208,6 +217,53 @@ class BridgeDeliveryWorkerTest {
 
 		verify(store).claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8));
 		verify(executor, times(8)).execute(any(Runnable.class));
+	}
+
+	@Test
+	void shutdownCancelsActiveCallAwaitsTaskReleasesLeaseAndStopsClaiming() throws Exception {
+		ExecutorService executor = Executors.newSingleThreadExecutor();
+		BridgeDeliveryWorker asyncWorker = new BridgeDeliveryWorker(
+				httpClient,
+				mock(TaskScheduler.class),
+				store,
+				encryption,
+				signatures,
+				retryPolicy,
+				OWNER,
+				executor);
+		ClaimedDelivery delivery = delivery(1);
+		when(store.claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8)))
+				.thenReturn(List.of(delivery));
+		CountDownLatch executing = new CountDownLatch(1);
+		CountDownLatch cancelled = new CountDownLatch(1);
+		doAnswer(invocation -> {
+			executing.countDown();
+			cancelled.await(2, TimeUnit.SECONDS);
+			throw new IOException("cancelled");
+		}).when(call).execute();
+		doAnswer(invocation -> {
+			cancelled.countDown();
+			return null;
+		}).when(call).cancel();
+
+		asyncWorker.processAvailable();
+		assertThat(executing.await(2, TimeUnit.SECONDS)).isTrue();
+		asyncWorker.stop();
+		asyncWorker.processAvailable();
+
+		verify(call).cancel();
+		verify(store).releaseLeases(eq(OWNER), any(Instant.class));
+		verify(store).claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8));
+	}
+
+	@Test
+	void claimFailurePropagatesToAdaptiveRecoveryLoop() {
+		when(store.claimAvailable(eq(OWNER), any(Instant.class), any(Duration.class), eq(8)))
+				.thenThrow(new IllegalStateException("database unavailable"));
+
+		assertThatThrownBy(worker::processAvailable)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("database unavailable");
 	}
 
 	private ClaimedDelivery delivery(int attempt) {

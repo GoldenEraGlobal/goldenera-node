@@ -19,3 +19,5 @@ databaseChangeLog:
                   file: db/changelog/changesets/009-explorer-read-indexes.yaml
         - include:
                   file: db/changelog/changesets/010-durable-universal-webhook.yaml
+        - include:
+                  file: db/changelog/changesets/011-api-key-auth-epoch.yaml

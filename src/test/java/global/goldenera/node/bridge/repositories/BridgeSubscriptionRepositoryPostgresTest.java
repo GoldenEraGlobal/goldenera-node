@@ -26,11 +26,14 @@ package global.goldenera.node.bridge.repositories;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -55,6 +58,7 @@ import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -70,6 +74,8 @@ import global.goldenera.node.bridge.services.BridgeDeliveryService;
 import global.goldenera.node.bridge.services.BridgeSubscriptionService;
 import global.goldenera.node.bridge.webhook.BridgeLifecycleProjectionCursorStore.Cursor;
 import global.goldenera.node.bridge.webhook.BridgeLifecycleProjectionCursorStore;
+import global.goldenera.node.bridge.webhook.BridgeDeliveryStore;
+import global.goldenera.node.bridge.webhook.BridgeDeliveryWakeup;
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalHead;
 import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStream;
 import global.goldenera.node.shared.entities.ApiKey;
@@ -96,6 +102,7 @@ class BridgeSubscriptionRepositoryPostgresTest {
 
 	private static JdbcTemplate jdbc;
 	private static TransactionTemplate transactions;
+	private static DataSourceTransactionManager transactionManager;
 	private static BridgeSubscriptionRepositoryImpl repository;
     private static AnnotationConfigApplicationContext queryContext;
 
@@ -114,7 +121,8 @@ class BridgeSubscriptionRepositoryPostgresTest {
 		DriverManagerDataSource dataSource = new DriverManagerDataSource(
 				POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
 		jdbc = new JdbcTemplate(dataSource);
-		transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+		transactionManager = new DataSourceTransactionManager(dataSource);
+		transactions = new TransactionTemplate(transactionManager);
 		repository = new BridgeSubscriptionRepositoryImpl(jdbc);
         queryContext = new AnnotationConfigApplicationContext(QueryConfiguration.class);
 	}
@@ -241,8 +249,8 @@ class BridgeSubscriptionRepositoryPostgresTest {
         assertThat(service.getAdminPage(0, 10, null, 999L, null, BridgeSubscriptionStatus.ALL)).isEmpty();
     }
 
-    @Test
-    void auditFiltersDeliveriesAndCannotExposeAnotherApiKeysPayload() {
+	@Test
+	void auditFiltersDeliveriesAndCannotExposeAnotherApiKeysPayload() {
         UUID destination = insertDestination(730L, "https://consumer.example/own");
         UUID otherDestination = insertDestination(731L, "https://consumer.example/other");
         UUID first = insertDelivery(destination, BridgeDeliveryState.DELIVERED, "own delivered");
@@ -326,6 +334,153 @@ class BridgeSubscriptionRepositoryPostgresTest {
 		assertThat(cursorStore.current(LifecycleJournalStream.CANONICAL))
 				.isEqualTo(new Cursor(epoch, 9L));
 		assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM bridge_reorg_pending", Long.class)).isZero();
+	}
+
+	@Test
+	void jdbcDeliveryStorePreservesOrderingLeasesAndRetryEligibility() {
+		UUID destination = insertDestination(740L, "https://consumer.example/delivery");
+		UUID firstId = insertDelivery(destination, BridgeDeliveryState.READY, "first");
+		UUID secondId = insertDelivery(destination, BridgeDeliveryState.READY, "second");
+		BridgeDeliveryStore store = new BridgeDeliveryStore(jdbc);
+		Instant now = Instant.now();
+
+		var firstClaim = transactions.execute(status ->
+				store.claimAvailable("worker-a", now, Duration.ofMinutes(2), 8));
+
+		assertThat(firstClaim).singleElement().satisfies(delivery -> {
+			assertThat(delivery.getDeliveryId()).isEqualTo(firstId);
+			assertThat(delivery.getAttempt()).isEqualTo(1);
+			assertThat(delivery.getBody()).isEqualTo("first");
+			assertThat(delivery.getUrl()).isEqualTo("https://consumer.example/delivery");
+		});
+		List<BridgeDeliveryStore.ClaimedDelivery> blockedSecondClaim = transactions.execute(status ->
+				store.claimAvailable("worker-b", now, Duration.ofMinutes(2), 8));
+		assertThat(blockedSecondClaim).isEmpty();
+		Instant retryAt = now.plusSeconds(5);
+		Boolean markedForRetry = transactions.execute(status -> store.markRetry(
+				firstId, "worker-a", 1, 503, "retry", retryAt, now));
+		assertThat(markedForRetry).isTrue();
+		List<BridgeDeliveryStore.ClaimedDelivery> prematureRetryClaim = transactions.execute(status ->
+				store.claimAvailable("worker-b", now.plusSeconds(4), Duration.ofMinutes(2), 8));
+		assertThat(prematureRetryClaim).isEmpty();
+
+		var retryClaim = transactions.execute(status ->
+				store.claimAvailable("worker-b", retryAt, Duration.ofMinutes(2), 8));
+		assertThat(retryClaim).singleElement().satisfies(delivery -> {
+			assertThat(delivery.getDeliveryId()).isEqualTo(firstId);
+			assertThat(delivery.getAttempt()).isEqualTo(2);
+		});
+		Boolean wrongOwnerDelivered = transactions.execute(status -> store.markDelivered(
+				firstId, "wrong-worker", 2, 204, retryAt));
+		assertThat(wrongOwnerDelivered).isFalse();
+		Boolean delivered = transactions.execute(status -> store.markDelivered(
+				firstId, "worker-b", 2, 204, retryAt));
+		assertThat(delivered).isTrue();
+
+		List<BridgeDeliveryStore.ClaimedDelivery> secondClaim = transactions.execute(status ->
+				store.claimAvailable("worker-c", retryAt, Duration.ofMinutes(2), 8));
+		assertThat(secondClaim)
+				.singleElement()
+				.extracting(delivery -> delivery.getDeliveryId())
+				.isEqualTo(secondId);
+		Boolean deadLettered = transactions.execute(status -> store.markDead(
+				secondId, "worker-c", 1, 400, "x".repeat(3_000), retryAt));
+		assertThat(deadLettered).isTrue();
+		assertThat(jdbc.queryForObject(
+				"SELECT length(last_error) FROM bridge_delivery WHERE delivery_id = ?",
+				Integer.class,
+				secondId)).isEqualTo(2_048);
+	}
+
+	@Test
+	void bridgeLeaseGenerationFencesSameOwnerReclaimAndRestartKeepsFifo() {
+		UUID destination = insertDestination(744L, "https://consumer.example/fencing");
+		UUID firstId = insertDelivery(destination, BridgeDeliveryState.READY, "first");
+		UUID secondId = insertDelivery(destination, BridgeDeliveryState.READY, "second");
+		BridgeDeliveryStore store = new BridgeDeliveryStore(jdbc);
+		Instant now = Instant.now();
+		Instant reclaimedAt = now.plus(Duration.ofMinutes(2)).plusMillis(1);
+		BridgeDeliveryStore.ClaimedDelivery stale = transactions.execute(status ->
+				store.claimAvailable("stable-worker", now, Duration.ofMinutes(2), 8)).getFirst();
+		BridgeDeliveryStore.ClaimedDelivery reclaimed = transactions.execute(status ->
+				store.claimAvailable("stable-worker", reclaimedAt, Duration.ofMinutes(2), 8)).getFirst();
+
+		assertThat(stale.getDeliveryId()).isEqualTo(firstId);
+		assertThat(reclaimed.getDeliveryId()).isEqualTo(firstId);
+		assertThat(reclaimed.getAttempt()).isEqualTo(stale.getAttempt() + 1);
+		Boolean staleCompletionAccepted = transactions.execute(status -> store.markDelivered(
+				firstId, "stable-worker", stale.getAttempt(), 204, reclaimedAt.plusSeconds(1)));
+		assertThat(staleCompletionAccepted).isFalse();
+		Integer releasedLeases = transactions.execute(status -> store.releaseLeases(
+				"stable-worker", reclaimedAt.plusSeconds(2)));
+		assertThat(releasedLeases).isEqualTo(1);
+
+		BridgeDeliveryStore.ClaimedDelivery restarted = transactions.execute(status ->
+				store.claimAvailable(
+						"replacement-worker", reclaimedAt.plusSeconds(3), Duration.ofMinutes(2), 8)).getFirst();
+		assertThat(restarted.getDeliveryId()).isEqualTo(firstId);
+		assertThat(restarted.getAttempt()).isEqualTo(reclaimed.getAttempt() + 1);
+		Boolean restartedCompletionAccepted = transactions.execute(status -> store.markDelivered(
+				firstId, "replacement-worker", restarted.getAttempt(), 204, reclaimedAt.plusSeconds(4)));
+		assertThat(restartedCompletionAccepted).isTrue();
+		BridgeDeliveryStore.ClaimedDelivery next = transactions.execute(status ->
+				store.claimAvailable(
+						"replacement-worker", reclaimedAt.plusSeconds(5), Duration.ofMinutes(2), 8)).getFirst();
+		assertThat(next.getDeliveryId()).isEqualTo(secondId);
+	}
+
+	@Test
+	void completedBridgeOutboxRowSignalsDeliveryOnlyAfterCommit() {
+		UUID destination = insertDestination(741L, "https://consumer.example/wakeup");
+		BridgeDeliveryWakeup wakeup = mock(BridgeDeliveryWakeup.class);
+		BridgeDeliveryRepositoryImpl outbox = new BridgeDeliveryRepositoryImpl(jdbc, wakeup);
+
+		transactions.executeWithoutResult(status -> {
+			var reservation = outbox.reserve(UUID.randomUUID(), destination, Instant.now()).orElseThrow();
+			assertThat(outbox.setBodyOnce(reservation.id(), "payload", Instant.now())).isTrue();
+			verifyNoInteractions(wakeup);
+		});
+
+		verify(wakeup).wake();
+	}
+
+	@Test
+	void rolledBackBridgeOutboxRowDoesNotSignalDelivery() {
+		UUID destination = insertDestination(742L, "https://consumer.example/rollback");
+		BridgeDeliveryWakeup wakeup = mock(BridgeDeliveryWakeup.class);
+		BridgeDeliveryRepositoryImpl outbox = new BridgeDeliveryRepositoryImpl(jdbc, wakeup);
+
+		transactions.executeWithoutResult(status -> {
+			var reservation = outbox.reserve(UUID.randomUUID(), destination, Instant.now()).orElseThrow();
+			assertThat(outbox.setBodyOnce(reservation.id(), "payload", Instant.now())).isTrue();
+			status.setRollbackOnly();
+		});
+
+		verifyNoInteractions(wakeup);
+	}
+
+	@Test
+	void requiresNewOutboxCommitSignalsEvenWhenSuspendedOuterTransactionRollsBack() {
+		UUID destination = insertDestination(743L, "https://consumer.example/requires-new");
+		BridgeDeliveryWakeup wakeup = mock(BridgeDeliveryWakeup.class);
+		BridgeDeliveryRepositoryImpl outbox = new BridgeDeliveryRepositoryImpl(jdbc, wakeup);
+		TransactionTemplate inner = new TransactionTemplate(transactionManager);
+		inner.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+		UUID eventId = UUID.randomUUID();
+
+		transactions.executeWithoutResult(outerStatus -> {
+			inner.executeWithoutResult(innerStatus -> {
+				var reservation = outbox.reserve(eventId, destination, Instant.now()).orElseThrow();
+				assertThat(outbox.setBodyOnce(reservation.id(), "payload", Instant.now())).isTrue();
+				verifyNoInteractions(wakeup);
+			});
+			verify(wakeup).wake();
+			outerStatus.setRollbackOnly();
+		});
+
+		verify(wakeup).wake();
+		assertThat(jdbc.queryForObject(
+				"SELECT COUNT(*) FROM bridge_delivery WHERE event_id = ?", Long.class, eventId)).isOne();
 	}
 
 	private UUID subscribe(

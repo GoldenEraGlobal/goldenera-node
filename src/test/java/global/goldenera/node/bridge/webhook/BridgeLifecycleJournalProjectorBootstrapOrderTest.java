@@ -30,7 +30,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import java.time.Duration;
+import java.time.Instant;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -108,7 +108,7 @@ class BridgeLifecycleJournalProjectorBootstrapOrderTest {
 		@Bean(name = CORE_WEBHOOK_SCHEDULER)
 		TaskScheduler scheduler() {
 			TaskScheduler scheduler = mock(TaskScheduler.class);
-			when(scheduler.scheduleWithFixedDelay(any(Runnable.class), any(Duration.class)))
+			when(scheduler.schedule(any(Runnable.class), any(Instant.class)))
 					.thenAnswer(invocation -> {
 						if (BOOTSTRAPPED.get()) {
 							SCHEDULED_AFTER_BOOTSTRAP.incrementAndGet();

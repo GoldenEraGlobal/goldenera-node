@@ -140,19 +140,23 @@ class DurableUniversalWebhookStorePostgresTest {
 		assertThat(restarted.claimAvailable(
 				"worker-b", now.plusSeconds(4), Duration.ofMinutes(2), 10)).isEmpty();
 
-		assertThat(store.markDelivered(firstClaim.getFirst().deliveryId(), "worker-a", 200, now.plusSeconds(5))).isTrue();
+		assertThat(store.markDelivered(
+				firstClaim.getFirst().deliveryId(), "worker-a", firstClaim.getFirst().attempt(),
+				200, now.plusSeconds(5))).isTrue();
 		ClaimedDelivery second = restarted.claimAvailable(
 				"worker-b", now.plusSeconds(6), Duration.ofMinutes(2), 10).getFirst();
 		Instant retryAt = now.plusSeconds(30);
 		assertThat(restarted.markRetry(
-				second.deliveryId(), "worker-b", 503, "temporary", retryAt, now.plusSeconds(7))).isTrue();
+				second.deliveryId(), "worker-b", second.attempt(),
+				503, "temporary", retryAt, now.plusSeconds(7))).isTrue();
 		assertThat(restarted.claimAvailable(
 				"worker-c", now.plusSeconds(20), Duration.ofMinutes(2), 10)).isEmpty();
 		ClaimedDelivery retried = restarted.claimAvailable(
 				"worker-c", retryAt, Duration.ofMinutes(2), 10).getFirst();
 		assertThat(retried.attempt()).isEqualTo(2);
 		assertThat(restarted.markDead(
-				retried.deliveryId(), "worker-c", 400, "permanent", retryAt.plusSeconds(1))).isTrue();
+				retried.deliveryId(), "worker-c", retried.attempt(),
+				400, "permanent", retryAt.plusSeconds(1))).isTrue();
 
 		UUID journalEpoch = UUID.randomUUID();
 		long secondBoundary = restarted.sourceCursor(WebhookType.BLOCKCHAIN);
@@ -199,6 +203,41 @@ class DurableUniversalWebhookStorePostgresTest {
 				WHERE delivery.destination_id = ? AND event.event_type = ?
 				""", UUID.class, firstDestination, WebhookEventType.ADDRESS_ACTIVITY.getCode()))
 				.containsExactly(newAddressEvent);
+	}
+
+	@Test
+	void leaseGenerationFencesSameOwnerReclaimAndShutdownReleaseKeepsFifo() {
+		Instant now = Instant.parse("2026-08-29T01:00:00Z");
+		insertDestination(103L, WebhookType.BLOCKCHAIN, "fencing");
+		DurableUniversalWebhookStore store = new DurableUniversalWebhookStore(jdbc);
+		UUID firstEvent = UUID.randomUUID();
+		UUID secondEvent = UUID.randomUUID();
+		appendBlock(store, firstEvent, now);
+		appendBlock(store, secondEvent, now.plusSeconds(1));
+		assertThat(store.routePending(100, now.plusSeconds(2))).isEqualTo(2);
+		ClaimedDelivery stale = store.claimAvailable(
+				"stable-worker", now.plusSeconds(3), Duration.ofMinutes(2), 10).getFirst();
+		Instant reclaimedAt = now.plusSeconds(124);
+		ClaimedDelivery reclaimed = store.claimAvailable(
+				"stable-worker", reclaimedAt, Duration.ofMinutes(2), 10).getFirst();
+
+		assertThat(stale.eventId()).isEqualTo(firstEvent);
+		assertThat(reclaimed.eventId()).isEqualTo(firstEvent);
+		assertThat(reclaimed.attempt()).isEqualTo(stale.attempt() + 1);
+		assertThat(store.markDelivered(
+				stale.deliveryId(), "stable-worker", stale.attempt(), 204, reclaimedAt.plusSeconds(1))).isFalse();
+		assertThat(store.releaseLeases("stable-worker", reclaimedAt.plusSeconds(2))).isEqualTo(1);
+
+		ClaimedDelivery restarted = store.claimAvailable(
+				"replacement-worker", reclaimedAt.plusSeconds(3), Duration.ofMinutes(2), 10).getFirst();
+		assertThat(restarted.eventId()).isEqualTo(firstEvent);
+		assertThat(restarted.attempt()).isEqualTo(reclaimed.attempt() + 1);
+		assertThat(store.markDelivered(
+				restarted.deliveryId(), "replacement-worker", restarted.attempt(),
+				204, reclaimedAt.plusSeconds(4))).isTrue();
+		ClaimedDelivery next = store.claimAvailable(
+				"replacement-worker", reclaimedAt.plusSeconds(5), Duration.ofMinutes(2), 10).getFirst();
+		assertThat(next.eventId()).isEqualTo(secondEvent);
 	}
 
 	@Test

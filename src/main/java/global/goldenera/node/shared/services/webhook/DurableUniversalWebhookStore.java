@@ -425,36 +425,46 @@ public class DurableUniversalWebhookStore {
 	}
 
 	@Transactional
-	public boolean markDelivered(UUID deliveryId, String owner, int httpStatus, Instant now) {
+	public boolean markDelivered(UUID deliveryId, String owner, int attempt, int httpStatus, Instant now) {
 		return jdbcTemplate.update("""
 				UPDATE universal_webhook_delivery
 				SET state = ?, last_http_status = ?, last_error = NULL, delivered_at = ?,
 				    lease_owner = NULL, lease_until = NULL, updated_at = ?
-				WHERE delivery_id = ? AND state = ? AND lease_owner = ?
+				WHERE delivery_id = ? AND state = ? AND lease_owner = ? AND attempts = ?
 				""", DELIVERED, httpStatus, Timestamp.from(now), Timestamp.from(now),
-				deliveryId, IN_FLIGHT, owner) == 1;
+				deliveryId, IN_FLIGHT, owner, attempt) == 1;
 	}
 
 	@Transactional
-	public boolean markRetry(UUID deliveryId, String owner, Integer httpStatus, String error,
+	public boolean markRetry(UUID deliveryId, String owner, int attempt, Integer httpStatus, String error,
 			Instant retryAt, Instant now) {
-		return updateFailure(deliveryId, owner, RETRY, httpStatus, error, retryAt, now, false);
+		return updateFailure(deliveryId, owner, attempt, RETRY, httpStatus, error, retryAt, now, false);
 	}
 
 	@Transactional
-	public boolean markDead(UUID deliveryId, String owner, Integer httpStatus, String error, Instant now) {
-		return updateFailure(deliveryId, owner, DEAD, httpStatus, error, now, now, true);
+	public boolean markDead(UUID deliveryId, String owner, int attempt, Integer httpStatus, String error, Instant now) {
+		return updateFailure(deliveryId, owner, attempt, DEAD, httpStatus, error, now, now, true);
 	}
 
-	private boolean updateFailure(UUID deliveryId, String owner, int state, Integer httpStatus, String error,
+	private boolean updateFailure(UUID deliveryId, String owner, int attempt,
+			int state, Integer httpStatus, String error,
 			Instant nextAttemptAt, Instant now, boolean dead) {
 		return jdbcTemplate.update("""
 				UPDATE universal_webhook_delivery
 				SET state = ?, last_http_status = ?, last_error = ?, next_attempt_at = ?, dead_at = ?,
 				    lease_owner = NULL, lease_until = NULL, updated_at = ?
-				WHERE delivery_id = ? AND state = ? AND lease_owner = ?
+				WHERE delivery_id = ? AND state = ? AND lease_owner = ? AND attempts = ?
 				""", state, httpStatus, truncate(error), Timestamp.from(nextAttemptAt),
-				dead ? Timestamp.from(now) : null, Timestamp.from(now), deliveryId, IN_FLIGHT, owner) == 1;
+				dead ? Timestamp.from(now) : null, Timestamp.from(now), deliveryId, IN_FLIGHT, owner, attempt) == 1;
+	}
+
+	@Transactional
+	public int releaseLeases(String owner, Instant now) {
+		return jdbcTemplate.update("""
+				UPDATE universal_webhook_delivery
+				SET state = ?, next_attempt_at = ?, lease_owner = NULL, lease_until = NULL, updated_at = ?
+				WHERE state = ? AND lease_owner = ?
+				""", RETRY, Timestamp.from(now), Timestamp.from(now), IN_FLIGHT, owner);
 	}
 
 	private ClaimedDelivery mapClaim(ResultSet resultSet, int rowNumber) throws SQLException {

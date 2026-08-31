@@ -21,31 +21,31 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-package global.goldenera.node.shared.repositories;
+package global.goldenera.node.shared.config;
 
-import java.util.Optional;
+import static org.assertj.core.api.Assertions.assertThat;
 
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.ListPagingAndSortingRepository;
-import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
 
-import global.goldenera.node.shared.entities.ApiKey;
-import io.hypersistence.utils.spring.repository.BaseJpaRepository;
-import lombok.NonNull;
+import org.junit.jupiter.api.Test;
 
-@Repository
-public interface ApiKeyCoreRepository
-		extends BaseJpaRepository<ApiKey, Long>, ListPagingAndSortingRepository<ApiKey, Long>,
-		JpaSpecificationExecutor<ApiKey> {
+class ApplicationPropertiesTuningTest {
 
-	@Query("SELECT a FROM ApiKey a WHERE a.keyPrefix = :keyPrefix")
-	@Transactional(readOnly = true)
-	Optional<ApiKey> findByKeyPrefix(@NonNull String keyPrefix);
+	@Test
+	void keepsBootServletDefaultsAndAuthenticationCacheOverrides() throws IOException {
+		Properties properties = new Properties();
+		try (InputStream input = getClass().getResourceAsStream("/application.properties")) {
+			assertThat(input).isNotNull();
+			properties.load(input);
+		}
 
-	@Query(value = "SELECT epoch FROM api_key_auth_epoch WHERE singleton = TRUE", nativeQuery = true)
-	@Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
-	long findAuthenticationEpoch();
+		assertThat(properties).doesNotContainKeys(
+				"server.tomcat.threads.max", "server.tomcat.threads.min-spare");
+		assertThat(properties.getProperty("ge.api-key-auth-cache.enabled"))
+				.isEqualTo("${API_KEY_AUTH_CACHE_ENABLED:true}");
+		assertThat(properties.getProperty("ge.api-key-auth-cache.ttl"))
+				.isEqualTo("${API_KEY_AUTH_CACHE_TTL:5s}");
+	}
 }

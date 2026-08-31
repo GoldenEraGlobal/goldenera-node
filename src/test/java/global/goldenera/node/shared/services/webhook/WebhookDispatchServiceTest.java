@@ -24,17 +24,20 @@
 package global.goldenera.node.shared.services.webhook;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -76,10 +79,7 @@ class WebhookDispatchServiceTest {
 		fixture.dispatch.start();
 		fixture.dispatch.start();
 
-		verify(fixture.scheduler).scheduleWithFixedDelay(
-				any(Runnable.class), eq(WebhookDispatchService.ROUTE_INTERVAL));
-		verify(fixture.scheduler).scheduleWithFixedDelay(
-				any(Runnable.class), eq(WebhookDispatchService.DELIVERY_INTERVAL));
+		verify(fixture.scheduler, times(2)).schedule(any(Runnable.class), any(Instant.class));
 	}
 
 	@Test
@@ -101,8 +101,9 @@ class WebhookDispatchServiceTest {
 		fixture.callback.get().onFailure(fixture.call, new IOException("offline"));
 
 		verify(fixture.store).markRetry(
-				eq(fixture.delivery.deliveryId()), eq("worker"), eq(null), eq("offline"), any(), any());
-		verify(fixture.store, never()).markDead(any(), any(), any(), any(), any());
+				eq(fixture.delivery.deliveryId()), eq("worker"), eq(fixture.delivery.attempt()),
+				eq(null), eq("offline"), any(), any());
+		verify(fixture.store, never()).markDead(any(), any(), anyInt(), any(), any(), any());
 	}
 
 	@Test
@@ -119,8 +120,9 @@ class WebhookDispatchServiceTest {
 		fixture.callback.get().onResponse(fixture.call, response);
 
 		verify(fixture.store).markDead(
-				eq(fixture.delivery.deliveryId()), eq("worker"), eq(400), eq("HTTP 400"), any());
-		verify(fixture.store, never()).markRetry(any(), any(), any(), any(), any(), any());
+				eq(fixture.delivery.deliveryId()), eq("worker"), eq(fixture.delivery.attempt()),
+				eq(400), eq("HTTP 400"), any());
+		verify(fixture.store, never()).markRetry(any(), any(), anyInt(), any(), any(), any(), any());
 	}
 
 	@Test
@@ -131,8 +133,37 @@ class WebhookDispatchServiceTest {
 		fixture.callback.get().onFailure(fixture.call, new IOException("long outage"));
 
 		verify(fixture.store).markRetry(
-				eq(fixture.delivery.deliveryId()), eq("worker"), eq(null), eq("long outage"), any(), any());
-		verify(fixture.store, never()).markDead(any(), any(), any(), any(), any());
+				eq(fixture.delivery.deliveryId()), eq("worker"), eq(fixture.delivery.attempt()),
+				eq(null), eq("long outage"), any(), any());
+		verify(fixture.store, never()).markDead(any(), any(), anyInt(), any(), any(), any());
+	}
+
+	@Test
+	void shutdownCancelsInFlightCallsReleasesLeasesAndStopsClaiming() throws Exception {
+		Fixture fixture = fixture();
+		fixture.dispatch.dispatchPendingBatches();
+		doAnswer(invocation -> {
+			fixture.callback.get().onFailure(fixture.call, new IOException("cancelled for shutdown"));
+			return null;
+		}).when(fixture.call).cancel();
+
+		fixture.dispatch.stop();
+		fixture.dispatch.dispatchPendingBatches();
+
+		verify(fixture.call).cancel();
+		verify(fixture.store).releaseLeases(eq("worker"), any(Instant.class));
+		verify(fixture.store).claimAvailable(any(), any(), any(), anyInt());
+	}
+
+	@Test
+	void routingFailurePropagatesToAdaptiveRecoveryLoop() {
+		Fixture fixture = fixture();
+		when(fixture.store.routePending(anyInt(), any(Instant.class)))
+				.thenThrow(new IllegalStateException("database unavailable"));
+
+		assertThatThrownBy(fixture.dispatch::routePendingEvents)
+				.isInstanceOf(IllegalStateException.class)
+				.hasMessage("database unavailable");
 	}
 
 	private Fixture fixture() {

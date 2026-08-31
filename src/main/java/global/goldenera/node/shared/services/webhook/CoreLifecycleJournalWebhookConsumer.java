@@ -52,6 +52,7 @@ import global.goldenera.node.core.storage.blockchain.mempool.PersistentMempoolSt
 import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.services.webhook.DurableUniversalWebhookStore.JournalCursor;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -61,19 +62,17 @@ import lombok.extern.slf4j.Slf4j;
 public class CoreLifecycleJournalWebhookConsumer {
 	static final int READ_LIMIT = 256;
 	static final int MAX_BATCHES_PER_DRAIN = 8;
-	static final Duration POLL_INTERVAL = Duration.ofMillis(250);
+	static final Duration MINIMUM_POLL_INTERVAL = Duration.ofMillis(250);
+	// Bounds detection latency for journal writes that do not produce a local wake signal.
+	static final Duration RECOVERY_POLL_INTERVAL = Duration.ofSeconds(30);
 
 	private final LifecycleJournalQuery journal;
 	private final DurableUniversalWebhookStore store;
 	private final CoreLifecycleJournalWebhookProjector projector;
-	private final TaskScheduler scheduler;
-	private final Executor executor;
 	private final MeterRegistry registry;
 	private final PersistentMempoolStore persistentMempool;
-	private final AtomicBoolean started = new AtomicBoolean();
 	private final AtomicBoolean running = new AtomicBoolean();
-	private final AtomicBoolean scheduled = new AtomicBoolean();
-	private final AtomicBoolean dirty = new AtomicBoolean();
+	private final AdaptivePollingLoop pollingLoop;
 
 	@Autowired
 	public CoreLifecycleJournalWebhookConsumer(
@@ -87,10 +86,11 @@ public class CoreLifecycleJournalWebhookConsumer {
 		this.journal = journal;
 		this.store = store;
 		this.projector = projector;
-		this.scheduler = scheduler;
-		this.executor = executor;
 		this.registry = registry;
 		this.persistentMempool = persistentMempool;
+		this.pollingLoop = new AdaptivePollingLoop(
+				scheduler, executor, this::drain,
+				MINIMUM_POLL_INTERVAL, RECOVERY_POLL_INTERVAL);
 	}
 
 	CoreLifecycleJournalWebhookConsumer(
@@ -105,48 +105,38 @@ public class CoreLifecycleJournalWebhookConsumer {
 
 	@EventListener(ApplicationReadyEvent.class)
 	void start() {
-		if (!started.compareAndSet(false, true)) {
-			return;
-		}
-		scheduler.scheduleWithFixedDelay(this::wake, POLL_INTERVAL);
+		pollingLoop.start();
+	}
+
+	@PreDestroy
+	void stop() {
+		pollingLoop.stop();
 	}
 
 	public void wake() {
-		dirty.set(true);
-		if (!scheduled.compareAndSet(false, true)) {
-			return;
-		}
-		executor.execute(() -> {
-			try {
-				for (int cycle = 0; cycle < 2 && dirty.getAndSet(false); cycle++) {
-					drain();
-				}
-			} finally {
-				scheduled.set(false);
-				if (dirty.get()) {
-					wake();
-				}
-			}
-		});
+		pollingLoop.wake();
 	}
 
-	void drain() {
+	boolean drain() {
 		if (!running.compareAndSet(false, true)) {
-			return;
+			return false;
 		}
+		boolean moreAvailable = false;
 		try {
-			drain(LifecycleJournalStream.CANONICAL);
-			drain(LifecycleJournalStream.MEMPOOL);
+			moreAvailable = drain(LifecycleJournalStream.CANONICAL);
+			moreAvailable |= drain(LifecycleJournalStream.MEMPOOL);
 		} catch (RuntimeException exception) {
 			log.error("Universal webhook lifecycle journal projection failed", exception);
+			throw exception;
 		} finally {
 			running.set(false);
 		}
+		return moreAvailable;
 	}
 
-	private void drain(LifecycleJournalStream stream) {
+	private boolean drain(LifecycleJournalStream stream) {
 		if (stream == LifecycleJournalStream.MEMPOOL && !canonicalMempoolProjectionCaughtUp()) {
-			return;
+			return false;
 		}
 		for (int batch = 0; batch < MAX_BATCHES_PER_DRAIN; batch++) {
 			LifecycleJournalHead head = journal.head(stream);
@@ -159,7 +149,7 @@ public class CoreLifecycleJournalWebhookConsumer {
 			} else if (!head.epoch().equals(cursor.epoch())) {
 				store.reanchorJournalLineage(
 						WebhookType.BLOCKCHAIN, stream.code(), head.epoch(), head.sequence(), Instant.now());
-				return;
+				return false;
 			}
 			List<LifecycleJournalEntry> entries;
 			try {
@@ -173,9 +163,10 @@ public class CoreLifecycleJournalWebhookConsumer {
 				projector.project(entry);
 			}
 			if (entries.size() < READ_LIMIT) {
-				return;
+				return false;
 			}
 		}
+		return true;
 	}
 
 	private boolean canonicalMempoolProjectionCaughtUp() {

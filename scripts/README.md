@@ -18,7 +18,7 @@ This directory contains build and deployment scripts for the GoldenEra Node.
 
 - **`install.sh`** - Interactive Ubuntu, Debian, and macOS installer
   - Installs Docker when needed
-  - Offers an automatic miner profile or a polished manual configuration flow
+  - Offers automatic mining defaults or manual configuration
   - Generates a secure Compose deployment and management command
   - Supports public-image updates and local sandbox images
 
@@ -55,11 +55,30 @@ After building:
 docker compose -f docker-compose.local.yml up -d
 ```
 
-### Testing the automated installer
+### Reproducible sandbox image
+
+From a clean committed worktree, with the project `mise` toolchain and Maven
+dependencies installed locally:
 
 ```bash
 ./scripts/build-sandbox-image.sh
+```
+
+The default tag is `goldenera-node:sandbox-local`. OCI metadata records the node
+commit, CryptoJ SHA-256, and Maven-pinned RandomX source commit. The build rejects
+a dirty worktree or invalid release metadata. The published release image remains
+the default Docker target.
+
+### Testing the automated installer
+
+Build the sandbox image above before running the end-to-end test:
+
+```bash
 ./scripts/tests/memory-sizing-test.sh
 ./scripts/tests/install-smoke.sh
 ./scripts/tests/install-e2e.sh
 ```
+
+The end-to-end test creates a temporary installation using
+`goldenera-node:sandbox-local`, starts the node, checks its liveness API, and
+removes the test containers and temporary data on exit.

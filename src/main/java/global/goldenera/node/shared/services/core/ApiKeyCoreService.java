@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Function;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -54,6 +55,7 @@ public class ApiKeyCoreService {
 
     ApiKeyCoreRepository apiKeyCoreRepository;
     ApplicationEventPublisher eventPublisher;
+    ApiKeyAuthenticationCache authenticationCache;
 
     @Transactional(readOnly = true)
     public Page<ApiKey> getPage(
@@ -123,20 +125,29 @@ public class ApiKeyCoreService {
         return apiKeyCoreRepository.findByKeyPrefix(keyPrefix);
     }
 
+    public <T> T withAuthenticationKey(@NonNull String keyPrefix,
+            @NonNull Function<Optional<ApiKey>, T> action) {
+        return authenticationCache.withAuthenticationKey(keyPrefix, action);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public ApiKey create(@NonNull ApiKey apiKey) {
-        ApiKey createdApiKey = apiKeyCoreRepository.persist(apiKey);
-        eventPublisher.publishEvent(new ApiKeyUpdatedEvent(this, ApiKeyUpdatedEvent.UpdateType.CREATE_API_KEY,
-                apiKey.getId(), Optional.of(createdApiKey)));
-        return createdApiKey;
+        return authenticationCache.executeMutation(() -> {
+            ApiKey createdApiKey = apiKeyCoreRepository.persist(apiKey);
+            eventPublisher.publishEvent(new ApiKeyUpdatedEvent(this, ApiKeyUpdatedEvent.UpdateType.CREATE_API_KEY,
+                    apiKey.getId(), Optional.of(createdApiKey)));
+            return createdApiKey;
+        });
     }
 
     @Transactional(rollbackFor = Exception.class)
     public ApiKey update(@NonNull ApiKey apiKey) {
-        ApiKey updatedApiKey = apiKeyCoreRepository.update(apiKey);
-        eventPublisher.publishEvent(new ApiKeyUpdatedEvent(this, ApiKeyUpdatedEvent.UpdateType.UPDATE_API_KEY,
-                apiKey.getId(), Optional.of(updatedApiKey)));
-        return updatedApiKey;
+        return authenticationCache.executeMutation(() -> {
+            ApiKey updatedApiKey = apiKeyCoreRepository.update(apiKey);
+            eventPublisher.publishEvent(new ApiKeyUpdatedEvent(this, ApiKeyUpdatedEvent.UpdateType.UPDATE_API_KEY,
+                    apiKey.getId(), Optional.of(updatedApiKey)));
+            return updatedApiKey;
+        });
     }
 
 }

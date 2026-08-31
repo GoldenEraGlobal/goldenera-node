@@ -34,6 +34,7 @@ import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
+import global.goldenera.cryptoj.exceptions.CryptoJException;
 import global.goldenera.cryptoj.serialization.blockheader.BlockHeaderDecoder;
 import global.goldenera.cryptoj.serialization.blockheader.BlockHeaderEncoder;
 import global.goldenera.cryptoj.utils.BlockHeaderUtil;
@@ -60,8 +61,8 @@ public record EquivocationEvidence(
 		Set<Hash> uniqueHashes = new HashSet<>();
 		Hash previous = null;
 		for (SignedHeader signedHeader : signedHeaders) {
-			signedHeader.verify(height, identity);
-			Hash hash = signedHeader.blockHash();
+			BlockHeader verifiedHeader = signedHeader.verify(height, identity);
+			Hash hash = verifiedHeader.getHash();
 			if (!uniqueHashes.add(hash) || previous != null && previous.compareTo(hash) > 0) {
 				throw new IllegalArgumentException("Signed evidence headers must be unique and sorted by block hash");
 			}
@@ -73,16 +74,58 @@ public record EquivocationEvidence(
 		return signedHeaders.size() > 1;
 	}
 
-	public record SignedHeader(Bytes canonicalHeader) {
-		public SignedHeader {
+	public static final class SignedHeader {
+		private final Bytes canonicalHeader;
+		private volatile BlockHeader authenticatedHeader;
+		private volatile Address authenticatedIdentity;
+
+		public SignedHeader(Bytes canonicalHeader) {
 			if (canonicalHeader == null || canonicalHeader.isEmpty()) {
 				throw new IllegalArgumentException("Canonical signed header cannot be empty");
 			}
-			canonicalHeader = canonicalHeader.copy();
+			this.canonicalHeader = canonicalHeader.copy();
 		}
 
 		public static SignedHeader from(BlockHeader header) {
 			return new SignedHeader(BlockHeaderEncoder.INSTANCE.encode(header, true));
+		}
+
+		/**
+		 * Captures a canonical snapshot, independently recovers its signer exactly once,
+		 * and retains that authenticated result for subsequent immutable evidence
+		 * construction and encoding. Persisted bytes are independently verified by
+		 * {@link #verify} when decoded.
+		 */
+		public static AuthenticatedSignedHeader authenticate(BlockHeader header) {
+			if (header == null) {
+				throw new IllegalArgumentException("Signed header is required");
+			}
+			Signature signature = header.getSignature();
+			if (signature == null || signature.equals(Signature.ZERO)) {
+				throw new IllegalArgumentException("Signed header must contain a signature");
+			}
+			Bytes canonical = BlockHeaderEncoder.INSTANCE.encode(header, true);
+			BlockHeader canonicalHeader = BlockHeaderDecoder.INSTANCE.decode(canonical);
+			if (!signature.equals(canonicalHeader.getSignature())) {
+				throw new IllegalArgumentException("Signed header changed while it was captured");
+			}
+			Address identity;
+			try {
+				identity = signature.recoverAddress(BlockHeaderUtil.hashForSigning(canonicalHeader));
+			} catch (CryptoJException | RuntimeException e) {
+				throw new IllegalArgumentException("Signed header signature cannot be authenticated", e);
+			}
+			if (identity == null || identity.equals(Address.ZERO)) {
+				throw new IllegalArgumentException("Signed header identity cannot be zero");
+			}
+			SignedHeader signedHeader = new SignedHeader(canonical);
+			signedHeader.authenticatedIdentity = identity;
+			signedHeader.authenticatedHeader = canonicalHeader;
+			return new AuthenticatedSignedHeader(identity, signedHeader);
+		}
+
+		public Bytes canonicalHeader() {
+			return canonicalHeader;
 		}
 
 		public BlockHeader decode() {
@@ -90,25 +133,70 @@ public record EquivocationEvidence(
 		}
 
 		public Hash blockHash() {
-			return decode().getHash();
+			BlockHeader cachedHeader = authenticatedHeader;
+			return cachedHeader == null ? decode().getHash() : cachedHeader.getHash();
+		}
+
+		public long height() {
+			BlockHeader cachedHeader = authenticatedHeader;
+			return cachedHeader == null ? decode().getHeight() : cachedHeader.getHeight();
 		}
 
 		public Signature signature() {
-			return decode().getSignature();
+			BlockHeader cachedHeader = authenticatedHeader;
+			return cachedHeader == null ? decode().getSignature() : cachedHeader.getSignature();
 		}
 
 		public BlockHeader verify(long expectedHeight, Address expectedIdentity) {
+			BlockHeader cachedHeader = authenticatedHeader;
+			Address cachedIdentity = authenticatedIdentity;
+			if (cachedHeader != null && expectedIdentity.equals(cachedIdentity)) {
+				if (cachedHeader.getHeight() != expectedHeight) {
+					throw new IllegalArgumentException("Signed header is not valid evidence for height and identity");
+				}
+				return cachedHeader;
+			}
 			BlockHeader header = decode();
 			Bytes reencoded = BlockHeaderEncoder.INSTANCE.encode(header, true);
-			if (!canonicalHeader.equals(reencoded)
-					|| header.getHeight() != expectedHeight
-					|| !header.getIdentity().equals(expectedIdentity)
-					|| header.getSignature() == null
-					|| header.getSignature().equals(Signature.ZERO)
-					|| !header.getSignature().validate(BlockHeaderUtil.hashForSigning(header), expectedIdentity)) {
+			Address recoveredIdentity = null;
+			if (header.getSignature() != null && !header.getSignature().equals(Signature.ZERO)) {
+				try {
+					recoveredIdentity = header.getSignature().recoverAddress(BlockHeaderUtil.hashForSigning(header));
+				} catch (CryptoJException | RuntimeException ignored) {
+					// The common failure below intentionally hides crypto implementation details.
+				}
+			}
+			if (!canonicalHeader.equals(reencoded) || header.getHeight() != expectedHeight
+					|| !expectedIdentity.equals(recoveredIdentity)) {
 				throw new IllegalArgumentException("Signed header is not valid evidence for height and identity");
 			}
+			authenticatedIdentity = recoveredIdentity;
+			authenticatedHeader = header;
 			return header;
+		}
+
+		@Override
+		public boolean equals(Object other) {
+			return this == other || other instanceof SignedHeader that
+					&& canonicalHeader.equals(that.canonicalHeader);
+		}
+
+		@Override
+		public int hashCode() {
+			return canonicalHeader.hashCode();
+		}
+
+		@Override
+		public String toString() {
+			return "SignedHeader[canonicalHeader=" + canonicalHeader + "]";
+		}
+
+		public record AuthenticatedSignedHeader(Address identity, SignedHeader signedHeader) {
+			public AuthenticatedSignedHeader {
+				if (identity == null || signedHeader == null) {
+					throw new IllegalArgumentException("Authenticated signed header is incomplete");
+				}
+			}
 		}
 	}
 }
