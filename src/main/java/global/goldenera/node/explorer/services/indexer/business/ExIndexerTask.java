@@ -23,6 +23,8 @@
  */
 package global.goldenera.node.explorer.services.indexer.business;
 
+import java.util.List;
+
 import org.springframework.context.ApplicationEvent;
 
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -41,7 +43,36 @@ public interface ExIndexerTask {
 	Hash getHash();
 
 	enum Type {
-		CONNECT, DISCONNECT
+		CONNECT, CONNECT_BATCH, DISCONNECT
+	}
+
+	@Getter
+	class ConnectBatchTask implements ExIndexerTask {
+		private final List<BlockConnectedEvent> events;
+
+		ConnectBatchTask(List<BlockConnectedEvent> events) {
+			this.events = List.copyOf(events);
+		}
+
+		@Override
+		public ApplicationEvent getEvent() {
+			return events.getLast();
+		}
+
+		@Override
+		public Type getType() {
+			return Type.CONNECT_BATCH;
+		}
+
+		@Override
+		public long getHeight() {
+			return events.getLast().getBlock().getHeight();
+		}
+
+		@Override
+		public Hash getHash() {
+			return events.getLast().getBlock().getHash();
+		}
 	}
 
 	@Getter

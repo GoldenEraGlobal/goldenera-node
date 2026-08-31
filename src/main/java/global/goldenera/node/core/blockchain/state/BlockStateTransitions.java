@@ -45,12 +45,17 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.reorg.ChainSwitchService;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
 import global.goldenera.node.core.storage.blockchain.EntityIndexRepository;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalAppender;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalDraft;
+import global.goldenera.node.core.storage.chainidentity.VerifiedGenesisPlan;
+import global.goldenera.node.core.storage.chainidentity.VerifiedGenesisPlan.ClaimedGenesis;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
@@ -68,6 +73,7 @@ public class BlockStateTransitions {
 	ReentrantLock masterChainLock;
 	EntityIndexRepository entityIndexRepository;
 	BlockEventExtractor blockEventExtractor;
+	LifecycleJournalAppender lifecycleJournalAppender;
 
 	public BlockStateTransitions(
 			BlockRepository blockRepository,
@@ -76,7 +82,8 @@ public class BlockStateTransitions {
 			ApplicationEventPublisher applicationEventPublisher,
 			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
 			EntityIndexRepository entityIndexRepository,
-			BlockEventExtractor blockEventExtractor) {
+			BlockEventExtractor blockEventExtractor,
+			LifecycleJournalAppender lifecycleJournalAppender) {
 		this.blockRepository = blockRepository;
 		this.chainQueryService = chainQueryService;
 		this.chainSwitchService = chainSwitchService;
@@ -84,15 +91,42 @@ public class BlockStateTransitions {
 		this.masterChainLock = masterChainLock;
 		this.entityIndexRepository = entityIndexRepository;
 		this.blockEventExtractor = blockEventExtractor;
+		this.lifecycleJournalAppender = lifecycleJournalAppender;
 	}
 
-	public void connectBlock(
-			@NonNull Block block,
+	public void connectValidatedBlock(
+			@NonNull StatelessValidatedBlock validatedBlock,
 			@NonNull WorldState worldState,
 			@NonNull ConnectedSource source,
 			StateProcessor.ExecutionResult executionResult,
 			Address receivedFrom,
 			Instant receivedAt) {
+		if (source == ConnectedSource.GENESIS) {
+			throw new IllegalArgumentException("Validated non-genesis path cannot use GENESIS source");
+		}
+		connectBlock(validatedBlock.block(), worldState, source, executionResult, receivedFrom, receivedAt);
+	}
+
+	public void connectVerifiedGenesis(@NonNull VerifiedGenesisPlan plan) {
+		ClaimedGenesis genesis = plan.claimForPersistence();
+		Hash calculatedStateRoot = genesis.worldState().calculateRootHash();
+		if (!calculatedStateRoot.equals(genesis.block().getHeader().getStateRootHash())) {
+			throw new IllegalArgumentException(
+					"Verified genesis world state changed before persistence");
+		}
+		connectBlock(
+				genesis.block(), genesis.worldState(), ConnectedSource.GENESIS, null,
+				genesis.receivedFrom(), genesis.receivedAt());
+	}
+
+	private void connectBlock(
+			Block block,
+			WorldState worldState,
+			ConnectedSource source,
+			StateProcessor.ExecutionResult executionResult,
+			Address receivedFrom,
+			Instant receivedAt) {
+		BlockConnectedEvent eventToPublish = null;
 		masterChainLock.lock();
 		try {
 			long start = System.currentTimeMillis();
@@ -123,8 +157,9 @@ public class BlockStateTransitions {
 				blockEvents = blockEventExtractor.extractEvents(
 						blockRewardFromPool,
 						totalFees,
-						block.getHeader().getCoinbase(),
-						worldState.getParams().getBlockRewardPoolAddress(),
+							block.getHeader().getCoinbase(),
+							executionResult.getMinerRewardPoolAddress(),
+							executionResult.getMinerRewardUnlockBlockHeight(),
 						worldState.getBipDiffs(),
 						worldState.getTokenDiffs(),
 						executionResult.getActualBurnAmounts(),
@@ -186,9 +221,14 @@ public class BlockStateTransitions {
 
 					Collections.reverse(forkChain); // Now it's Ancestor -> ... -> NewBlock
 
-					// 2. Execute Switch
-					chainSwitchService.executeAtomicReorgSwap(commonAncestor, forkChain, true,
-							ChainSwitchService.SwitchType.REORG);
+					// 2. Execute Switch. The switch revalidates under the same lock and publishes
+					// events only after releasing it, so drop this outer hold first.
+					masterChainLock.unlock();
+					try {
+						chainSwitchService.executeAtomicReorgSwap(new ValidatedReorgPlan(commonAncestor, forkChain));
+					} finally {
+						masterChainLock.lock();
+					}
 					return; // Done, reorg service handled everything
 
 				} catch (Exception e) {
@@ -201,14 +241,19 @@ public class BlockStateTransitions {
 			final boolean performFullConnect = isNewHead;
 
 			try {
-				blockRepository.getRepository().executeAtomicBatch(batch -> {
+				blockRepository.executeAtomicBatch(batch -> {
 					worldState.persistToBatch(batch);
 					if (performFullConnect) {
 						entityIndexRepository.saveEntities(batch, block, worldState);
 						blockRepository.addBlockToBatch(batch, storedBlockToSave);
+						lifecycleJournalAppender.appendCanonicalToBatch(batch, List.of(
+								LifecycleJournalDraft.connect(
+										null, 0, 1, height, block.getHash(), block.getHeader().getPreviousHash(),
+										receivedAt == null ? Instant.now() : receivedAt,
+										source.getCode(), null)));
 					} else {
 						try {
-							blockRepository.saveBlockDataToBatch(batch, storedBlockToSave);
+							blockRepository.saveForkBlockDataToBatch(batch, storedBlockToSave);
 						} catch (Exception e) {
 							throw new RuntimeException(e);
 						}
@@ -235,7 +280,7 @@ public class BlockStateTransitions {
 				Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
 				Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
 
-				BlockConnectedEvent event = new BlockConnectedEvent(
+				eventToPublish = new BlockConnectedEvent(
 						this,
 						source,
 						block,
@@ -257,14 +302,15 @@ public class BlockStateTransitions {
 						blockEvents,
 						receivedFrom,
 						receivedAt);
-
-				applicationEventPublisher.publishEvent(event);
 			} else {
 				log.info("Block {} stored as FORK (TD: {} <= Current Head). No event emitted.",
 						block.getHeight(), cumulativeDifficulty);
 			}
 		} finally {
 			masterChainLock.unlock();
+		}
+		if (eventToPublish != null) {
+			applicationEventPublisher.publishEvent(eventToPublish);
 		}
 	}
 }

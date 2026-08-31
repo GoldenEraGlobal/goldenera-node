@@ -82,6 +82,15 @@ public class SpringDocConfig {
 	}
 
 	@Bean
+	public GroupedOpenApi bridgeApi() {
+		return GroupedOpenApi.builder().group("Bridge API").pathsToMatch("/api/bridge/**")
+				.addOperationCustomizer((op, m) -> {
+					op.addSecurityItem(new SecurityRequirement().addList(API_KEY_SCHEME));
+					return op;
+				}).build();
+	}
+
+	@Bean
 	public GroupedOpenApi sharedApi() {
 		return GroupedOpenApi.builder().group("Shared API").pathsToMatch("/api/shared/**")
 				.addOperationCustomizer((op, m) -> {

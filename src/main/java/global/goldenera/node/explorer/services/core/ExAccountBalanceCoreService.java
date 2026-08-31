@@ -135,7 +135,7 @@ public class ExAccountBalanceCoreService {
 			return cb.and(predicates.toArray(new Predicate[0]));
 		};
 		PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-				direction != null ? Sort.by(direction, "balance") : Sort.by("balance"));
+				PaginationUtil.stableSort(direction, "balance", "address", "tokenAddress"));
 		return addressBalanceCoreRepository.findAll(spec, pageable);
 	}
 
@@ -202,7 +202,7 @@ public class ExAccountBalanceCoreService {
 			return cb.and(predicates.toArray(new Predicate[0]));
 		};
 		PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-				direction != null ? Sort.by(direction, "balance") : Sort.by("balance"));
+				PaginationUtil.stableSort(direction, "balance", "address", "tokenAddress"));
 		return addressBalanceCoreRepository.findAll(spec, pageable);
 	}
 

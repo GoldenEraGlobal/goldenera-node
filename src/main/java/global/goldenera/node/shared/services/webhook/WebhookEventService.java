@@ -32,12 +32,17 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookEventDtoV1;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalQuery;
+import global.goldenera.node.core.storage.blockchain.journal.LifecycleJournalStream;
+import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.services.core.WebhookCoreService.WebhookEventFilter;
+import global.goldenera.node.shared.services.core.WebhookCoreService.UniversalWebhookActivationBoundary;
 import global.goldenera.node.shared.utils.WebhookValidator;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -53,6 +58,9 @@ public class WebhookEventService {
 	private static final int MAX_WEBHOOK_EVENTS_PER_REQUEST = 5000;
 
 	WebhookCoreService webhookCoreService;
+	DurableUniversalWebhookStore durableStore;
+	LifecycleJournalQuery lifecycleJournal;
+	ChainQuery chainQuery;
 
 	@Transactional(rollbackFor = Exception.class)
 	public int subscribe(
@@ -74,7 +82,23 @@ public class WebhookEventService {
 		if (!webhook.getCreatedByApiKey().equals(apiKey)) {
 			throw new GEValidationException("You do not have permission to create webhook events for this webhook");
 		}
-		return webhookCoreService.createBulkFilters(webhook, filters);
+		if (webhook.getType() == WebhookType.BRIDGE) {
+			throw new GEValidationException("BRIDGE webhook subscriptions are managed by the bridge API");
+		}
+		long sourceEventId = durableStore.sourceCursor(webhook.getType());
+		UniversalWebhookActivationBoundary activation;
+		if (webhook.getType() == WebhookType.BLOCKCHAIN) {
+			var canonicalHead = lifecycleJournal.head(LifecycleJournalStream.CANONICAL);
+			var mempoolHead = lifecycleJournal.head(LifecycleJournalStream.MEMPOOL);
+			activation = new UniversalWebhookActivationBoundary(
+					sourceEventId,
+					canonicalHead.epoch(), canonicalHead.sequence(),
+					mempoolHead.epoch(), mempoolHead.sequence(), -1L);
+		} else {
+			activation = new UniversalWebhookActivationBoundary(
+					sourceEventId, null, 0L, null, 0L, chainQuery.getLatestBlockHeight().orElse(-1L));
+		}
+		return webhookCoreService.createBulkFilters(webhook, filters, activation);
 	}
 
 	@Transactional(rollbackFor = Exception.class)
@@ -96,6 +120,9 @@ public class WebhookEventService {
 		Webhook webhook = webhookCoreService.getById(webhookId);
 		if (!webhook.getCreatedByApiKey().equals(apiKey)) {
 			throw new GEValidationException("You do not have permission to delete webhook events for this webhook");
+		}
+		if (webhook.getType() == WebhookType.BRIDGE) {
+			throw new GEValidationException("BRIDGE webhook subscriptions are managed by the bridge API");
 		}
 		return webhookCoreService.deleteBulkFilters(webhook, filters);
 	}

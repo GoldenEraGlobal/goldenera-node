@@ -4,9 +4,9 @@ services:
   # ==============================================================================
   node:
     image: goldenera-node:local
-    container_name: goldenera_node_local
     restart: unless-stopped
     pull_policy: never
+    mem_limit: ${NODE_MEMORY_LIMIT_MB:-4096}m
 
     env_file:
       - .env
@@ -26,22 +26,19 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    cap_add:
+      - IPC_LOCK
     ulimits:
       memlock:
         soft: -1
         hard: -1
-    deploy:
-      resources:
-        reservations:
-          memory: 4G
-
   # ==============================================================================
   # DATABASE
   # ==============================================================================
   db:
     image: postgres:18.1-alpine
-    container_name: goldenera_db
     restart: unless-stopped
+    mem_limit: ${POSTGRESQL_MEMORY_LIMIT_MB:-1024}m
 
     env_file:
       - .env

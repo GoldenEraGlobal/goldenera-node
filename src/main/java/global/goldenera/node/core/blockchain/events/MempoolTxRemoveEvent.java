@@ -27,6 +27,7 @@ import static lombok.AccessLevel.PRIVATE;
 
 import org.springframework.context.ApplicationEvent;
 
+import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import lombok.Getter;
 import lombok.NonNull;
@@ -44,10 +45,18 @@ public class MempoolTxRemoveEvent extends ApplicationEvent {
 	@NonNull
 	RemoveReason reason;
 
+	Hash replacementTxHash;
+
 	public MempoolTxRemoveEvent(Object source, @NonNull MempoolEntry entry, @NonNull RemoveReason reason) {
+		this(source, entry, reason, null);
+	}
+
+	public MempoolTxRemoveEvent(Object source, @NonNull MempoolEntry entry, @NonNull RemoveReason reason,
+			Hash replacementTxHash) {
 		super(source);
 		this.reason = reason;
 		this.entry = entry;
+		this.replacementTxHash = replacementTxHash;
 	}
 
 	public static enum RemoveReason {

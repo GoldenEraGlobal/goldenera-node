@@ -123,7 +123,7 @@ public class ExTxCoreService {
                         return cb.and(predicates.toArray(new Predicate[0]));
                 };
                 PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-                                direction != null ? Sort.by(direction, "timestamp") : Sort.by("timestamp"));
+                                PaginationUtil.stableSort(direction, "timestamp", "blockHeight", "index", "hash"));
                 return exTxRepository.findAll(spec, pageable);
         }
 
@@ -186,7 +186,7 @@ public class ExTxCoreService {
                         return cb.and(predicates.toArray(new Predicate[0]));
                 };
                 PageRequest pageable = PageRequest.of(pageNumber, pageSize,
-                                direction != null ? Sort.by(direction, "timestamp") : Sort.by("timestamp"));
+                                PaginationUtil.stableSort(direction, "timestamp", "blockHeight", "index", "hash"));
                 return exTxRepository.findAll(spec, pageable);
         }
 

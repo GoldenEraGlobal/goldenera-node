@@ -25,24 +25,25 @@ package global.goldenera.node.shared.services.webhook;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-import org.apache.tuweni.bytes.Bytes;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookCreateInDtoV1;
 import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookUpdateInDtoV1;
-import global.goldenera.node.shared.components.AESGCMComponent;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.enums.ApiKeyPermission;
+import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.exceptions.GEFailedException;
+import global.goldenera.node.shared.exceptions.GEValidationException;
+import global.goldenera.node.shared.properties.GeneralProperties;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
-import global.goldenera.node.shared.utils.StringUtil;
 import global.goldenera.node.shared.utils.WebhookValidator;
 import global.goldenera.node.shared.utils.WebhookValidator.UrlData;
 import lombok.AllArgsConstructor;
@@ -52,21 +53,41 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 @Slf4j
 public class WebhookService {
 
 	private static final int DTO_VERSION = 1;
-	private static final int SECRET_KEY_LENGTH = 64;
-
-	AESGCMComponent aesGcmComponent;
 	WebhookCoreService webhookCoreService;
+	GeneralProperties generalProperties;
+	ObjectProvider<UniversalWebhookActivationService> activationService;
+
+	@Autowired
+	public WebhookService(
+			WebhookCoreService webhookCoreService,
+			GeneralProperties generalProperties,
+			ObjectProvider<UniversalWebhookActivationService> activationService) {
+		this.webhookCoreService = webhookCoreService;
+		this.generalProperties = generalProperties;
+		this.activationService = activationService;
+	}
+
+	WebhookService(WebhookCoreService webhookCoreService, GeneralProperties generalProperties) {
+		this.webhookCoreService = webhookCoreService;
+		this.generalProperties = generalProperties;
+		this.activationService = null;
+	}
 
 	@Transactional(rollbackFor = Exception.class)
 	public CreatedWebhook createWebhook(
 			@NonNull ApiKey apiKey,
 			@NonNull WebhookCreateInDtoV1 payload) {
+		if (payload.getType() == WebhookType.BRIDGE) {
+			throw new GEValidationException("BRIDGE webhook destinations are managed by the bridge API");
+		}
+		if (payload.getType() == WebhookType.EXPLORER && !generalProperties.isExplorerEnable()) {
+			throw new GEValidationException("Explorer webhooks require ge.general.explorer-enable=true");
+		}
 		String label = WebhookValidator.label(payload.getLabel());
 		String description = WebhookValidator.description(payload.getDescription());
 		UrlData urlData = WebhookValidator.url(payload.getUrl());
@@ -92,10 +113,10 @@ public class WebhookService {
 		if (apiKey.getMaxWebhooks() != null && count >= apiKey.getMaxWebhooks()) {
 			throw new GEFailedException("You have reached the maximum number of webhooks");
 		}
-
-		String secret = StringUtil.generateSafeString(SECRET_KEY_LENGTH);
-		Bytes secretBytes = Bytes.wrap(secret.getBytes(StandardCharsets.UTF_8));
-		Bytes encryptedSecret = aesGcmComponent.encrypt(secretBytes);
+		if (apiKey.getWebhookSecretKey() == null) {
+			throw new GEFailedException(
+					"This legacy API key has no webhook signing secret; create a new API key before creating webhooks");
+		}
 
 		Webhook webhook = webhookCoreService.create(new Webhook(
 				payload.getType(),
@@ -103,12 +124,11 @@ public class WebhookService {
 				label,
 				description,
 				urlData.getUrl(),
-				encryptedSecret,
 				apiKey,
 				queryParams,
 				headers));
 
-		return new CreatedWebhook(webhook, secret);
+		return new CreatedWebhook(webhook);
 	}
 
 	@Transactional(rollbackFor = Exception.class)
@@ -134,6 +154,7 @@ public class WebhookService {
 		}
 
 		Webhook webhook = webhookCoreService.getById(id);
+		requirePublicWebhook(webhook);
 		if (!webhook.getCreatedByApiKey().equals(apiKey)) {
 			throw new GEFailedException("You do not have permission to update this webhook");
 		}
@@ -155,6 +176,7 @@ public class WebhookService {
 		}
 
 		Webhook webhook = webhookCoreService.getById(id);
+		requirePublicWebhook(webhook);
 		if (!webhook.getCreatedByApiKey().equals(apiKey)) {
 			throw new GEFailedException("You do not have permission to delete this webhook");
 		}
@@ -171,11 +193,23 @@ public class WebhookService {
 		}
 
 		Webhook webhook = webhookCoreService.getById(id);
+		requirePublicWebhook(webhook);
 		if (!webhook.getCreatedByApiKey().equals(apiKey)) {
 			throw new GEFailedException("You do not have permission to update the enabled status of this webhook");
 		}
 		webhook.setEnabled(enabled);
-		return webhookCoreService.update(webhook);
+		Webhook updated = webhookCoreService.update(webhook);
+		UniversalWebhookActivationService activator = activationService == null ? null : activationService.getIfAvailable();
+		if (enabled && activator != null) {
+			activator.resetAfterReEnable(updated);
+		}
+		return updated;
+	}
+
+	private void requirePublicWebhook(Webhook webhook) {
+		if (webhook.getType() == WebhookType.BRIDGE) {
+			throw new GEValidationException("BRIDGE webhook destinations are managed by the bridge API");
+		}
 	}
 
 	@AllArgsConstructor
@@ -184,7 +218,6 @@ public class WebhookService {
 	public static class CreatedWebhook {
 		@NonNull
 		Webhook webhook;
-		@NonNull
-		String secretKey;
 	}
+
 }

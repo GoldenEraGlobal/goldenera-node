@@ -1,0 +1,61 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.core.blockchain.time;
+
+import java.time.Instant;
+import java.util.Objects;
+import java.util.Optional;
+
+import global.goldenera.cryptoj.common.BlockHeader;
+
+/** Consensus-facing source and policy for block timestamps. */
+public interface ChainClock {
+
+	Instant nextBlockTimestamp(BlockHeader parent);
+
+	/**
+	 * Earliest timestamp that the next block may use for time-dependent admission
+	 * checks. Deterministic clocks remain on chain time instead of leaking the
+	 * host wall clock into sandbox consensus behavior.
+	 */
+	default Instant earliestNextBlockTimestamp(BlockHeader parent) {
+		return nextBlockTimestamp(parent);
+	}
+
+	/**
+	 * Reserves the timestamp for exactly one assembly attempt. Production clocks
+	 * reject explicit scheduling and preserve their normal wall-clock selection.
+	 */
+	default BlockTimestampReservation reserveNextBlockTimestamp(
+			BlockHeader parent,
+			Optional<Instant> requestedTimestamp) {
+		Objects.requireNonNull(requestedTimestamp, "requestedTimestamp");
+		if (requestedTimestamp.isPresent()) {
+			throw new IllegalArgumentException("Explicit block timestamps require a deterministic sandbox clock");
+		}
+		return new BlockTimestampReservation(parent, nextBlockTimestamp(parent));
+	}
+
+	void validateBlockTimestamp(BlockHeader child, BlockHeader parent, long productionAllowedFutureDriftMs);
+}

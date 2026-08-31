@@ -43,6 +43,10 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class CheckpointRegistry {
 
+	public boolean hasConfiguredCheckpoints() {
+		return !Constants.getSettings().blockCheckpoints().isEmpty();
+	}
+
 	public boolean isCheckpoint(long height) {
 		return Constants.getSettings().blockCheckpoints().containsKey(height);
 	}

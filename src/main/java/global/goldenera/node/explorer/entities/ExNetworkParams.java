@@ -107,6 +107,32 @@ public class ExNetworkParams implements NetworkParamsState {
 	@Column(name = "current_validator_count", updatable = true, nullable = false)
 	long currentValidatorCount;
 
+	@Column(name = "validator_mining_window_blocks", updatable = true)
+	Long validatorMiningWindowBlocksValue;
+
+	@Column(name = "mining_reward_vesting_blocks", updatable = true)
+	Long miningRewardVestingBlocksValue;
+
+	@Column(name = "current_unlimited_validator_count", updatable = true)
+	Long currentUnlimitedValidatorCountValue;
+
+	@Override
+	public long getValidatorMiningWindowBlocks() {
+		return validatorMiningWindowBlocksValue != null ? validatorMiningWindowBlocksValue : 0;
+	}
+
+	@Override
+	public long getMiningRewardVestingBlocks() {
+		return miningRewardVestingBlocksValue != null ? miningRewardVestingBlocksValue : 0;
+	}
+
+	@Override
+	public long getCurrentUnlimitedValidatorCount() {
+		return currentUnlimitedValidatorCountValue != null
+				? currentUnlimitedValidatorCountValue
+				: currentValidatorCount;
+	}
+
 	@Column(name = "updated_at_block_height", updatable = true, nullable = false)
 	long updatedAtBlockHeight;
 

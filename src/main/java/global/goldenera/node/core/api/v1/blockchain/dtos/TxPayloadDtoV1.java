@@ -33,7 +33,9 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.BipVoteType;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.TxPayloadType;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
 import io.swagger.v3.oas.annotations.media.DiscriminatorMapping;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.AllArgsConstructor;
@@ -54,6 +56,7 @@ import lombok.NoArgsConstructor;
         @JsonSubTypes.Type(value = TxPayloadDtoV1.AuthorityRemove.class, name = "BIP_AUTHORITY_REMOVE"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.ValidatorAdd.class, name = "BIP_VALIDATOR_ADD"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.ValidatorRemove.class, name = "BIP_VALIDATOR_REMOVE"),
+        @JsonSubTypes.Type(value = TxPayloadDtoV1.ValidatorMiningPolicySet.class, name = "BIP_VALIDATOR_MINING_POLICY_SET"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.NetworkParamsSet.class, name = "BIP_NETWORK_PARAMS_SET"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenBurn.class, name = "BIP_TOKEN_BURN"),
         @JsonSubTypes.Type(value = TxPayloadDtoV1.TokenCreate.class, name = "BIP_TOKEN_CREATE"),
@@ -68,6 +71,7 @@ import lombok.NoArgsConstructor;
         @DiscriminatorMapping(value = "BIP_AUTHORITY_REMOVE", schema = TxPayloadDtoV1.AuthorityRemove.class),
         @DiscriminatorMapping(value = "BIP_VALIDATOR_ADD", schema = TxPayloadDtoV1.ValidatorAdd.class),
         @DiscriminatorMapping(value = "BIP_VALIDATOR_REMOVE", schema = TxPayloadDtoV1.ValidatorRemove.class),
+        @DiscriminatorMapping(value = "BIP_VALIDATOR_MINING_POLICY_SET", schema = TxPayloadDtoV1.ValidatorMiningPolicySet.class),
         @DiscriminatorMapping(value = "BIP_NETWORK_PARAMS_SET", schema = TxPayloadDtoV1.NetworkParamsSet.class),
         @DiscriminatorMapping(value = "BIP_TOKEN_BURN", schema = TxPayloadDtoV1.TokenBurn.class),
         @DiscriminatorMapping(value = "BIP_TOKEN_CREATE", schema = TxPayloadDtoV1.TokenCreate.class),
@@ -82,12 +86,16 @@ public abstract sealed class TxPayloadDtoV1 permits
         TxPayloadDtoV1.AuthorityRemove,
         TxPayloadDtoV1.ValidatorAdd,
         TxPayloadDtoV1.ValidatorRemove,
+        TxPayloadDtoV1.ValidatorMiningPolicySet,
         TxPayloadDtoV1.NetworkParamsSet,
         TxPayloadDtoV1.TokenBurn,
         TxPayloadDtoV1.TokenCreate,
         TxPayloadDtoV1.TokenMint,
         TxPayloadDtoV1.TokenUpdate,
         TxPayloadDtoV1.Vote {
+
+	@Schema(description = "Version of the concrete payload schema", requiredMode = Schema.RequiredMode.REQUIRED)
+	TxPayloadVersion payloadVersion;
 
     @Schema(description = "Payload type discriminator", requiredMode = Schema.RequiredMode.REQUIRED, type = "string", example = "BIP_ADDRESS_ALIAS_ADD")
     public abstract TxPayloadType getPayloadType();
@@ -162,11 +170,30 @@ public abstract sealed class TxPayloadDtoV1 permits
     @Schema(name = "ValidatorAdd", description = "Add validator payload")
     public static final class ValidatorAdd extends TxPayloadDtoV1 {
         Address address;
+        MiningLimitMode miningLimitMode;
+        Long maxMiningShareBps;
 
         @Override
         @JsonProperty("payloadType")
         public TxPayloadType getPayloadType() {
             return TxPayloadType.BIP_VALIDATOR_ADD;
+        }
+    }
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @EqualsAndHashCode(callSuper = false)
+    @Schema(name = "ValidatorMiningPolicySet", description = "Set validator mining policy payload")
+    public static final class ValidatorMiningPolicySet extends TxPayloadDtoV1 {
+        Address validatorAddress;
+        MiningLimitMode miningLimitMode;
+        long maxMiningShareBps;
+
+        @Override
+        @JsonProperty("payloadType")
+        public TxPayloadType getPayloadType() {
+            return TxPayloadType.BIP_VALIDATOR_MINING_POLICY_SET;
         }
     }
 
@@ -198,6 +225,8 @@ public abstract sealed class TxPayloadDtoV1 permits
         BigInteger minDifficulty;
         Wei minTxBaseFee;
         Wei minTxByteFee;
+	        Long validatorMiningWindowBlocks;
+		Long miningRewardVestingBlocks;
 
         @Override
         @JsonProperty("payloadType")

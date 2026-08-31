@@ -29,7 +29,9 @@ import java.time.Instant;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
+import global.goldenera.node.shared.enums.MiningPolicySource;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -50,5 +52,15 @@ public class ValidatorDtoV1 {
     Hash originTxHash;
     long createdAtBlockHeight;
     Instant createdAtTimestamp;
+    MiningLimitMode miningLimitMode;
+    MiningPolicySource miningPolicySource;
+    long maxMiningShareBps;
+    Long maxBlocksInCurrentWindow;
+    Long blocksMinedInCurrentWindow;
+    Long remainingBlocksInCurrentWindow;
+    Boolean miningEligible;
+    Hash policyUpdatedByTxHash;
+    Long policyUpdatedAtBlockHeight;
+    Instant policyUpdatedAtTimestamp;
 
 }

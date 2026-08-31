@@ -59,7 +59,8 @@ public class ApiKeyMapper {
     public ApiKeyDtoV1.CreatedApiKeyDtoV1 map(@NonNull CreatedApiKey in) {
         return new ApiKeyDtoV1.CreatedApiKeyDtoV1(
                 map(in.getApiKey()),
-                in.getSecretKey());
+                in.getSecretKey(),
+                in.getWebhookSecretKey());
     }
 
     public ApiKeyDtoV1_Page map(

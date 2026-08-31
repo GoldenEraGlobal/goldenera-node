@@ -27,6 +27,8 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -48,16 +50,29 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
-@AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ApiKeyAuthFilter extends OncePerRequestFilter {
+	static final int MAX_CREDENTIAL_LENGTH = 512;
 
 	ApiKeyCoreService apiKeyCoreService;
 	HmacComponent hmacComponent;
 	ObjectMapper objectMapper;
+	Clock clock;
+
+	public ApiKeyAuthFilter(ApiKeyCoreService apiKeyCoreService, HmacComponent hmacComponent,
+			ObjectMapper objectMapper) {
+		this(apiKeyCoreService, hmacComponent, objectMapper, Clock.systemUTC());
+	}
+
+	ApiKeyAuthFilter(ApiKeyCoreService apiKeyCoreService, HmacComponent hmacComponent,
+			ObjectMapper objectMapper, Clock clock) {
+		this.apiKeyCoreService = apiKeyCoreService;
+		this.hmacComponent = hmacComponent;
+		this.objectMapper = objectMapper;
+		this.clock = clock;
+	}
 
 	@Override
 	protected void doFilterInternal(HttpServletRequest request,
@@ -70,6 +85,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 		}
 		if (apiKeyHeader == null) {
 			filterChain.doFilter(request, response);
+			return;
+		}
+		if (apiKeyHeader.length() > MAX_CREDENTIAL_LENGTH) {
+			sendError(response, "Invalid API Key format");
 			return;
 		}
 		apiKeyHeader = apiKeyHeader.trim().replace("Bearer ", "");
@@ -113,41 +132,41 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 			return;
 		}
 
-		Optional<ApiKey> apiKeyOpt = apiKeyCoreService.getByKeyPrefixOptional(prefix);
-		if (apiKeyOpt.isEmpty()) {
-			sendError(response, "Unknown API Key");
+		String finalSecret = secret;
+		AuthenticationAttempt attempt = apiKeyCoreService.withAuthenticationKey(prefix,
+				apiKey -> authenticate(apiKey, finalSecret));
+		if (attempt.error() != null) {
+			sendError(response, attempt.error());
 			return;
 		}
 
-		ApiKey apiKey = apiKeyOpt.get();
+		SecurityContextHolder.getContext().setAuthentication(attempt.authentication());
+		filterChain.doFilter(request, response);
+	}
+
+	private AuthenticationAttempt authenticate(Optional<ApiKey> apiKeyOptional, String secret) {
+		if (apiKeyOptional.isEmpty()) {
+			return AuthenticationAttempt.failure("Unknown API Key");
+		}
+
+		ApiKey apiKey = apiKeyOptional.get();
 		if (!apiKey.isEnabled()) {
-			sendError(response, "API Key is disabled");
-			return;
+			return AuthenticationAttempt.failure("API Key is disabled");
 		}
-
-		if (apiKey.isExpired()) {
-			sendError(response, "API Key is expired");
-			return;
+		if (apiKey.getExpiresAt() != null && Instant.now(clock).isAfter(apiKey.getExpiresAt())) {
+			return AuthenticationAttempt.failure("API Key is expired");
 		}
 
 		Bytes secretBytes = Bytes.wrap(secret.getBytes(StandardCharsets.UTF_8));
 		Bytes hashedSecret = hmacComponent.hash(secretBytes);
 		if (!hmacComponent.secureCompare(hashedSecret, apiKey.getSecretKey())) {
-			sendError(response, "Invalid API Key");
-			return;
+			return AuthenticationAttempt.failure("Invalid API Key");
 		}
 
 		List<SimpleGrantedAuthority> authorities = apiKey.getPermissions().stream()
 				.map(permission -> new SimpleGrantedAuthority(permission.getAuthority()))
 				.collect(Collectors.toList());
-
-		UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-				apiKey,
-				null,
-				authorities);
-
-		SecurityContextHolder.getContext().setAuthentication(authentication);
-		filterChain.doFilter(request, response);
+		return AuthenticationAttempt.success(new UsernamePasswordAuthenticationToken(apiKey, null, authorities));
 	}
 
 	private void sendError(HttpServletResponse response, String message) throws IOException {
@@ -160,5 +179,16 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 				"message", message);
 
 		response.getWriter().write(objectMapper.writeValueAsString(errorResponse));
+	}
+
+	private record AuthenticationAttempt(UsernamePasswordAuthenticationToken authentication, String error) {
+
+		private static AuthenticationAttempt success(UsernamePasswordAuthenticationToken authentication) {
+			return new AuthenticationAttempt(authentication, null);
+		}
+
+		private static AuthenticationAttempt failure(String error) {
+			return new AuthenticationAttempt(null, error);
+		}
 	}
 }

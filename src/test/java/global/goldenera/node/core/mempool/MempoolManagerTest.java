@@ -26,18 +26,22 @@ package global.goldenera.node.core.mempool;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.ALICE;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.transfer;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.math.BigInteger;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +54,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
@@ -57,6 +62,7 @@ import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.mempool.MempoolManager.MempoolAddResult;
+import global.goldenera.node.core.mempool.MempoolManager.MempoolReasonCode;
 import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.mempool.MempoolValidator.ValidationStatus;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
@@ -70,15 +76,17 @@ class MempoolManagerTest {
 	MempoolValidator validator;
 	MempoolManager manager;
 	ChainHeadStateCache chainHead;
+	WorldState worldState;
 
 	@BeforeEach
 	void setUp() {
 		SimpleMeterRegistry registry = new SimpleMeterRegistry();
 		MempoolProperties properties = MempoolTestFixtures.properties(100);
 		chainHead = mock(ChainHeadStateCache.class);
-		WorldState worldState = mock(WorldState.class);
+		worldState = mock(WorldState.class);
 		AccountBalanceState confirmedBalance = mock(AccountBalanceState.class);
 		when(confirmedBalance.getBalance()).thenReturn(Wei.valueOf(Long.MAX_VALUE));
+		when(confirmedBalance.getSpendableBalance()).thenReturn(Wei.valueOf(Long.MAX_VALUE));
 		when(worldState.getBalance(any(Address.class), any(Address.class))).thenReturn(confirmedBalance);
 		when(chainHead.getHeadState()).thenReturn(worldState);
 		store = new MempoolStore(registry, properties, chainHead,
@@ -152,7 +160,7 @@ class MempoolManagerTest {
 	}
 
 	@Test
-	void disconnectedBlockHandlerDelegatesThroughConfiguredExecutor() {
+	void disconnectedBlockHandlerRevalidatesTransactionsBeforeReAdmission() {
 		MempoolStore mockedStore = mock(MempoolStore.class);
 		MempoolManager eventManager = new MempoolManager(new SimpleMeterRegistry(), mockedStore, validator,
 				MempoolTestFixtures.properties(100), mock(ChainHeadStateCache.class),
@@ -162,10 +170,28 @@ class MempoolManagerTest {
 		when(block.getHeight()).thenReturn(12L);
 		List<Tx> disconnectedTxs = List.of(transfer(9, ALICE, 1, 10).getTx());
 		when(block.getTxs()).thenReturn(disconnectedTxs);
+		when(validator.validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.REORG), eq(false)))
+				.thenReturn(MempoolValidationResult.stateInvalid("losing branch state"));
 
 		eventManager.onBlockDisconnected(new BlockDisconnectedEvent(this, block));
 
-		verify(mockedStore).addTransactionsBack(block.getTxs(), block);
+		verify(validator).validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.REORG), eq(false));
+		verifyNoInteractions(mockedStore);
+	}
+
+	@Test
+	void reorgCompletionImmediatelyRevalidatesTheFinalMempoolProjection() {
+		MempoolEntry invalidated = transfer(9, ALICE, 1, 10);
+		store.addTransaction(invalidated, 0, MempoolTxAddEvent.AddReason.NEW);
+		when(validator.revalidateAgainstChain(invalidated))
+				.thenReturn(MempoolValidationResult.stateInvalid("losing branch balance rolled back"));
+
+		manager.onBlockReorg(mock(BlockReorgEvent.class));
+
+		assertThat(store.getCount()).isZero();
+		verify(validator).revalidateAgainstChain(invalidated);
 	}
 
 	@Test
@@ -239,6 +265,7 @@ class MempoolManagerTest {
 		WorldState worldState = mock(WorldState.class);
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(90));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(90));
 		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
 		when(chainHead.getHeadState()).thenReturn(worldState);
 
@@ -246,6 +273,41 @@ class MempoolManagerTest {
 
 		assertThat(store.getAllTxs()).containsExactlyInAnyOrder(one, two);
 		assertThat(store.getTxByHash(three.getHash())).isEmpty();
+	}
+
+	@Test
+	void revalidationUsesProjectedNativeBalanceWithoutReadingConfirmedBalance() {
+		MempoolEntry entry = nativeTransfer(43, ALICE, 1, 40);
+		store.addTransaction(entry, 0, MempoolTxAddEvent.AddReason.NEW);
+		MempoolStore.AdmissionConstraints constraints = new MempoolStore.AdmissionConstraints(
+				Wei.valueOf(100), Map.of(), null);
+		when(validator.revalidateAgainstChain(entry)).thenReturn(MempoolValidationResult.valid(0, constraints));
+
+		manager.revalidateMempool();
+
+		verify(worldState, never()).getBalance(ALICE, Address.NATIVE_TOKEN);
+		assertThat(store.getTxByHash(entry.getHash())).contains(entry);
+	}
+
+	@Test
+	void revalidationDoesNotMaskBalanceReconciliationFailuresAsUnavailableChainState() {
+		MempoolStore failingStore = mock(MempoolStore.class);
+		MempoolEntry entry = nativeTransfer(44, ALICE, 1, 40);
+		MempoolStore.AdmissionConstraints constraints = new MempoolStore.AdmissionConstraints(
+				Wei.valueOf(100), Map.of(), null);
+		when(failingStore.getCount()).thenReturn(1L);
+		when(failingStore.getAllTxs()).thenReturn(List.of(entry));
+		when(failingStore.getTxsBySender(ALICE)).thenReturn(List.of(entry));
+		when(validator.revalidateAgainstChain(entry)).thenReturn(MempoolValidationResult.valid(0, constraints));
+		doThrow(new NullPointerException("reconciliation bug"))
+				.when(failingStore).reconcileSenderBalances(anyMap());
+		MempoolManager failingManager = new MempoolManager(
+				new SimpleMeterRegistry(), failingStore, validator, MempoolTestFixtures.properties(100), chainHead,
+				Runnable::run, mock(ThreadPoolTaskScheduler.class));
+
+		assertThatThrownBy(failingManager::revalidateMempool)
+				.isInstanceOf(NullPointerException.class)
+				.hasMessage("reconciliation bug");
 	}
 
 	@ParameterizedTest
@@ -260,6 +322,20 @@ class MempoolManagerTest {
 	})
 	void validationStatusMapsToStablePublicResult(ValidationStatus status, MempoolAddResult expected) {
 		assertThat(MempoolAddResult.fromValidation(status)).isEqualTo(expected);
+	}
+
+	@Test
+	void detailedGovernanceReasonSurvivesThePublicMempoolResult() {
+		MempoolEntry candidate = transfer(99, ALICE, 1, 10);
+		when(validator.validateAgainstChainAndMempool(any(MempoolEntry.class),
+				eq(MempoolTxAddEvent.AddReason.NEW), eq(false)))
+				.thenReturn(MempoolValidationResult.stateInvalid(
+						MempoolReasonCode.LAST_UNLIMITED_REQUIRED, "not exposed as a contract"));
+
+		var result = manager.addTx(candidate.getTx());
+
+		assertThat(result.status()).isEqualTo(MempoolAddResult.REJECTED_STATE);
+		assertThat(result.reasonCode()).isEqualTo(MempoolReasonCode.LAST_UNLIMITED_REQUIRED);
 	}
 
 	private MempoolEntry nativeTransfer(int id, Address sender, long nonce, long fee) {

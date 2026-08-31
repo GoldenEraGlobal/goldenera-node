@@ -25,6 +25,8 @@ package global.goldenera.node.explorer.services.indexer.business;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.util.List;
+
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -78,6 +80,57 @@ public class ExIndexerService {
 
 	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
 	public void handleBlockConnected(BlockConnectedEvent event) {
+		handleBlockConnectedInCurrentTransaction(event, true);
+	}
+
+	/** Commits a canonical archive replay batch atomically instead of once per block. */
+	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+	public void handleBlockConnectedBatch(List<BlockConnectedEvent> events) {
+		if (events == null || events.isEmpty()) {
+			return;
+		}
+		if (isStrictlyContinuousBatch(events)) {
+			for (BlockConnectedEvent event : events) {
+				Timer.Sample sample = Timer.start(registry);
+				processBlock(event.getBlock(), event, false, false);
+				sample.stop(registry.timer("explorer.block.index_time"));
+			}
+			exStatusCoreService.updateStatus(events.getLast().getBlock().getHeader());
+			registry.counter("explorer.batch.fast_path.blocks").increment(events.size());
+			registry.counter("explorer.batch.fast_path.batches").increment();
+			return;
+		}
+		for (BlockConnectedEvent event : events) {
+			handleBlockConnectedInCurrentTransaction(event, false);
+		}
+	}
+
+	private boolean isStrictlyContinuousBatch(List<BlockConnectedEvent> events) {
+		Block first = events.getFirst().getBlock();
+		ExStatus status = exStatusCoreService.getStatus().orElse(null);
+		if (first.getHeight() == 0L) {
+			if (status != null) {
+				return false;
+			}
+		} else if (status == null
+				|| first.getHeight() != status.getSyncedBlockHeight() + 1L
+				|| !first.getHeader().getPreviousHash().equals(status.getSyncedBlockHash())) {
+			return false;
+		}
+
+		Block previous = first;
+		for (int index = 1; index < events.size(); index++) {
+			Block current = events.get(index).getBlock();
+			if (current.getHeight() != previous.getHeight() + 1L
+					|| !current.getHeader().getPreviousHash().equals(previous.getHash())) {
+				return false;
+			}
+			previous = current;
+		}
+		return true;
+	}
+
+	private void handleBlockConnectedInCurrentTransaction(BlockConnectedEvent event, boolean logBlockProgress) {
 		Timer.Sample sample = Timer.start(registry);
 		Block block = event.getBlock();
 
@@ -100,10 +153,11 @@ public class ExIndexerService {
 					ExStatus status = exStatusCoreService.getStatusOrThrow();
 					Hash oldHash = status.getSyncedBlockHash();
 					Long oldHeight = status.getSyncedBlockHeight();
+					Block orphanBlock = chainQueryService.getStoredBlockByHashOrThrow(oldHash).getBlock();
 					exRevertService.revertBlock(oldHash, oldHeight);
 					// Publish reorg event after successful revert
 					eventPublisher.publishEvent(new ExBlockReorgEvent(
-							this, oldHeight, oldHash, block.getHeight(), block.getHash()));
+							this, oldHeight, oldHash, block.getHeight(), block.getHash(), orphanBlock));
 					continue;
 				} catch (Exception ex) {
 					log.error("Automatic Revert Failed! Explorer is stuck.", ex);
@@ -112,11 +166,15 @@ public class ExIndexerService {
 			}
 		}
 
-		processBlock(block, event);
+		processBlock(block, event, logBlockProgress, true);
 		sample.stop(registry.timer("explorer.block.index_time"));
 	}
 
-	private void processBlock(Block block, BlockConnectedEvent event) {
+	private void processBlock(
+			Block block,
+			BlockConnectedEvent event,
+			boolean logBlockProgress,
+			boolean updateStatus) {
 		long start = System.currentTimeMillis();
 		if (block.getHeight() % 10000 == 0) {
 			postgrePartitionService.ensurePartitionsExist(block.getHeight());
@@ -136,10 +194,13 @@ public class ExIndexerService {
 					event.getValidatorsToRemove());
 
 			exBlockDataCoreService.insertBlockHeader(block, event.getCumulativeDifficulty(),
-					event.getMinerTotalFees().toBigInteger(), event.getMinerActualRewardPaid().toBigInteger());
+					event.getMinerTotalFees().toBigInteger(),
+					event.getMinerActualRewardPaid().subtract(event.getMinerTotalFees()).toBigInteger());
 			exBlockDataCoreService.insertTransactions(block.getTxs(), block.getHeight(), block.getHash());
 			exBlockDataCoreService.insertTransfers(txToTransferMapper.map(event));
-			exStatusCoreService.updateStatus(block.getHeader());
+				if (updateStatus) {
+					exStatusCoreService.updateStatus(block.getHeader());
+				}
 
 			// Publish explorer block connected event for webhook notifications
 			eventPublisher.publishEvent(new ExBlockConnectedEvent(
@@ -147,8 +208,9 @@ public class ExIndexerService {
 					block,
 					event.getCumulativeDifficulty(),
 					event.getMinerTotalFees(),
-					event.getMinerActualRewardPaid(),
-					event.getEvents()));
+					 event.getMinerActualRewardPaid(),
+					event.getEvents(),
+					event.getConnectedSource()));
 
 			long elapsed = System.currentTimeMillis() - start;
 			int txCount = block.getTxs().size();
@@ -157,9 +219,9 @@ public class ExIndexerService {
 			// - Log every 100 blocks with summary
 			// - Log individual blocks only if they have transactions or are slow (>500ms)
 			// - Use DEBUG for routine empty blocks
-			if (block.getHeight() % 100 == 0) {
+			if (logBlockProgress && block.getHeight() % 100 == 0) {
 				log.info("Explorer indexed to block #{} in {} ms", block.getHeight(), elapsed);
-			} else if (txCount > 0 || elapsed > 500) {
+			} else if (logBlockProgress && (txCount > 0 || elapsed > 500)) {
 				log.info("Indexed block #{} ({} txs) in {} ms", block.getHeight(), txCount, elapsed);
 			} else {
 				log.debug("Indexed block #{} ({}) in {} ms", block.getHeight(), txCount, elapsed);
@@ -174,7 +236,17 @@ public class ExIndexerService {
 	@Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
 	public void handleBlockDisconnected(BlockDisconnectedEvent event) {
 		checkRevertContinuity(event.getBlock());
-		exRevertService.revertBlock(event.getBlock().getHash(), event.getBlock().getHeight());
+		Block orphanBlock = chainQueryService.getStoredBlockByHash(event.getBlock().getHash())
+				.map(StoredBlock::getBlock)
+				.orElse(event.getBlock());
+		exRevertService.revertBlock(orphanBlock.getHash(), orphanBlock.getHeight());
+		eventPublisher.publishEvent(new ExBlockReorgEvent(
+				this,
+				orphanBlock.getHeight(),
+				orphanBlock.getHash(),
+				orphanBlock.getHeight() - 1L,
+				orphanBlock.getHeader().getPreviousHash(),
+				orphanBlock));
 	}
 
 	private void checkContinuity(Block block) throws ChainSplitException, AlreadyIndexedException {
@@ -270,7 +342,7 @@ public class ExIndexerService {
 						.orElseThrow(() -> new GEFailedException("Missing block in chain query: " + currentHeight));
 
 				BlockConnectedEvent event = eventReconstructionService.reconstructEvent(storedBlock);
-				processBlock(storedBlock.getBlock(), event);
+					processBlock(storedBlock.getBlock(), event, true, true);
 			} catch (Exception e) {
 				throw new GEFailedException("Failed to heal gap at block " + h, e);
 			}

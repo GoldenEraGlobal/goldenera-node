@@ -60,6 +60,9 @@ public class NetworkParamsStateDtoV1 {
     Wei minTxByteFee;
     long currentAuthorityCount;
     long currentValidatorCount;
+	    Long validatorMiningWindowBlocks;
+	Long miningRewardVestingBlocks;
+    long currentUnlimitedValidatorCount;
     Hash updatedByTxHash;
     long updatedAtBlockHeight;
     Instant updatedAtTimestamp;

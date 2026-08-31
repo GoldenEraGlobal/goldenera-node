@@ -61,13 +61,15 @@ public class ExIndexerAccountCoreService {
 	public void bulkUpsertBalances(List<BalanceKey> keys, Map<BalanceKey, StateDiff<AccountBalanceState>> diffs) {
 		String sql = """
 				INSERT INTO explorer_account_balance (
-				    address, token_address, balance,
+				    address, token_address, balance, locked_mining_reward, pending_mining_reward_cancellation,
 				    created_at_block_height, created_at_timestamp,
 				    updated_at_block_height, updated_at_timestamp,
 				    account_balance_version
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				ON CONFLICT (address, token_address) DO UPDATE SET
 				    balance = EXCLUDED.balance,
+				    locked_mining_reward = EXCLUDED.locked_mining_reward,
+				    pending_mining_reward_cancellation = EXCLUDED.pending_mining_reward_cancellation,
 				    updated_at_block_height = EXCLUDED.updated_at_block_height,
 				    updated_at_timestamp = EXCLUDED.updated_at_timestamp,
 					account_balance_version = EXCLUDED.account_balance_version
@@ -77,18 +79,20 @@ public class ExIndexerAccountCoreService {
 			@Override
 			public void setValues(PreparedStatement ps, int i) throws SQLException {
 				BalanceKey key = keys.get(i);
-				AccountBalanceState state = diffs.get(key).getNewValue();
+					AccountBalanceState state = diffs.get(key).getNewValue();
 
-				ps.setBytes(1, key.getAddress().toArray());
-				ps.setBytes(2, key.getTokenAddress().toArray());
-				ps.setBigDecimal(3, new BigDecimal(state.getBalance().toBigInteger()));
+					ps.setBytes(1, key.getAddress().toArray());
+					ps.setBytes(2, key.getTokenAddress().toArray());
+					ps.setBigDecimal(3, new BigDecimal(state.getBalance().toBigInteger()));
+					ps.setBigDecimal(4, new BigDecimal(state.getLockedMiningReward().toBigInteger()));
+					ps.setBigDecimal(5, new BigDecimal(state.getPendingMiningRewardCancellation().toBigInteger()));
 
-				ps.setLong(4, state.getUpdatedAtBlockHeight());
-				ps.setTimestamp(5, Timestamp.from(state.getUpdatedAtTimestamp()));
+					ps.setLong(6, state.getUpdatedAtBlockHeight());
+					ps.setTimestamp(7, Timestamp.from(state.getUpdatedAtTimestamp()));
 
-				ps.setLong(6, state.getUpdatedAtBlockHeight());
-				ps.setTimestamp(7, Timestamp.from(state.getUpdatedAtTimestamp()));
-				ps.setInt(8, state.getVersion().getCode());
+					ps.setLong(8, state.getUpdatedAtBlockHeight());
+					ps.setTimestamp(9, Timestamp.from(state.getUpdatedAtTimestamp()));
+					ps.setInt(10, state.getVersion().getCode());
 			}
 
 			@Override

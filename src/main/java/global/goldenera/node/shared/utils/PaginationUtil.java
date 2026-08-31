@@ -25,10 +25,13 @@ package global.goldenera.node.shared.utils;
 
 import java.util.List;
 
+import org.springframework.data.domain.Sort;
+
 import global.goldenera.node.shared.exceptions.GEValidationException;
 
 public class PaginationUtil {
 	public static final int MAX_PAGE_SIZE = 100;
+	public static final long MAX_PAGE_OFFSET = 100_000L;
 
 	public static void validatePageRequest(int pageNumber, int pageSize) {
 		if (pageNumber < 0) {
@@ -38,6 +41,16 @@ public class PaginationUtil {
 			throw new GEValidationException(
 					String.format("Invalid page size (min 1, max %d).", MAX_PAGE_SIZE));
 		}
+		long offset = (long) pageNumber * pageSize;
+		if (offset > MAX_PAGE_OFFSET) {
+			throw new GEValidationException(
+					String.format("Page offset exceeds the maximum allowed limit (%d).", MAX_PAGE_OFFSET));
+		}
+	}
+
+	public static Sort stableSort(Sort.Direction direction, String... properties) {
+		Sort.Direction effectiveDirection = direction != null ? direction : Sort.Direction.ASC;
+		return Sort.by(effectiveDirection, properties);
 	}
 
 	public static void validateRangeRequest(long fromHeight, long toHeight, long maxRangeLimit) {

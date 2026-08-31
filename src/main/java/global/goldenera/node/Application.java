@@ -24,31 +24,29 @@
 package global.goldenera.node;
 
 import java.security.Security;
+import java.util.Arrays;
 
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.autoconfigure.domain.EntityScan;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 
-import io.hypersistence.utils.spring.repository.BaseJpaRepositoryImpl;
+import global.goldenera.node.core.sandbox.authoring.SandboxManifestAuthoringCli;
+import global.goldenera.node.core.storage.chainidentity.DevelopmentGenesisAuthoringCli;
+import global.goldenera.node.core.sync.snapshot.operator.OfflineSnapshotOperatorCli;
 
 @SpringBootApplication
-@Configuration
-@EnableJpaRepositories(value = {
-        "global.goldenera.node.explorer.repositories",
-        "global.goldenera.node.shared.repositories",
-        "global.goldenera.node.core.webhook.repositories",
-}, repositoryBaseClass = BaseJpaRepositoryImpl.class)
-@EntityScan(basePackages = {
-        "global.goldenera.node.explorer.entities",
-        "global.goldenera.node.explorer.converters",
-        "global.goldenera.node.shared.converters",
-        "global.goldenera.node.shared.entities",
-        "global.goldenera.node.core.webhook.entities",
-        "global.goldenera.node.core.webhook.converters"
-})
+@ComponentScan(excludeFilters = @ComponentScan.Filter(
+        type = FilterType.REGEX,
+        pattern = {
+                "global\\.goldenera\\.node\\.explorer\\..*",
+                "global\\.goldenera\\.node\\.admin\\..*",
+                "global\\.goldenera\\.node\\.shared\\.services\\.core\\..*",
+                "global\\.goldenera\\.node\\.shared\\.services\\.webhook\\..*",
+                "global\\.goldenera\\.node\\.shared\\.api\\.v1\\.webhook\\..*",
+                "global\\.goldenera\\.node\\.shared\\.config\\.Webhook.*"
+        }))
 public class Application {
 
     static {
@@ -58,6 +56,30 @@ public class Application {
     }
 
     public static void main(String[] args) {
+        if (args.length > 0 && DevelopmentGenesisAuthoringCli.COMMAND.equals(args[0])) {
+            String[] authoringArguments = Arrays.copyOfRange(args, 1, args.length);
+            int exitCode = DevelopmentGenesisAuthoringCli.execute(authoringArguments, System.out, System.err);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
+        if (args.length > 0 && SandboxManifestAuthoringCli.COMMAND.equals(args[0])) {
+            String[] authoringArguments = Arrays.copyOfRange(args, 1, args.length);
+            int exitCode = SandboxManifestAuthoringCli.execute(authoringArguments, System.out, System.err);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
+        if (args.length > 0 && OfflineSnapshotOperatorCli.COMMAND.equals(args[0])) {
+            String[] operatorArguments = Arrays.copyOfRange(args, 1, args.length);
+            int exitCode = OfflineSnapshotOperatorCli.execute(operatorArguments, System.out, System.err);
+            if (exitCode != 0) {
+                System.exit(exitCode);
+            }
+            return;
+        }
         SpringApplication.run(Application.class, args);
     }
 

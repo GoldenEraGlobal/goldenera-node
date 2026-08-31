@@ -1,0 +1,41 @@
+databaseChangeLog:
+  - changeSet:
+      id: 011-api-key-auth-epoch
+      author: goldenera
+      dbms: postgresql
+      comment: Maintain a transactionally visible epoch for strict cross-process API-key cache coherence.
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              CREATE TABLE api_key_auth_epoch (
+                singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
+                epoch BIGINT NOT NULL
+              );
+              INSERT INTO api_key_auth_epoch(singleton, epoch) VALUES (TRUE, 0);
+
+              CREATE FUNCTION bump_api_key_auth_epoch()
+              RETURNS TRIGGER
+              LANGUAGE plpgsql
+              AS $$
+              BEGIN
+                UPDATE api_key_auth_epoch SET epoch = epoch + 1 WHERE singleton = TRUE;
+                RETURN NULL;
+              END
+              $$;
+
+              CREATE TRIGGER api_key_auth_epoch_api_key
+              AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON api_key
+              FOR EACH STATEMENT EXECUTE FUNCTION bump_api_key_auth_epoch();
+
+              CREATE TRIGGER api_key_auth_epoch_permission
+              AFTER INSERT OR UPDATE OR DELETE OR TRUNCATE ON api_key_permission
+              FOR EACH STATEMENT EXECUTE FUNCTION bump_api_key_auth_epoch();
+      rollback:
+        - sql:
+            splitStatements: false
+            sql: |
+              DROP TRIGGER IF EXISTS api_key_auth_epoch_permission ON api_key_permission;
+              DROP TRIGGER IF EXISTS api_key_auth_epoch_api_key ON api_key;
+              DROP FUNCTION IF EXISTS bump_api_key_auth_epoch();
+              DROP TABLE IF EXISTS api_key_auth_epoch;

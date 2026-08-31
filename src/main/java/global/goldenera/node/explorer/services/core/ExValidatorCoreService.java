@@ -26,7 +26,10 @@ package global.goldenera.node.explorer.services.core;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -84,7 +87,7 @@ public class ExValidatorCoreService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         return validatorRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+                PaginationUtil.stableSort(direction, "createdAtTimestamp", "address")));
     }
 
     /**
@@ -126,12 +129,24 @@ public class ExValidatorCoreService {
             return cb.and(predicates.toArray(new Predicate[0]));
         };
         return validatorRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-                direction != null ? Sort.by(direction, "createdAtTimestamp") : Sort.by("createdAtTimestamp")));
+                PaginationUtil.stableSort(direction, "createdAtTimestamp", "address")));
     }
 
     @Transactional(readOnly = true)
     public List<ExValidator> getAll() {
-        return validatorRepository.findAll(Sort.by("createdAtTimestamp"));
+        return validatorRepository.findAll(Sort.by("createdAtTimestamp", "address"));
+    }
+
+    @Transactional(readOnly = true)
+    public Map<Address, ExValidator> getByAddresses(Set<Address> addresses) {
+        if (addresses.isEmpty()) {
+            return Map.of();
+        }
+        List<ExValidator.ValidatorPK> ids = addresses.stream()
+                .map(ExValidator.ValidatorPK::new)
+                .toList();
+        return validatorRepository.findAllById(ids).stream()
+                .collect(Collectors.toMap(ExValidator::getAddress, Function.identity()));
     }
 
     @Transactional(readOnly = true)

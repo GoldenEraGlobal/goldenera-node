@@ -90,6 +90,9 @@ public class BlockConnectedEvent extends ApplicationEvent {
 
 	final List<BlockEvent> events;
 
+	/** True only when a following batch-boundary event owns head-only/coalesced work. */
+	final boolean batchMember;
+
 	public BlockConnectedEvent(
 			Object source,
 			ConnectedSource connectedSource,
@@ -112,27 +115,62 @@ public class BlockConnectedEvent extends ApplicationEvent {
 			List<BlockEvent> events,
 			Address receivedFrom,
 			Instant receivedAt) {
+		this(source, connectedSource, block, balanceDiffs, nonceDiffs, tokenDiffs, bipDiffs,
+				networkParamsDiff, authoritiesToAdd, authoritiesToRemove, validatorsToAdd,
+				validatorsToRemove, addressAliasesToAdd, addressAliasesToRemove, totalFees,
+				actualRewardPaid, cumulativeDifficulty, actualBurnAmounts, events, receivedFrom,
+				receivedAt, false);
+	}
+
+	public BlockConnectedEvent(
+			Object source,
+			ConnectedSource connectedSource,
+			Block block,
+			Map<BalanceKey, StateDiff<AccountBalanceState>> balanceDiffs,
+			Map<Address, StateDiff<AccountNonceState>> nonceDiffs,
+			Map<Address, StateDiff<TokenState>> tokenDiffs,
+			Map<Hash, StateDiff<BipState>> bipDiffs,
+			StateDiff<NetworkParamsState> networkParamsDiff,
+			Map<Address, AuthorityState> authoritiesToAdd,
+			Map<Address, AuthorityState> authoritiesToRemove,
+			Map<Address, ValidatorState> validatorsToAdd,
+			Map<Address, ValidatorState> validatorsToRemove,
+			Map<String, AddressAliasState> addressAliasesToAdd,
+			Map<String, AddressAliasState> addressAliasesToRemove,
+			Wei totalFees,
+			Wei actualRewardPaid,
+			BigInteger cumulativeDifficulty,
+			Map<Hash, Wei> actualBurnAmounts,
+			List<BlockEvent> events,
+			Address receivedFrom,
+			Instant receivedAt,
+			boolean batchMember) {
 		super(source);
 		this.connectedSource = connectedSource;
 		this.block = block;
-		this.balanceDiffs = balanceDiffs;
-		this.nonceDiffs = nonceDiffs;
-		this.tokenDiffs = tokenDiffs;
-		this.bipDiffs = bipDiffs;
+		this.balanceDiffs = immutableMap(balanceDiffs);
+		this.nonceDiffs = immutableMap(nonceDiffs);
+		this.tokenDiffs = immutableMap(tokenDiffs);
+		this.bipDiffs = immutableMap(bipDiffs);
 		this.networkParamsDiff = networkParamsDiff;
-		this.authoritiesToAdd = authoritiesToAdd;
-		this.authoritiesToRemove = authoritiesToRemove;
-		this.validatorsToAdd = validatorsToAdd;
-		this.validatorsToRemove = validatorsToRemove;
-		this.addressAliasesToAdd = addressAliasesToAdd;
-		this.addressAliasesToRemove = addressAliasesToRemove;
+		this.authoritiesToAdd = immutableMap(authoritiesToAdd);
+		this.authoritiesToRemove = immutableMap(authoritiesToRemove);
+		this.validatorsToAdd = immutableMap(validatorsToAdd);
+		this.validatorsToRemove = immutableMap(validatorsToRemove);
+		this.addressAliasesToAdd = immutableMap(addressAliasesToAdd);
+		this.addressAliasesToRemove = immutableMap(addressAliasesToRemove);
 		this.minerTotalFees = totalFees;
 		this.minerActualRewardPaid = actualRewardPaid;
 		this.cumulativeDifficulty = cumulativeDifficulty;
-		this.actualBurnAmounts = actualBurnAmounts;
-		this.events = events;
+		this.actualBurnAmounts = immutableMap(actualBurnAmounts);
+		this.events = events == null ? List.of() : List.copyOf(events);
 		this.receivedFrom = receivedFrom;
 		this.receivedAt = receivedAt;
+		this.batchMember = batchMember;
+	}
+
+	private static <K, V> Map<K, V> immutableMap(Map<K, V> values) {
+		return values == null || values.isEmpty() ? Map.of() : Map.copyOf(values);
 	}
 
 	@AllArgsConstructor

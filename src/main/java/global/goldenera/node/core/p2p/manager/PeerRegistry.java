@@ -25,6 +25,8 @@ package global.goldenera.node.core.p2p.manager;
 
 import static lombok.AccessLevel.PRIVATE;
 
+import java.math.BigInteger;
+import java.net.InetSocketAddress;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -46,29 +48,59 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class PeerRegistry {
+	static final int MAX_ACTIVE_CONNECTIONS = 128;
+	static final int MAX_CONNECTIONS_PER_IP = 8;
 
 	PeerReputationService reputationService;
 
 	ConcurrentHashMap<ChannelId, RemotePeer> activeConnections = new ConcurrentHashMap<>();
 	ConcurrentHashMap<Address, RemotePeer> identityIndex = new ConcurrentHashMap<>();
 
-	public void register(RemotePeer peer) {
+	public synchronized boolean register(RemotePeer peer) {
+		if (activeConnections.size() >= MAX_ACTIVE_CONNECTIONS) {
+			return false;
+		}
+		String remoteIp = remoteIp(peer.getChannel());
+		if (remoteIp != null) {
+			long matchingConnections = activeConnections.values().stream()
+					.filter(existing -> remoteIp.equals(remoteIp(existing.getChannel())))
+					.count();
+			if (matchingConnections >= MAX_CONNECTIONS_PER_IP) {
+				return false;
+			}
+		}
 		activeConnections.put(peer.getChannel().id(), peer);
+		return true;
+	}
+
+	private String remoteIp(Channel channel) {
+		if (!(channel.remoteAddress() instanceof InetSocketAddress address)) {
+			return null;
+		}
+		return address.getAddress() == null ? address.getHostString() : address.getAddress().getHostAddress();
 	}
 
 	public void unregister(Channel channel) {
 		RemotePeer peer = activeConnections.remove(channel.id());
 		if (peer != null && peer.getIdentity() != null) {
-			identityIndex.remove(peer.getIdentity());
+			Address identity = peer.getIdentity();
+			if (identityIndex.remove(identity, peer)) {
+				activeConnections.values().stream()
+						.filter(candidate -> identity.equals(candidate.getIdentity()))
+						.findFirst()
+						.ifPresent(candidate -> identityIndex.putIfAbsent(identity, candidate));
+			}
 		}
 	}
 
-	public void updateIdentity(Channel channel, Address identity) {
+	public boolean updateIdentity(Channel channel, Address identity) {
 		RemotePeer peer = activeConnections.get(channel.id());
 		if (peer != null) {
 			peer.setIdentity(identity);
-			identityIndex.put(identity, peer);
+			RemotePeer existing = identityIndex.putIfAbsent(identity, peer);
+			return existing == null || existing == peer;
 		}
+		return false;
 	}
 
 	public RemotePeer get(Channel channel) {
@@ -85,6 +117,10 @@ public class PeerRegistry {
 
 	public int count() {
 		return activeConnections.size();
+	}
+
+	public int handshakenCount() {
+		return identityIndex.size();
 	}
 
 	/**
@@ -107,19 +143,44 @@ public class PeerRegistry {
 	/**
 	 * Finds the best candidate for synchronization:
 	 * - Must be not banned
-	 * - Must be ahead of local chain
-	 * - Prefer higher reputation, then total difficulty
+	 * - Must advertise strictly more cumulative work than the local chain
+	 * - Prefer greater total difficulty, then higher reputation and height
+	 *
+	 * Height is deliberately not an eligibility requirement: a shorter fork can
+	 * have more cumulative work and must remain eligible for synchronization.
 	 */
-	public Optional<RemotePeer> getSyncCandidate(long localHeight) {
+	public Optional<RemotePeer> getSyncCandidate(BigInteger localTotalDifficulty) {
 		Comparator<RemotePeer> peerComparator = Comparator
-				.comparingInt((RemotePeer peer) -> reputationService.score(peer.getIdentity()))
-				.thenComparing(RemotePeer::getTotalDifficulty, Comparator.nullsLast(Comparator.naturalOrder()));
+				.comparing(RemotePeer::getTotalDifficulty)
+				.thenComparingInt(peer -> reputationService.score(peer.getIdentity()))
+				.thenComparingLong(RemotePeer::getHeadHeight);
 
 		return activeConnections.values().stream()
 				.filter(p -> p.getIdentity() != null)
 				.filter(p -> !reputationService.isBanned(p.getIdentity()))
-				.filter(p -> p.getHeadHeight() > localHeight)
+				.filter(p -> p.getTotalDifficulty() != null)
+				.filter(p -> p.getTotalDifficulty().compareTo(localTotalDifficulty) > 0)
 				.max(peerComparator);
+	}
+
+	/**
+	 * Returns handshaken, non-banned peers that claim to have every block through
+	 * {@code requiredHeight}. Body requests use hashes, so peers on another fork are
+	 * harmless: a missing or mismatched positional body response is rejected by the
+	 * sync manager and retried elsewhere.
+	 */
+	public List<RemotePeer> getBodySyncPeers(long requiredHeight) {
+		return activeConnections.values().stream()
+				.filter(p -> p.getIdentity() != null)
+				.filter(p -> !reputationService.isBanned(p.getIdentity()))
+				.filter(p -> p.getHeadHeight() >= requiredHeight)
+				.sorted(Comparator
+						.comparingInt((RemotePeer peer) -> reputationService.score(peer.getIdentity()))
+						.thenComparing(RemotePeer::getTotalDifficulty,
+								Comparator.nullsFirst(Comparator.naturalOrder()))
+						.thenComparingLong(RemotePeer::getHeadHeight)
+						.reversed())
+				.collect(Collectors.toList());
 	}
 
 	/**

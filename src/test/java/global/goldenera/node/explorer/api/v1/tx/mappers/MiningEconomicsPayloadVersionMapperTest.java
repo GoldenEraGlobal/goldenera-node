@@ -1,0 +1,50 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2025-2030 The GoldenEraGlobal Developers
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+package global.goldenera.node.explorer.api.v1.tx.mappers;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Test;
+
+import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayloadImpl;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
+
+class MiningEconomicsPayloadVersionMapperTest {
+
+	private final TxMapper mapper = new TxMapper();
+
+	@Test
+	void exposesBothLegacyAndVersionedPayloadSchemas() {
+		var legacy = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.build();
+		var versioned = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.validatorMiningWindowBlocks(100L)
+				.build();
+
+		assertThat(mapper.mapPayload(legacy).getPayloadVersion()).isEqualTo(TxPayloadVersion.V1);
+		assertThat(mapper.mapPayload(versioned).getPayloadVersion()).isEqualTo(TxPayloadVersion.V2);
+	}
+}

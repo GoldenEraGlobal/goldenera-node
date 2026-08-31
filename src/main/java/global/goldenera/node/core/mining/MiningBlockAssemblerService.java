@@ -36,7 +36,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicReference;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
@@ -52,16 +54,19 @@ import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.cryptoj.utils.TxRootUtil;
 import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.difficulty.DifficultyCalculator;
+import global.goldenera.node.core.blockchain.time.ChainClock;
+import global.goldenera.node.core.blockchain.time.BlockTimestampReservation;
+import global.goldenera.node.core.blockchain.time.ProductionChainClock;
 import global.goldenera.node.core.mempool.MempoolManager;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.node.IdentityService;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
+import global.goldenera.node.core.processing.ValidatorMiningPolicyService;
 import global.goldenera.node.core.properties.MempoolProperties;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.shared.properties.GeneralProperties;
-import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.experimental.FieldDefaults;
@@ -79,7 +84,6 @@ import lombok.extern.slf4j.Slf4j;
  * - High utilization (> 80%): Use full block size
  */
 @Service
-@AllArgsConstructor
 @Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MiningBlockAssemblerService {
@@ -91,6 +95,34 @@ public class MiningBlockAssemblerService {
 	StateProcessor stateProcessor;
 	DifficultyCalculator difficultyService;
 	IdentityService identityService;
+	ValidatorMiningPolicyService validatorMiningPolicyService;
+	ChainClock chainClock;
+	AtomicReference<String> lastMiningIneligibility = new AtomicReference<>();
+
+	@Autowired
+	public MiningBlockAssemblerService(WorldStateFactory worldStateFactory, MempoolManager mempoolService,
+			MempoolProperties mempoolProperties, GeneralProperties generalConfig, StateProcessor stateProcessor,
+			DifficultyCalculator difficultyService, IdentityService identityService,
+			ValidatorMiningPolicyService validatorMiningPolicyService, ChainClock chainClock) {
+		this.worldStateFactory = worldStateFactory;
+		this.mempoolService = mempoolService;
+		this.mempoolProperties = mempoolProperties;
+		this.generalConfig = generalConfig;
+		this.stateProcessor = stateProcessor;
+		this.difficultyService = difficultyService;
+		this.identityService = identityService;
+		this.validatorMiningPolicyService = validatorMiningPolicyService;
+		this.chainClock = chainClock;
+	}
+
+	/** Test-friendly constructor preserving the former production behavior. */
+	public MiningBlockAssemblerService(WorldStateFactory worldStateFactory, MempoolManager mempoolService,
+			MempoolProperties mempoolProperties, GeneralProperties generalConfig, StateProcessor stateProcessor,
+			DifficultyCalculator difficultyService, IdentityService identityService,
+			ValidatorMiningPolicyService validatorMiningPolicyService) {
+		this(worldStateFactory, mempoolService, mempoolProperties, generalConfig, stateProcessor, difficultyService,
+				identityService, validatorMiningPolicyService, new ProductionChainClock());
+	}
 
 	/**
 	 * Creates a new, mineable block template.
@@ -101,24 +133,57 @@ public class MiningBlockAssemblerService {
 	 *             if assembly fails
 	 */
 	public Optional<AssembledBlock> createBlockTemplate(Block parentBlock) throws Exception {
+		return createBlockTemplateInternal(parentBlock, Optional.empty(), false);
+	}
+
+	/**
+	 * Creates a template using a parent-bound timestamp reserved for this attempt.
+	 */
+	public Optional<AssembledBlock> createBlockTemplate(
+			Block parentBlock,
+			BlockTimestampReservation timestampReservation) throws Exception {
+		return createBlockTemplateInternal(parentBlock, Optional.of(timestampReservation), false);
+	}
+
+	/**
+	 * Authors a sandbox control candidate through the production assembler while
+	 * bypassing only the local validator mining-policy eligibility precheck. The
+	 * returned candidate is still subject to normal proof-of-work, signing and
+	 * receiver-side validation.
+	 */
+	public Optional<AssembledBlock> createSandboxCandidateTemplate(
+			Block parentBlock,
+			BlockTimestampReservation timestampReservation) throws Exception {
+		return createBlockTemplateInternal(parentBlock, Optional.of(timestampReservation), true);
+	}
+
+	private Optional<AssembledBlock> createBlockTemplateInternal(
+			Block parentBlock,
+			Optional<BlockTimestampReservation> timestampReservation,
+			boolean bypassMiningPolicyPrecheck) throws Exception {
 		log.debug("Creating block template | Parent: {}", parentBlock.getHeight());
 		BlockVersion blockVersion = BlockVersion.V1;
 
 		WorldState worldState = worldStateFactory.createForMining(parentBlock.getHeader().getStateRootHash());
 		NetworkParamsState params = worldState.getParams();
+		long nextHeight = parentBlock.getHeight() + 1;
 
 		// Check if miner identity is a valid validator (skip if no validators
 		// registered - open mining)
 		Address minerIdentity = identityService.getNodeIdentityAddress();
 
 		if (minerIdentity.equals(Address.ZERO)) {
-			log.error("Mining skipped: Miner identity cannot be zero!");
+			if (miningIneligibilityChanged(nextHeight, "zero_identity")) {
+				log.error("Mining hashing is waiting for block #{}: node identity cannot be zero", nextHeight);
+			}
 			return Optional.empty();
 		}
 
 		if (params.getCurrentValidatorCount() > 0 && !worldState.getValidator(minerIdentity).exists()) {
-			log.debug("Mining skipped: Miner identity {} is not a registered validator",
-					minerIdentity.toChecksumAddress());
+			if (miningIneligibilityChanged(nextHeight, "not_registered")) {
+				log.info("Mining hashing is waiting for block #{}: node identity {} is not a registered validator",
+						nextHeight, minerIdentity.toChecksumAddress());
+			}
 			return Optional.empty();
 		}
 
@@ -126,14 +191,22 @@ public class MiningBlockAssemblerService {
 		// identity)
 		Address beneficiaryAddress = generalConfig.getBeneficiaryAddress();
 
-		long nextHeight = parentBlock.getHeight() + 1;
+		if (!bypassMiningPolicyPrecheck
+				&& !validatorMiningPolicyService.isCandidateEligible(worldState, nextHeight, minerIdentity)) {
+			if (miningIneligibilityChanged(nextHeight, "share_exhausted")) {
+				log.info("Mining hashing is waiting for block #{}: validator {} exhausted its current mining share",
+						nextHeight, minerIdentity.toChecksumAddress());
+			}
+			return Optional.empty();
+		}
+		lastMiningIneligibility.set(null);
 
 		// Dynamic block size based on mempool utilization (height-aware for fork
 		// overrides)
 		long maxBlockSize = calculateDynamicBlockSize(nextHeight);
-		long now = Instant.now().toEpochMilli();
-		long timestamp = (now / 1000) * 1000;
-		timestamp = Math.max(timestamp, parentBlock.getHeader().getTimestamp().toEpochMilli() + 1);
+		Instant timestamp = timestampReservation
+				.map(reservation -> reservation.consume(parentBlock.getHeader()))
+				.orElseGet(() -> chainClock.nextBlockTimestamp(parentBlock.getHeader()));
 
 		long startSelect = System.currentTimeMillis();
 		List<Tx> txs = getExecutableTransactions(maxBlockSize - 512, worldState);
@@ -146,8 +219,9 @@ public class MiningBlockAssemblerService {
 				worldState,
 				SimpleBlock.builder()
 						.height(nextHeight)
-						.timestamp(Instant.ofEpochMilli(timestamp))
+						.timestamp(timestamp)
 						.coinbase(beneficiaryAddress)
+						.identity(minerIdentity)
 						.build(),
 				txs,
 				params);
@@ -161,7 +235,7 @@ public class MiningBlockAssemblerService {
 		BlockHeaderTemplate template = BlockHeaderTemplate.builder()
 				.version(blockVersion)
 				.height(nextHeight)
-				.timestamp(Instant.ofEpochMilli(timestamp))
+				.timestamp(timestamp)
 				.previousHash(parentBlock.getHash())
 				.difficulty(difficulty)
 				.txRootHash(txRootHash)
@@ -181,8 +255,14 @@ public class MiningBlockAssemblerService {
 		return Optional.of(AssembledBlock.builder()
 				.blockTemplate(template)
 				.txs(validTxs)
+				.selectedTxs(List.copyOf(txs))
 				.invalidTxs(result.getInvalidTxs())
 				.build());
+	}
+
+	private boolean miningIneligibilityChanged(long candidateHeight, String reason) {
+		String current = candidateHeight + ":" + reason;
+		return !current.equals(lastMiningIneligibility.getAndSet(current));
 	}
 
 	/**
@@ -388,6 +468,7 @@ public class MiningBlockAssemblerService {
 	public static class AssembledBlock {
 		BlockHeaderTemplate blockTemplate;
 		List<Tx> txs;
+		List<Tx> selectedTxs;
 		List<Tx> invalidTxs;
 	}
 

@@ -43,6 +43,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipVotePayload;
 import global.goldenera.cryptoj.common.state.BipState;
@@ -52,7 +53,6 @@ import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
-import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.TxType;
@@ -60,15 +60,22 @@ import global.goldenera.cryptoj.enums.state.AddressAliasStateVersion;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
-import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
+import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
+import global.goldenera.node.core.processing.MiningEconomicsPayloadRules;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
 import global.goldenera.node.core.processing.TxExecutionContext;
+import global.goldenera.node.core.processing.ValidatorMiningGovernanceService;
 import global.goldenera.node.core.state.WorldState;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class BipVoteHandler implements TxHandler {
+
+	private final ValidatorMiningGovernanceService validatorMiningGovernanceService;
 
 	@Override
 	public TxType getSupportedType() {
@@ -130,6 +137,8 @@ public class BipVoteHandler implements TxHandler {
 	private void executeBipAction(WorldState state, BipStateImpl approvedBip, Hash bipHash, SimpleBlock block,
 			Map<Hash, Wei> actualBurnAmounts) {
 		TxPayload payload = approvedBip.getMetadata().getTxPayload();
+		MiningEconomicsPayloadRules.validateAtHeight(payload, block.getHeight());
+		boolean miningEconomicsActive = Constants.isForkActive(ForkName.MINING_ECONOMICS, block.getHeight());
 
 		BipStateImpl executedState = approvedBip.markAsExecuted(block.getHeight(), block.getTimestamp());
 		state.setBip(bipHash, executedState);
@@ -143,11 +152,14 @@ public class BipVoteHandler implements TxHandler {
 			case BIP_AUTHORITY_ADD -> processAuthorityAdd(state, (TxBipAuthorityAddPayload) payload, block, bipHash);
 			case BIP_AUTHORITY_REMOVE -> processAuthorityRemove(state, (TxBipAuthorityRemovePayload) payload, block,
 					bipHash);
-			case BIP_VALIDATOR_ADD -> processValidatorAdd(state, (TxBipValidatorAddPayload) payload, block, bipHash);
+			case BIP_VALIDATOR_ADD -> validatorMiningGovernanceService.addValidator(state,
+					(TxBipValidatorAddPayload) payload, block, bipHash, miningEconomicsActive);
 			case BIP_VALIDATOR_REMOVE -> processValidatorRemove(state, (TxBipValidatorRemovePayload) payload, block,
-					bipHash);
+					bipHash, miningEconomicsActive);
 			case BIP_NETWORK_PARAMS_SET -> processParamsSet(state, (TxBipNetworkParamsSetPayload) payload, block,
-					bipHash);
+					bipHash, miningEconomicsActive);
+			case BIP_VALIDATOR_MINING_POLICY_SET -> validatorMiningGovernanceService.setMiningPolicy(state,
+					(TxBipValidatorMiningPolicySetPayload) payload, block, bipHash);
 			case BIP_ADDRESS_ALIAS_ADD -> processAliasAdd(state, (TxBipAddressAliasAddPayload) payload, block, bipHash);
 			case BIP_ADDRESS_ALIAS_REMOVE -> processAliasRemove(state, (TxBipAddressAliasRemovePayload) payload, block);
 			default -> log.warn("BIP Approved but no execution logic for {}", payload.getPayloadType());
@@ -246,8 +258,10 @@ public class BipVoteHandler implements TxHandler {
 				token.burn(actualBurnAmount, bipHash, block.getHeight(), block.getTimestamp()));
 
 		// 4. Debit User with the ACTUAL amount
-		state.setBalance(target, p.getTokenAddress(),
-				bal.debit(actualBurnAmount, block.getHeight(), block.getTimestamp()));
+		AccountBalanceStateImpl updatedBalance = p.getTokenAddress().equals(Address.NATIVE_TOKEN)
+				? bal.burnIncludingLockedMiningReward(actualBurnAmount, block.getHeight(), block.getTimestamp())
+				: bal.debit(actualBurnAmount, block.getHeight(), block.getTimestamp());
+		state.setBalance(target, p.getTokenAddress(), updatedBalance);
 	}
 
 	private void processAuthorityAdd(WorldState state, TxBipAuthorityAddPayload p, SimpleBlock block, Hash bipHash) {
@@ -273,35 +287,14 @@ public class BipVoteHandler implements TxHandler {
 		state.setParams(oldParams.decrementAuthorityCount(bipHash, block.getHeight(), block.getTimestamp()));
 	}
 
-	private void processValidatorAdd(WorldState state, TxBipValidatorAddPayload p, SimpleBlock block, Hash bipHash) {
-		checkArgument(!state.getValidator(p.getAddress()).exists(), "Validator exists");
-
-		state.addValidator(p.getAddress(), ValidatorStateImpl.builder()
-				.version(ValidatorStateVersion.V1)
-				.originTxHash(bipHash)
-				.createdAtBlockHeight(block.getHeight())
-				.createdAtTimestamp(block.getTimestamp())
-				.build());
-
-		NetworkParamsStateImpl oldParams = (NetworkParamsStateImpl) state.getParams();
-		state.setParams(oldParams.incrementValidatorCount(bipHash, block.getHeight(), block.getTimestamp()));
-	}
-
 	private void processValidatorRemove(WorldState state, TxBipValidatorRemovePayload p, SimpleBlock block,
-			Hash bipHash) {
-		checkArgument(state.getValidator(p.getAddress()).exists(), "Validator missing");
-		state.removeValidator(p.getAddress());
-
-		NetworkParamsStateImpl oldParams = (NetworkParamsStateImpl) state.getParams();
-		state.setParams(oldParams.decrementValidatorCount(bipHash, block.getHeight(), block.getTimestamp()));
+			Hash bipHash, boolean miningEconomicsActive) {
+		validatorMiningGovernanceService.removeValidator(state, p, block, bipHash, miningEconomicsActive);
 	}
 
-	private void processParamsSet(WorldState state, TxBipNetworkParamsSetPayload p, SimpleBlock block, Hash bipHash) {
-		checkArgument(!state.isParamsChangedThisBlock(), "Double params change");
-
-		NetworkParamsStateImpl old = (NetworkParamsStateImpl) state.getParams();
-		state.setParams(old.updateParams(p, bipHash, block.getHeight(), block.getTimestamp()));
-		state.markParamsAsChanged();
+	private void processParamsSet(WorldState state, TxBipNetworkParamsSetPayload p, SimpleBlock block, Hash bipHash,
+			boolean miningEconomicsActive) {
+		validatorMiningGovernanceService.setNetworkParams(state, p, block, bipHash, miningEconomicsActive);
 	}
 
 	private void processAliasAdd(WorldState state, TxBipAddressAliasAddPayload p, SimpleBlock block, Hash bipHash) {

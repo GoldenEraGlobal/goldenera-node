@@ -1,0 +1,84 @@
+{
+  "features": {
+    "sandboxManifest": true,
+    "deterministicClock": true,
+    "legacyPeerCompatibility": true,
+    "controlApi": false
+  },
+  "clock": {
+    "maxFutureSkewMs": 30000,
+    "blockTimestampStepMs": 1000,
+    "mode": "DETERMINISTIC"
+  },
+  "pow": {
+    "deterministic": {
+      "domain": "goldenera-sandbox-pow-v1"
+    },
+    "randomX": {
+      "batchSize": 64,
+      "genesisKey": "SANDBOX_RANDOMX_GENESIS_V1",
+      "epochLength": 32
+    },
+    "algorithm": "DETERMINISTIC_SHA256_V1"
+  },
+  "consensus": {
+    "maxTransactionsPerBlock": 1000,
+    "maxBlockSizeBytes": 5000000,
+    "maxTransactionSizeBytes": 100000,
+    "maxHeaderSizeBytes": 500,
+    "bipExpirationPeriodMs": 86400000,
+    "bipApprovalThresholdBps": 5100,
+    "validatorMiningWindowBlocks": 100,
+    "miningRewardVestingBlocks": 10,
+    "minTransactionByteFee": 1,
+    "minTransactionBaseFee": 10,
+    "minDifficulty": 2500,
+    "asertHalfLifeBlocks": 64,
+    "targetBlockIntervalMs": 1000,
+    "blockReward": 10000000
+  },
+  "forks": {
+    "MINING_ECONOMICS": 0,
+    "GENESIS": 0
+  },
+  "genesis": {
+    "initialBalances": {
+      "0x2222222222222222222222222222222222222222": 5000000000000000000,
+      "0x1111111111111111111111111111111111111111": 10000000000000000000
+    },
+    "nativeToken": {
+      "userBurnable": false,
+      "logo": "https://goldenera.global/sandbox.png",
+      "website": "https://goldenera.global",
+      "decimals": 8,
+      "ticker": "SGE",
+      "name": "Sandbox GoldenEra"
+    },
+    "blockDifficulty": 2500,
+    "initialMintForAuthority": 10000000000000000000,
+    "initialMintForBlockReward": 5000000000000000000,
+    "blockRewardPoolAddress": "0x2222222222222222222222222222222222222222",
+    "validators": [
+      "0x2222222222222222222222222222222222222222"
+    ],
+    "authorities": [
+      "0x1111111111111111111111111111111111111111"
+    ],
+    "expectedGenesisHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "seed": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "timestampMs": 1800000000000
+  },
+  "legacyCarrier": {
+    "code": 1,
+    "network": "TESTNET"
+  },
+  "legacyPeers": {
+    "allowlistedNodeIds": [
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+  },
+  "chainId": "sandbox-00112233445566778899aabbccddeeff",
+  "disposable": true,
+  "schemaVersion": 1
+}

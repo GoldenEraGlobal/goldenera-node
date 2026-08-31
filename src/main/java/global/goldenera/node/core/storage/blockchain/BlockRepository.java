@@ -472,7 +472,12 @@ public class BlockRepository {
 	 * Saves StoredBlock (Block + Metadata) and indexes transactions.
 	 */
 	public void saveBlockDataToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
-		saveBlockDataToBatch(batch, storedBlock, false);
+		saveBlockDataToBatch(batch, storedBlock, false, true);
+	}
+
+	/** Saves a non-canonical block without replacing canonical transaction indexes. */
+	public void saveForkBlockDataToBatch(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
+		saveBlockDataToBatch(batch, storedBlock, false, false);
 	}
 
 	/**
@@ -480,13 +485,14 @@ public class BlockRepository {
 	 * blocks won't be immediately accessed and cache will be populated on-demand.
 	 */
 	public void saveBlockDataToBatchForSync(WriteBatch batch, StoredBlock storedBlock) throws RocksDBException {
-		saveBlockDataToBatch(batch, storedBlock, true);
+		saveBlockDataToBatch(batch, storedBlock, true, true);
 	}
 
 	/**
 	 * Internal implementation with optional cache skip for sync optimization.
 	 */
-	private void saveBlockDataToBatch(WriteBatch batch, StoredBlock storedBlock, boolean skipCache)
+	private void saveBlockDataToBatch(
+			WriteBatch batch, StoredBlock storedBlock, boolean skipCache, boolean indexTransactions)
 			throws RocksDBException {
 		Block block = storedBlock.getBlock();
 		byte[] hashBytes = storedBlock.getHash().toArray();
@@ -515,7 +521,7 @@ public class BlockRepository {
 
 		// 3. Index Transactions - collect hashes for bulk invalidation
 		List<Tx> txs = block.getTxs();
-		if (!txs.isEmpty()) {
+		if (indexTransactions && !txs.isEmpty()) {
 			List<Hash> txHashes = new ArrayList<>(txs.size());
 			for (Tx tx : txs) {
 				batch.put(cf.txIndex(), tx.getHash().toArray(), hashBytes);
@@ -548,6 +554,9 @@ public class BlockRepository {
 
 		Hash[] txHashes = blockToDisconnect.getTransactionHashes();
 		if (txHashes != null && txHashes.length > 0) {
+			for (Hash txHash : txHashes) {
+				batch.delete(cf.txIndex(), txHash.toArray());
+			}
 			scheduleInvalidation(() -> txCache.invalidateAll(List.of(txHashes)));
 		}
 	}

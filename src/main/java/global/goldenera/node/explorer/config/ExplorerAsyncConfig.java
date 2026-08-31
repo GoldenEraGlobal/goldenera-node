@@ -37,6 +37,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 public class ExplorerAsyncConfig {
 
 	public static final String EXPLORER_EXECUTOR = "explorerTaskExecutor";
+	public static final String EXPLORER_SEARCH_EXECUTOR = "explorerSearchExecutor";
 	public static final String EXPLORER_SCHEDULER = "explorerTaskScheduler";
 
 	@Bean(name = EXPLORER_EXECUTOR)
@@ -47,6 +48,18 @@ public class ExplorerAsyncConfig {
 		executor.setQueueCapacity(1000);
 		executor.setThreadNamePrefix("Explorer-Worker-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+		executor.initialize();
+		return executor;
+	}
+
+	@Bean(name = EXPLORER_SEARCH_EXECUTOR)
+	public Executor explorerSearchExecutor() {
+		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(2);
+		executor.setMaxPoolSize(4);
+		executor.setQueueCapacity(50);
+		executor.setThreadNamePrefix("Explorer-Search-");
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
 		executor.initialize();
 		return executor;
 	}

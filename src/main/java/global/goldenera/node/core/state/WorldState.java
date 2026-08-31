@@ -41,6 +41,8 @@ import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.AddressAliasState;
 import global.goldenera.cryptoj.common.state.AuthorityState;
 import global.goldenera.cryptoj.common.state.BipState;
+import global.goldenera.cryptoj.common.state.MiningRewardMaturityState;
+import global.goldenera.cryptoj.common.state.MiningWindowState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.StateDiff;
 import global.goldenera.cryptoj.common.state.TokenState;
@@ -50,6 +52,8 @@ import global.goldenera.cryptoj.common.state.impl.AccountNonceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AddressAliasStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.BipStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningRewardMaturityStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningWindowStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
@@ -97,6 +101,10 @@ public class WorldState {
 	MerkleTrie<Bytes, AddressAliasState> addressAliasTrie;
 	MerkleTrie<Bytes, BipState> bipStateTrie;
 	MerkleTrie<Bytes, NetworkParamsState> networkParamsTrie;
+	MerkleTrie<Bytes, MiningWindowState> miningWindowTrie;
+	boolean miningWindowTriePresent;
+	MerkleTrie<Bytes, MiningRewardMaturityState> miningRewardMaturityTrie;
+	boolean miningRewardMaturityTriePresent;
 	MerkleTrie<Bytes, TokenState> tokenTrie;
 
 	// Dirty Caches (Mutable state overlay)
@@ -107,6 +115,7 @@ public class WorldState {
 	Map<String, AddressAliasState> dirtyAddressAliases = new LinkedHashMap<>();
 	Map<Hash, BipState> dirtyBipStates = new LinkedHashMap<>();
 	Map<Address, TokenState> dirtyTokens = new LinkedHashMap<>();
+	Map<Long, MiningRewardMaturityState> dirtyMiningRewardMaturities = new LinkedHashMap<>();
 
 	// Initial States (Only populated if isMining == false)
 	Map<BalanceKey, AccountBalanceState> initialBalances = new LinkedHashMap<>();
@@ -116,17 +125,21 @@ public class WorldState {
 	Map<String, AddressAliasState> initialAddressAliases = new LinkedHashMap<>();
 	Map<Hash, BipState> initialBipStates = new LinkedHashMap<>();
 	Map<Address, TokenState> initialTokens = new LinkedHashMap<>();
+	Map<Long, MiningRewardMaturityState> initialMiningRewardMaturities = new LinkedHashMap<>();
 	NetworkParamsState[] initialNetworkParams = new NetworkParamsState[1];
+	MiningWindowState[] initialMiningWindow = new MiningWindowState[1];
 
 	// Set of changes for validation logic & deletions
 	Set<Address> tokensCreatedThisBlock = new LinkedHashSet<>();
 	Set<Address> authoritiesRemoved = new LinkedHashSet<>();
 	Set<Address> validatorsRemoved = new LinkedHashSet<>();
 	Set<String> aliasesRemoved = new LinkedHashSet<>();
+	Set<Long> miningRewardMaturitiesRemoved = new LinkedHashSet<>();
 
 	// Dirty Cache for Singleton (Params)
 	final NetworkParamsState[] dirtyParams = new NetworkParamsState[1];
 	final boolean[] paramsChanged = { false };
+	final MiningWindowState[] dirtyMiningWindow = new MiningWindowState[1];
 
 	// =================================================================================
 	// === JOURNAL-BASED ROLLBACK (OPTIMIZED) ===
@@ -439,6 +452,55 @@ public class WorldState {
 		return this.paramsChanged[0];
 	}
 
+	public MiningWindowState getMiningWindow() {
+		if (dirtyMiningWindow[0] != null)
+			return dirtyMiningWindow[0];
+		return miningWindowTrie.get(MiningWindowState.KEY).orElse(MiningWindowStateImpl.ZERO);
+	}
+
+	public void setMiningWindow(MiningWindowState state) {
+		if (!isMining && initialMiningWindow[0] == null && dirtyMiningWindow[0] == null) {
+			initialMiningWindow[0] = getMiningWindow();
+		}
+		if (isMining) {
+			UndoRecord rec = new UndoRecord();
+			rec.type = UNDO_ARRAY_SLOT;
+			rec.target = dirtyMiningWindow;
+			rec.value = dirtyMiningWindow[0];
+			journal.add(rec);
+		}
+		dirtyMiningWindow[0] = state;
+	}
+
+	public MiningRewardMaturityState getMiningRewardMaturity(long unlockBlockHeight) {
+		if (dirtyMiningRewardMaturities.containsKey(unlockBlockHeight)) {
+			return dirtyMiningRewardMaturities.get(unlockBlockHeight);
+		}
+		if (miningRewardMaturitiesRemoved.contains(unlockBlockHeight)) {
+			return MiningRewardMaturityStateImpl.ZERO;
+		}
+		return miningRewardMaturityTrie.get(miningRewardMaturityKey(unlockBlockHeight))
+				.orElse(MiningRewardMaturityStateImpl.ZERO);
+	}
+
+	public void setMiningRewardMaturity(long unlockBlockHeight, MiningRewardMaturityState state) {
+		captureInitialState(initialMiningRewardMaturities, dirtyMiningRewardMaturities, unlockBlockHeight,
+				this::getMiningRewardMaturity);
+		recordMapChange(dirtyMiningRewardMaturities, unlockBlockHeight);
+		dirtyMiningRewardMaturities.put(unlockBlockHeight, state);
+		recordSetChange(miningRewardMaturitiesRemoved, unlockBlockHeight);
+		miningRewardMaturitiesRemoved.remove(unlockBlockHeight);
+	}
+
+	public void removeMiningRewardMaturity(long unlockBlockHeight) {
+		captureInitialState(initialMiningRewardMaturities, dirtyMiningRewardMaturities, unlockBlockHeight,
+				this::getMiningRewardMaturity);
+		recordMapChange(dirtyMiningRewardMaturities, unlockBlockHeight);
+		dirtyMiningRewardMaturities.remove(unlockBlockHeight);
+		recordSetChange(miningRewardMaturitiesRemoved, unlockBlockHeight);
+		miningRewardMaturitiesRemoved.add(unlockBlockHeight);
+	}
+
 	public boolean checkAndMarkTokenAsUpdated(Address tokenAddress) {
 		recordSetChange(tokensCreatedThisBlock, tokenAddress);
 		return tokensCreatedThisBlock.add(tokenAddress);
@@ -463,8 +525,15 @@ public class WorldState {
 				(alias, state) -> addressAliasTrie.put(Bytes.wrap(alias.getBytes(StandardCharsets.UTF_8)), state));
 		dirtyBipStates.forEach(bipStateTrie::put);
 		dirtyTokens.forEach(tokenTrie::put);
+		miningRewardMaturitiesRemoved.forEach(
+				height -> miningRewardMaturityTrie.remove(miningRewardMaturityKey(height)));
+		dirtyMiningRewardMaturities.forEach(
+				(height, state) -> miningRewardMaturityTrie.put(miningRewardMaturityKey(height), state));
 		if (dirtyParams[0] != null) {
 			networkParamsTrie.put(WorldStateFactory.KEY_NETWORK_PARAMS, dirtyParams[0]);
+		}
+		if (dirtyMiningWindow[0] != null) {
+			miningWindowTrie.put(MiningWindowState.KEY, dirtyMiningWindow[0]);
 		}
 	}
 
@@ -482,6 +551,13 @@ public class WorldState {
 		addressAliasTrie.commit(nodeUpdater);
 		bipStateTrie.commit(nodeUpdater);
 		networkParamsTrie.commit(nodeUpdater);
+		if (miningWindowTriePresent || dirtyMiningWindow[0] != null) {
+			miningWindowTrie.commit(nodeUpdater);
+		}
+		if (miningRewardMaturityTriePresent || !dirtyMiningRewardMaturities.isEmpty()
+				|| !miningRewardMaturitiesRemoved.isEmpty()) {
+			miningRewardMaturityTrie.commit(nodeUpdater);
+		}
 		tokenTrie.commit(nodeUpdater);
 
 		mainTrie.put(WorldStateFactory.KEY_BALANCE, balanceTrie.getRootHash());
@@ -491,6 +567,13 @@ public class WorldState {
 		mainTrie.put(WorldStateFactory.KEY_ADDRESS_ALIAS, addressAliasTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_BIP_STATE, bipStateTrie.getRootHash());
 		mainTrie.put(WorldStateFactory.KEY_NETWORK_PARAMS, networkParamsTrie.getRootHash());
+		if (miningWindowTriePresent || dirtyMiningWindow[0] != null) {
+			mainTrie.put(WorldStateFactory.KEY_MINING_WINDOW, miningWindowTrie.getRootHash());
+		}
+		if (miningRewardMaturityTriePresent || !dirtyMiningRewardMaturities.isEmpty()
+				|| !miningRewardMaturitiesRemoved.isEmpty()) {
+			mainTrie.put(WorldStateFactory.KEY_MINING_REWARD_MATURITY, miningRewardMaturityTrie.getRootHash());
+		}
 		mainTrie.put(WorldStateFactory.KEY_TOKEN, tokenTrie.getRootHash());
 
 		mainTrie.commit(nodeUpdater);
@@ -510,6 +593,7 @@ public class WorldState {
 		dirtyAddressAliases.clear();
 		dirtyBipStates.clear();
 		dirtyTokens.clear();
+		dirtyMiningRewardMaturities.clear();
 
 		initialBalances.clear();
 		initialNonces.clear();
@@ -518,15 +602,19 @@ public class WorldState {
 		initialAddressAliases.clear();
 		initialBipStates.clear();
 		initialTokens.clear();
+		initialMiningRewardMaturities.clear();
 		initialNetworkParams[0] = null;
+		initialMiningWindow[0] = null;
 
 		dirtyParams[0] = null;
+		dirtyMiningWindow[0] = null;
 		paramsChanged[0] = false;
 
 		tokensCreatedThisBlock.clear();
 		authoritiesRemoved.clear();
 		validatorsRemoved.clear();
 		aliasesRemoved.clear();
+		miningRewardMaturitiesRemoved.clear();
 
 		journal.clear();
 		trieStorage.rollback();
@@ -545,6 +633,7 @@ public class WorldState {
 		dirtyAddressAliases.clear();
 		dirtyBipStates.clear();
 		dirtyTokens.clear();
+		dirtyMiningRewardMaturities.clear();
 
 		initialBalances.clear();
 		initialNonces.clear();
@@ -553,21 +642,32 @@ public class WorldState {
 		initialAddressAliases.clear();
 		initialBipStates.clear();
 		initialTokens.clear();
+		initialMiningRewardMaturities.clear();
 		initialNetworkParams[0] = null;
+		initialMiningWindow[0] = null;
 
 		dirtyParams[0] = null;
+		dirtyMiningWindow[0] = null;
 		paramsChanged[0] = false;
 
 		tokensCreatedThisBlock.clear();
 		authoritiesRemoved.clear();
 		validatorsRemoved.clear();
 		aliasesRemoved.clear();
+		miningRewardMaturitiesRemoved.clear();
 
 		journal.clear();
 	}
 
 	private Bytes getBalanceKey(Address address, Address tokenAddress) {
 		return Hash.hash(Bytes.concatenate(address, tokenAddress));
+	}
+
+	private static Bytes miningRewardMaturityKey(long unlockBlockHeight) {
+		if (unlockBlockHeight < 0) {
+			throw new IllegalArgumentException("Unlock block height cannot be negative");
+		}
+		return Bytes.ofUnsignedLong(unlockBlockHeight);
 	}
 
 	// --- Diffs (Only valid in Validation Mode) ---
@@ -582,6 +682,14 @@ public class WorldState {
 
 	public Map<Address, StateDiff<TokenState>> getTokenDiffs() {
 		return computeDiff(dirtyTokens, initialTokens, TokenStateImpl.ZERO);
+	}
+
+	public Map<Address, StateDiff<AuthorityState>> getAuthorityDiffs() {
+		return computeDiff(dirtyAuthorities, initialAuthorities, AuthorityStateImpl.ZERO);
+	}
+
+	public Map<Address, StateDiff<ValidatorState>> getValidatorDiffs() {
+		return computeDiff(dirtyValidators, initialValidators, ValidatorStateImpl.ZERO);
 	}
 
 	public Map<Hash, StateDiff<BipState>> getBipDiffs() {
@@ -607,6 +715,33 @@ public class WorldState {
 		}
 
 		return new WorldStateDiff<>(oldVal, newVal);
+	}
+
+	public StateDiff<MiningWindowState> getMiningWindowDiff() {
+		if (isMining || dirtyMiningWindow[0] == null) {
+			return null;
+		}
+		MiningWindowState oldValue = initialMiningWindow[0] != null
+				? initialMiningWindow[0]
+				: MiningWindowStateImpl.ZERO;
+		if (oldValue.equals(dirtyMiningWindow[0])) {
+			return null;
+		}
+		return new WorldStateDiff<>(oldValue, dirtyMiningWindow[0]);
+	}
+
+	public Map<Long, StateDiff<MiningRewardMaturityState>> getMiningRewardMaturityDiffs() {
+		if (isMining) {
+			return new LinkedHashMap<>();
+		}
+		Map<Long, StateDiff<MiningRewardMaturityState>> diffs = computeDiff(
+				dirtyMiningRewardMaturities, initialMiningRewardMaturities, MiningRewardMaturityStateImpl.ZERO);
+		for (Long height : miningRewardMaturitiesRemoved) {
+			MiningRewardMaturityState oldState = initialMiningRewardMaturities.getOrDefault(
+					height, MiningRewardMaturityStateImpl.ZERO);
+			diffs.put(height, new WorldStateDiff<>(oldState, MiningRewardMaturityStateImpl.ZERO));
+		}
+		return diffs;
 	}
 
 	public Map<String, AddressAliasState> getAliasesRemovedWithState() {

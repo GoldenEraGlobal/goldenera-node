@@ -49,18 +49,31 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ThrottlingFilter extends OncePerRequestFilter {
 
+    private static final String SNAPSHOT_PATH_PREFIX = "/api/core/v1/sync/snapshots/checkpoint/";
+
     ThrottlingService throttlingService;
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // Snapshot files have their own global concurrent-stream limiter. Counting
+        // hundreds of sequential immutable chunks against the generic request-rate
+        // bucket makes a normal fresh-node bootstrap fail with HTTP 429.
+        return request.getRequestURI().startsWith(SNAPSHOT_PATH_PREFIX);
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        if (!throttlingService.checkGlobalIpLimit(request)) {
+        if (!Boolean.TRUE.equals(request.getAttribute(
+                PreAuthenticationThrottleFilter.GLOBAL_LIMIT_CHECKED_ATTRIBUTE))
+                && !throttlingService.checkGlobalIpLimit(request)) {
             sendErrorResponse(response, "Global Rate Limit Exceeded. You are sending too many requests.");
             return;
         }
 
         String path = request.getRequestURI();
-        if (path.startsWith("/api/core") || path.startsWith("/api/explorer") || path.startsWith("/api/shared")) {
+        if (path.startsWith("/api/core") || path.startsWith("/api/explorer") || path.startsWith("/api/shared")
+                || path.startsWith("/api/bridge")) {
             String limitKey;
             boolean isApiKey = false;
             Authentication auth = SecurityContextHolder.getContext().getAuthentication();

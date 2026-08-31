@@ -26,6 +26,7 @@ package global.goldenera.node.explorer.services.indexer.business;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -33,11 +34,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
-import lombok.extern.slf4j.Slf4j;
 
 @Service
 @RequiredArgsConstructor
-@Slf4j
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExIndexerPartitionService {
 
@@ -49,12 +48,17 @@ public class ExIndexerPartitionService {
 			"explorer_revert_log");
 
 	JdbcTemplate jdbcTemplate;
+	AtomicLong lastEnsuredPartitionIndex = new AtomicLong(-1L);
 
 	@Transactional
-	public void ensurePartitionsExist(long currentHeight) {
+	public synchronized void ensurePartitionsExist(long currentHeight) {
 		long currentPartitionIndex = currentHeight / PARTITION_SIZE;
+		if (currentPartitionIndex <= lastEnsuredPartitionIndex.get()) {
+			return;
+		}
 		createPartitionsForIndex(currentPartitionIndex);
 		createPartitionsForIndex(currentPartitionIndex + 1);
+		lastEnsuredPartitionIndex.set(currentPartitionIndex);
 	}
 
 	private void createPartitionsForIndex(long partitionIndex) {
@@ -68,11 +72,7 @@ public class ExIndexerPartitionService {
 					"CREATE TABLE IF NOT EXISTS %s PARTITION OF %s FOR VALUES FROM (%d) TO (%d)",
 					partitionName, tableName, start, end);
 
-			try {
-				jdbcTemplate.execute(sql);
-			} catch (Exception e) {
-				log.debug("Partition check for {} result: {}", partitionName, e.getMessage());
-			}
+			jdbcTemplate.execute(sql);
 		}
 	}
 }

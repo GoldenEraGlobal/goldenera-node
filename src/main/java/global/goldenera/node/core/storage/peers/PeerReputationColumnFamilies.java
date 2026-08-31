@@ -48,4 +48,9 @@ public class PeerReputationColumnFamilies {
 	public ColumnFamilyHandle peerReputation() {
 		return handles.get(CF_PEER_REPUTATION);
 	}
+
+	public void close() {
+		handles.values().forEach(ColumnFamilyHandle::close);
+		handles.clear();
+	}
 }

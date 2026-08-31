@@ -1,368 +1,230 @@
-# 🏛️ goldenera-node
+# goldenera-node
 
-**goldenera-node** is the official reference implementation of the Goldenera blockchain client. It serves as the backbone of the network, handling peer-to-peer communication, consensus mechanisms, transaction processing, and block validation. Built for performance and scalability, this node allows you to participate in the network and mine Goldenera coins.
+The reference client for the Goldenera blockchain. It handles peer discovery,
+consensus, transaction processing, block validation, and RandomX mining, with
+an optional Explorer/indexer and webhook service.
 
----
+## Requirements
 
-## ⚠️ Hardware Requirements
+- **CPU:** at least 4 vCPUs.
+- **RAM:** at least 8 GB without mining; 16 GB for production `FULL` mining.
+- **Storage:** SSD or NVMe.
+- **Docker Engine and Compose**, or **Docker Desktop** on macOS/Windows.
+  The installer installs them if needed.
 
-To run a node successfully, your system **must** meet the following minimum requirements. Failing to meet these may result in node instability, syncing issues, or mining failures.
+See [memory profiles](#memory-and-mining) before enabling mining or the Explorer.
+For an existing deployment with old memory settings, follow the
+[upgrade guide](docs/upgrading.md) before updating the image.
 
-* **CPU:** Minimum **4 vCPUs** (High single-core performance is recommended for mining).
-* **RAM:** Minimum **8 GB**, recommended **16 GB** for optimal performance.
-* **Storage:** Fast SSD/NVMe (HDD is strictly not recommended for blockchain databases).
+## Installation
 
-> **Note on Memory:** The node uses multiple memory pools:
-> - **RandomX Dataset:** ~2.5 GB (fixed, required for mining)
-> - **Java Heap:** Configurable via `JAVA_HEAP_MB`
-> - **RocksDB Cache:** Configurable via `ROCKSDB_BLOCK_CACHE_MB` (off-heap)
-> - **PostgreSQL + OS:** ~1.5 GB
->
-> See `.env.example` for sizing recommendations by VPS size.
+### Automated installer
 
----
+Ubuntu, Debian, or macOS:
 
-
-## 🛠️ Prerequisites
-
-Before proceeding with the installation, ensure that **Docker** and the **Docker Compose** plugin are installed on your system.
-
-* **Install Docker Engine:** Follow the official instructions for your operating system (Ubuntu, Debian, CentOS, etc.) here: [Install Docker Engine](https://docs.docker.com/engine/install/)
-* **Verify Installation:** Run the following commands to ensure Docker is running correctly:
-    ```bash
-    docker --version
-    docker compose version
-    ```
-
----
-
-## 🚀 Installation & Setup
-
-### 1. Optimize Linux Kernel (Recommended)
-
-For optimal mining performance (RandomX), huge pages must be enabled on the host machine.
-
-1.  Open the sysctl configuration file:
-    ```bash
-    sudo nano /etc/sysctl.conf
-    ```
-2.  Add the following line to the end of the file:
-    ```properties
-    vm.nr_hugepages=2000
-    ```
-3.  Apply the changes immediately:
-    ```bash
-    sudo sysctl -w vm.nr_hugepages=2000
-    ```
-
-### 2. Project Setup
-
-Create a directory for your node and create the necessary configuration files.
-
-#### `docker-compose.yml`
-
-Create a file named `docker-compose.yml` and paste the following content:
-
-```yaml
-services:
-  # ==============================================================================
-  # GOLDENERA NODE
-  # ==============================================================================
-  node:
-    image: ghcr.io/goldeneraglobal/goldenera-node:latest
-    container_name: goldenera_node
-    restart: unless-stopped
-    pull_policy: always
-
-    env_file:
-      - .env
-
-    environment:
-      - POSTGRESQL_HOST=db
-      - LOGGING_FILE=${LOGGING_FILE:-node.log}
-
-    ports:
-      - "${LISTEN_PORT:-8080}:8080"
-      - "${P2P_PORT:-9000}:9000"
-
-    volumes:
-      - ./node_data:/app/node_data
-      - ${LOGGING_DIR:-./node_logs}:/app/node_logs
-
-    depends_on:
-      db:
-        condition: service_healthy
-    ulimits:
-      memlock:
-        soft: -1
-        hard: -1
-    # Memory is managed via .env: JAVA_HEAP_MB + ROCKSDB_BLOCK_CACHE_MB
-    # Minimum recommended: 8GB RAM (see .env.example for sizing guide)
-
-  # ==============================================================================
-  # DATABASE
-  # ==============================================================================
-  db:
-    image: postgres:18.1-alpine
-    container_name: goldenera_db
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
-    command: postgres -c shared_buffers=512MB -c max_connections=100
-
-    environment:
-      POSTGRES_DB: ${POSTGRESQL_DB_NAME:-node_db}
-      POSTGRES_USER: ${POSTGRESQL_USERNAME:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:-password}
-
-    volumes:
-      - ./postgres_data:/var/lib/postgresql/data
-
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USERNAME:-postgres}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+```bash
+curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.sh | bash
 ```
 
-#### `.env` Configuration
+Windows PowerShell:
 
-Create a file named `.env`. You **must** configure the variables marked as required below.
-
-```dotenv
-# Spring profile
-SPRING_PROFILES_ACTIVE="prod"
-
-# Admin PORT & Explorer PORT
-LISTEN_PORT=8080
-
-# Explorer enable (if false, explorer will not sync and will not be available)
-EXPLORER_ENABLE=false
-
-# Node
-NODE_IDENTITY_FILE="./node_data/.node_identity"
-BLOCKCHAIN_DB_PATH="./node_data/blockchain"
-PEER_REPUTATION_DB_PATH="./node_data/peer-reputation"
-# =============================================================================
-# MEMORY CONFIGURATION
-# =============================================================================
-# 
-# Memory layout for GoldenEra Node:
-#   - Java Heap (JAVA_HEAP_MB):     JVM memory for application (configurable)
-#   - RocksDB Block Cache:          Native memory for disk cache (configurable)
-#   - RandomX Dataset:              ~2.5 GB (FIXED, required for mining)
-#   - OS + postgre buffers:                 ~1.5 GB
-#
-# EXAMPLES by VPS size:
-#   8GB VPS:  JAVA_HEAP_MB=2048,  ROCKSDB_BLOCK_CACHE_MB=1024
-#   16GB VPS: JAVA_HEAP_MB=8192,  ROCKSDB_BLOCK_CACHE_MB=2048
-#   32GB VPS: JAVA_HEAP_MB=16384, ROCKSDB_BLOCK_CACHE_MB=8192
-#
-# Leave empty for auto-calculation (recommended for beginners)
-# =============================================================================
-JAVA_HEAP_MB=
-
-# =============================================================================
-# RocksDB Tuning
-# =============================================================================
-# Block cache: main read cache, shared across all column families (OFF-HEAP memory!)
-# See memory examples above for recommended values
-ROCKSDB_BLOCK_CACHE_MB=512
-
-# Write buffer (memtable) size per column family
-# Larger = better write throughput, higher memory usage
-ROCKSDB_WRITE_BUFFER_MB=64
-
-# Max write buffers per CF (allows writes during flush)
-ROCKSDB_MAX_WRITE_BUFFERS=4
-
-# Background jobs for compaction/flush (set to CPU cores / 2)
-ROCKSDB_MAX_BACKGROUND_JOBS=6
-
-# SST block size (16KB good for point lookups, increase for scan-heavy workloads)
-ROCKSDB_BLOCK_SIZE_KB=16
-
-# Bloom filter bits per key (10 = ~1% false positive rate)
-ROCKSDB_BLOOM_FILTER_BITS=10
-
-# Direct I/O (recommended for Linux, reduces double-buffering)
-ROCKSDB_DIRECT_READS=true
-ROCKSDB_DIRECT_WRITES=true
-
-# Rate limit for background I/O in MB/s (0 = unlimited)
-# Set to ~50-100 on slower disks to prevent compaction from starving reads
-ROCKSDB_RATE_LIMIT_MB_PER_SEC=0
-
-# =============================================================================
-# BlobDB for Large Values (StoredBlock up to 7MB)
-# =============================================================================
-# Enable BlobDB for CF_BLOCKS (separates large values from LSM tree)
-ROCKSDB_BLOB_ENABLED=true
-
-# Minimum value size to store in blob files (bytes)
-# Values >= this go to blob files, smaller stay in SST
-# 64KB is good threshold - most headers are smaller, full blocks are larger
-ROCKSDB_BLOB_MIN_BYTES=65536
-
-# Blob file size in MB (256MB recommended for GCloud PD SSD)
-ROCKSDB_BLOB_FILE_SIZE_MB=256
-
-# Enable blob garbage collection during compaction
-ROCKSDB_BLOB_GC_ENABLED=true
-
-# Blob GC age cutoff (0.0-1.0): GC when this fraction of blobs are garbage
-ROCKSDB_BLOB_GC_AGE_CUTOFF=0.25
-
-# =============================================================================
-# Application Cache (Caffeine - in-heap caching)
-# =============================================================================
-# Block cache: full StoredBlock objects
-CACHE_BLOCK_MB=256
-
-# Trie node cache: WorldState MPT nodes (critical for state lookups)
-CACHE_TRIE_NODE_MB=256
-
-# Transaction cache
-CACHE_TX_MB=128
-
-# Header cache: partial blocks (headers only) - entry count
-CACHE_HEADER_MAX_ENTRIES=50000
-
-# Height-to-hash cache - entry count
-CACHE_HEIGHT_MAX_ENTRIES=100000
-
-# Cache expiration time in minutes
-CACHE_EXPIRE_MINUTES=60
-
-# Network
-NETWORK="MAINNET"
-BENEFICIARY_ADDRESS="0x0000000000000000000000000000000000000000"
-
-# P2P (use the public IP address!)
-P2P_HOST=
-P2P_PORT=9000
-
-# Directory
-DIRECTORY_PING_INTERVAL_IN_MS=30000
-
-# Mempool
-MEMPOOL_MAX_SIZE=100000
-MEMPOOL_EXPIRE_TX_IN_MINUTES=60
-MEMPOOL_MIN_ACCEPTABLE_FEE_IN_WEI=10
-MEMPOOL_MAX_NONCE_GAP_PER_SENDER=64
-
-# Mining
-MINING_ENABLE=false
-MINING_HASHING_THREADS=-1
-
-# PostgreSQL
-POSTGRESQL_HOST="localhost"
-POSTGRESQL_PORT=5432
-POSTGRESQL_DB_NAME="node_db"
-POSTGRESQL_USERNAME="postgres"
-POSTGRESQL_PASSWORD="postgres"
-
-# Security
-# openssl rand -base64 32
-SECURITY_HMAC_SECRET=""
-SECURITY_AES_GCM_SECRET=""
-# If true, core-api security will be enabled (all endpoints will require API key)
-SECURITY_CORE_API_ENABLED=false
-SECURITY_EXPLORER_API_ENABLED=true
-
-# Admin
-ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="abc123"
-
-# Logging
-LOGGING_DIR="./node_logs"
-LOGGING_FILE="goldenera.log"
-LOGGING_LEVEL_ROOT=INFO
-LOGGING_LEVEL_GLOBAL_GOLDENERA=INFO
-
-# Throttling (api & p2p rate limiting)
-
-# GLOBAL SAFETY NET (Per IP) - Applied to EVERYTHING
-# Allows 500 requests per second. Just to stop DDoS scripts.
-THROTTLING_GLOBAL_CAPACITY=500
-THROTTLING_GLOBAL_REFILL_TOKENS=500
-
-# PUBLIC CORE (Per IP) - Unauthenticated access to Core
-# Strict: 100 tokens capacity, refills 20 per second.
-THROTTLING_PUBLIC_CORE_CAPACITY=100
-THROTTLING_PUBLIC_CORE_REFILL_TOKENS=20
-
-# API KEY: DEFAULT / MEGA LOOSE (Per Key) - For everything else
-# Mega Loose: 5000 tokens capacity, refills 2000 per second.
-THROTTLING_API_KEY_DEFAULT_CAPACITY=5000
-THROTTLING_API_KEY_DEFAULT_REFILL_TOKENS=2000
-
-# API KEY: EXPLORER (Per Key) - Heavy queries
-# Reasonable: 500 tokens capacity, refills 100 per second.
-THROTTLING_API_KEY_EXPLORER_CAPACITY=500
-THROTTLING_API_KEY_EXPLORER_REFILL_TOKENS=100
-
-# P2P (Per Peer) - Protection against flood
-# High throughput: 20000 capacity, refills 10000 per second (supports ~5000 TPS + overhead)
-THROTTLING_P2P_CAPACITY=20000
-THROTTLING_P2P_REFILL_TOKENS=10000
+```powershell
+irm https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.ps1 | iex
 ```
 
-### 3. Critical Configuration Guide
+On a fresh installation, **Automatic** setup uses the public MAINNET image,
+enables mining, and disables the Explorer and PostgreSQL. It asks for a mining
+reward address and a public P2P IP if detection fails. Choose **Manual** to
+configure the network, services, mining, ports, identity, and memory budget.
 
-Before running the node, you must adjust specific `.env` variables to match your environment.
+The installer generates secrets, writes the configuration, and starts the node.
+On macOS and Windows, Docker Desktop setup may need administrator access or a
+restart; Windows may also require WSL2.
 
-| Variable | Description & Requirement |
-| :--- | :--- |
-| **`JAVA_HEAP_MB`** | Java heap size in MB. Leave empty for auto-calculation. See memory examples in `.env`. |
-| **`ROCKSDB_BLOCK_CACHE_MB`** | RocksDB read cache (off-heap). Default `512`. See memory examples above. |
-| **`LISTEN_PORT`** | The port for the Explorer/Admin API (exposed via Docker). Default is `8080`. |
-| **`BENEFICIARY_ADDRESS`** | **CRITICAL.** Set this to your **Goldenera Wallet Address**. This is where your mining rewards will be sent. |
-| **`P2P_HOST`** | **Must be your Public IP Address.**<br>Do not use a domain name here. This is used for peer discovery. |
-| **`MINING_HASHING_THREADS`** | Number of CPU cores dedicated to mining. <br>`-1` = Auto (Leaves ~3 cores free for system/node). <br>Ensure at least 1 core remains free for system tasks. |
-| **`SECURITY_HMAC_SECRET`** | **MANDATORY.** Generate a secure key using the command below. |
-| **`SECURITY_AES_GCM_SECRET`** | **MANDATORY.** Generate a secure key using the command below. |
-| **`ADMIN_USERNAME`** | Change this immediately for security. |
-| **`ADMIN_PASSWORD`** | Change this immediately for security. |
+### Manual Docker Compose setup
 
-#### Generating Security Secrets
-Run the following command in your terminal to generate the required base64 secrets for the configuration above:
+Install Docker and Compose first. In a new installation directory, download the
+maintained [Compose file](docker-compose.yml) and [environment template](.env.example):
+
+```bash
+mkdir -p ~/goldenera-node
+cd ~/goldenera-node
+curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/.env.example -o .env
+chmod 600 .env
+```
+
+Do not overwrite an existing installation's configuration with these commands.
+Edit `.env` using the settings below, then start the node:
+
+```bash
+docker compose config --quiet
+docker compose up -d
+docker compose logs -f node
+```
+
+The checked-in Compose file includes PostgreSQL; the template enables the
+Explorer and webhooks, with mining disabled. For a SQL-free deployment, use
+the installer or remove both the `db` service and `node.depends_on` from Compose,
+then apply the core-only settings below.
+
+## Configuration
+
+Keep the full configuration in `.env`; [.env.example](.env.example) documents
+the available deployment settings. Review these before the first start:
+
+| Setting | Purpose |
+| --- | --- |
+| `NETWORK` | Blockchain network; defaults to `MAINNET` in the template. |
+| `P2P_HOST` | Public IPv4 address used for peer discovery, not a domain name. |
+| `MINING_ENABLE` | Enable or disable mining. |
+| `BENEFICIARY_ADDRESS` | Your Goldenera reward address. Must not be the zero address when mining. |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Replace the example admin credentials. |
+| `POSTGRESQL_PASSWORD` | Replace the example database password when using PostgreSQL. |
+| `SECURITY_HMAC_SECRET`, `SECURITY_AES_GCM_SECRET` | Two different Base64-encoded 32-byte secrets. |
+| `NODE_MEMORY_LIMIT_MB` | Hard node-container memory limit; see the profiles below. |
+
+For manual setup, run this command **twice** and assign one result to each
+security secret:
 
 ```bash
 openssl rand -base64 32
 ```
-*Copy the output and paste it into `SECURITY_HMAC_SECRET` and `SECURITY_AES_GCM_SECRET`.*
 
----
+Keep secrets and the node identity private and preserve them across upgrades.
+An imported mnemonic sets the persistent P2P identity; mining rewards go to
+`BENEFICIARY_ADDRESS` and do not use that identity's private key.
 
-## 🏃‍♂️ Running the Node
+### Optional services
 
-Once configured, start the node using Docker Compose:
+| Deployment | `POSTGRESQL_ENABLE` | `EXPLORER_ENABLE` | `WEBHOOK_ENABLE` |
+| --- | --- | --- | --- |
+| Core only | `false` | `false` | `false` |
+| Core with API keys and webhooks | `true` | `false` | `true` |
+| Core with Explorer and webhooks | `true` | `true` | `true` |
+
+Webhooks can be disabled independently. Explorer, webhooks, and protected core
+API access all require PostgreSQL. Set `SECURITY_CORE_API_ENABLED=true` to
+require API keys for core endpoints, except public health checks; leave it
+`false` for a SQL-free node. Explorer API key protection is controlled by
+`SECURITY_EXPLORER_API_ENABLED`.
+
+### Memory and mining
+
+Leave `JAVA_HEAP_MB` empty for automatic sizing. The container accounts for its
+memory limit, current cgroup usage, huge pages, RocksDB, and enabled services.
+A manual heap must fit the same native-memory budget.
+
+| Host RAM | Mining | Huge pages | `NODE_MEMORY_LIMIT_MB` | Explorer/PostgreSQL |
+| --- | --- | --- | ---: | --- |
+| 8 GB | Off | Off | `8192` | Prefer off |
+| 12 GB+ | Off | Off | `8192` | Supported |
+| 16 GB+ | `FULL` | On | `9216` | Supported |
+| 16 GB+ | `FULL` | Off | `12288` | Supported |
+
+These are node-container limits, not total host budgets. PostgreSQL has a
+separate limit (`POSTGRESQL_MEMORY_LIMIT_MB=1024` by default); leave room for
+the OS and any host huge-page reservation.
+
+On Linux, the installer can reserve a worker-dependent pool of at least 1280
+two-megabyte huge pages (about 2.5 GB). This is an explicit host-wide opt-in via
+`CONFIGURE_RANDOMX_HUGEPAGES`; setting it in a manually managed `.env` does
+not configure the kernel. Compose grants `IPC_LOCK` for huge-page access.
+See the [upgrade guide](docs/upgrading.md#linux-huge-pages) for manual host setup.
+
+`MINING_HASHING_THREADS=-1` selects the thread count automatically.
+`MINING_MEMORY_MODE=FULL` is the production mode; `LIGHT` mining is restricted
+to validated sandbox execution and at most four hashing threads.
+
+### Advanced tuning
+
+RocksDB, caches, HTTP threads, rate limits, and diagnostics are documented in
+[.env.example](.env.example). Application-level defaults and additional options
+are in [application.properties](src/main/resources/application.properties).
+
+Two settings have behavior beyond performance tuning:
+
+- `EQUIVOCATION_SINGLE_OBSERVATION_RETENTION_BLOCKS=0` keeps non-conflicting
+  observations indefinitely. A finite window saves space but can miss conflicts
+  arriving outside it.
+- `API_KEY_AUTH_CACHE_TTL=5s` bounds stale authentication after direct database
+  writes or changes from another node. Changes made through this process
+  invalidate the cache after commit.
+
+## Operations
+
+For installer-managed deployments, run commands from the installation directory
+(`~/goldenera-node` by default on Linux/macOS):
 
 ```bash
-docker compose up -d
+./goldenera status
+./goldenera logs
+./goldenera update
+./goldenera restart
+./goldenera stop
+./goldenera start
 ```
 
-Check the logs to ensure everything is running correctly:
+On Windows, use the equivalent PowerShell controller, for example:
+
+```powershell
+& "$env:LOCALAPPDATA\GoldenEra\Node\goldenera.ps1" update
+```
+
+`update` pulls the configured public image and recreates containers while
+preserving data. Images configured with `--local-image` are never pulled.
+For manually managed deployments:
 
 ```bash
-docker compose logs -f node
+docker compose pull
+docker compose up -d --remove-orphans
+docker compose ps
 ```
 
----
+After editing `.env`, use `docker compose up -d` to apply changes; a container
+restart alone does not reload environment variables.
 
-## 📚 API Documentation
+Data lives in `node_data/` (blockchain and P2P identity) and `postgres_data/`
+(when PostgreSQL is enabled); logs go to `node_logs/` by default.
+Back up configuration and persistent data before upgrades. Never delete these
+data directories or use `docker compose down -v` as an upgrade step.
+See the [upgrade guide](docs/upgrading.md) for older installations.
 
-The node comes with a built-in Swagger UI for exploring the API and Administration endpoints. Once the node is running, access it at:
+## API and network access
 
-**[http://localhost:8080/swagger-ui/index.html#/](http://localhost:8080/swagger-ui/index.html#/)**
+Default ports are **9000** for P2P and **8080** for HTTP APIs. Allow inbound P2P
+traffic for peer connectivity; restrict administrative HTTP access and use TLS
+when exposing it remotely.
 
-*(Replace `localhost:8080` with your server's IP or domain if accessing remotely).*
+- [Swagger UI](http://localhost:8080/swagger-ui/index.html) documents the APIs.
+- [Liveness](http://localhost:8080/api/core/v1/health/live) reports whether the
+  process is running; it does not indicate that blockchain sync is complete.
+- Admin endpoints use HTTP Basic authentication with the configured admin
+  credentials.
 
----
+Adjust URLs for your host and port. When changing `LISTEN_PORT` or `P2P_PORT`
+in the checked-in Compose setup, also update the container-side port mappings.
+The installer generates matching mappings automatically.
+
+### P2P chain identity
+
+Protocol-v1 `STATUS` claims are unsigned and do not authenticate a peer.
+Chain capabilities prevent accidental cross-chain peering; rejected, unbound
+claims must not cause persistent bans for the claimed address.
+
+Sandbox nodes should advertise and require `ge.chain.v1`. The legacy peer
+allowlist is only for temporary compatibility with exact known old-node addresses
+in isolated, disposable sandboxes: disable directory discovery, keep P2P off
+public interfaces, and remove the allowlist after the bounded migration window.
+It is not an authentication or authorization mechanism.
+
+## Development
+
+Local image builds, reproducible sandbox images, and installer tests are
+documented in [scripts/README.md](scripts/README.md). Sandbox builds require a
+clean committed worktree, the project [.mise.toml](.mise.toml) toolchain, and
+locally installed Maven dependencies.
 
 ## License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+[MIT](LICENSE).

@@ -32,6 +32,7 @@ import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.context.ApplicationEvent;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent;
 import lombok.Getter;
 import lombok.NonNull;
@@ -51,6 +52,8 @@ public class ExBlockConnectedEvent extends ApplicationEvent {
 	Wei blockReward;
 	@NonNull
 	List<BlockEvent> events;
+	@NonNull
+	ConnectedSource connectedSource;
 
 	public ExBlockConnectedEvent(
 			Object source,
@@ -58,12 +61,14 @@ public class ExBlockConnectedEvent extends ApplicationEvent {
 			BigInteger cumulativeDifficulty,
 			Wei totalFees,
 			Wei blockReward,
-			List<BlockEvent> events) {
+			List<BlockEvent> events,
+			ConnectedSource connectedSource) {
 		super(source);
 		this.block = block;
 		this.cumulativeDifficulty = cumulativeDifficulty;
 		this.totalFees = totalFees;
 		this.blockReward = blockReward;
-		this.events = events;
+		this.events = events == null ? List.of() : List.copyOf(events);
+		this.connectedSource = connectedSource;
 	}
 }

@@ -31,6 +31,12 @@ import org.springframework.stereotype.Component;
 import global.goldenera.node.explorer.api.v1.validator.dtos.ValidatorDtoV1;
 import global.goldenera.node.explorer.api.v1.validator.dtos.ValidatorDtoV1_Page;
 import global.goldenera.node.explorer.entities.ExValidator;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache.HeadStateSnapshot;
+import global.goldenera.node.core.processing.ValidatorMiningViewService;
+import global.goldenera.node.core.processing.ValidatorMiningViewService.ValidatorMiningView;
+import global.goldenera.node.core.state.WorldState;
+import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
@@ -41,25 +47,60 @@ import lombok.experimental.FieldDefaults;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ValidatorMapper {
 
+    ChainHeadStateCache chainHeadStateCache;
+    ValidatorMiningViewService validatorMiningViewService;
+
     public ValidatorDtoV1 map(
             @NonNull ExValidator in) {
+		return map(in, chainHeadStateCache.getHeadSnapshot().state());
+	}
+
+	public ValidatorDtoV1 map(@NonNull ExValidator in, @NonNull WorldState headState) {
+        var canonicalValidator = headState.getValidator(in.getAddress());
+        ValidatorMiningView view = canonicalValidator.exists()
+                ? validatorMiningViewService.evaluate(headState, in.getAddress(), canonicalValidator)
+                : null;
         return new ValidatorDtoV1(
-                in.getVersion(),
+				canonicalValidator.exists() ? canonicalValidator.getVersion() : in.getVersion(),
                 in.getAddress(),
-                in.getOriginTxHash(),
-                in.getCreatedAtBlockHeight(),
-                in.getCreatedAtTimestamp());
+				canonicalValidator.exists() ? canonicalValidator.getOriginTxHash() : in.getOriginTxHash(),
+				canonicalValidator.exists() ? canonicalValidator.getCreatedAtBlockHeight() : in.getCreatedAtBlockHeight(),
+				canonicalValidator.exists() ? canonicalValidator.getCreatedAtTimestamp() : in.getCreatedAtTimestamp(),
+				view != null ? view.miningLimitMode() : in.getMiningLimitMode(),
+				view != null ? view.miningPolicySource() : in.getMiningPolicySource(),
+				view != null ? view.maxMiningShareBps() : in.getMaxMiningShareBps(),
+                view != null ? view.maxBlocksInCurrentWindow() : null,
+                view != null ? view.blocksMinedInCurrentWindow() : null,
+                view != null ? view.remainingBlocksInCurrentWindow() : null,
+                view != null ? view.miningEligible() : null,
+				canonicalValidator.exists()
+						? canonicalValidator.getVersion() == ValidatorStateVersion.V2
+								? canonicalValidator.getPolicyUpdatedByTxHash() : null
+						: in.getPolicyUpdatedByTxHash(),
+				canonicalValidator.exists() && canonicalValidator.getVersion() == ValidatorStateVersion.V2
+						? canonicalValidator.getPolicyUpdatedAtBlockHeight()
+						: null,
+				canonicalValidator.exists()
+						? canonicalValidator.getVersion() == ValidatorStateVersion.V2
+								? canonicalValidator.getPolicyUpdatedAtTimestamp() : null
+						: in.getPolicyUpdatedAtTimestamp());
     }
 
     public List<ValidatorDtoV1> map(
             @NonNull List<ExValidator> in) {
-        return in.stream().map(this::map).toList();
+		HeadStateSnapshot snapshot = chainHeadStateCache.getHeadSnapshot();
+		return map(in, snapshot.state());
+	}
+
+	public List<ValidatorDtoV1> map(@NonNull List<ExValidator> in, @NonNull WorldState headState) {
+		return in.stream().map(validator -> map(validator, headState)).toList();
     }
 
     public ValidatorDtoV1_Page map(
             @NonNull Page<ExValidator> in) {
+		WorldState headState = chainHeadStateCache.getHeadSnapshot().state();
         return new ValidatorDtoV1_Page(
-                map(in.toList()),
+				map(in.toList(), headState),
                 in.getTotalPages(),
                 in.getTotalElements());
     }

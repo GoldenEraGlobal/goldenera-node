@@ -56,6 +56,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
@@ -180,6 +181,43 @@ class MempoolStoreRbfGovernanceMatrixTest {
 		}
 	}
 
+	@Test
+	void governanceRbfMovesReservationsAndFailedCrossTypeReplacementIsAtomic() {
+		TxBipNetworkParamsSetPayload networkResize = mock(TxBipNetworkParamsSetPayload.class);
+		TxBipValidatorMiningPolicySetPayload policy = policyPayload(TARGET);
+		TxBipValidatorRemovePayload removeOther = addressPayload(TxBipValidatorRemovePayload.class, OTHER_TARGET);
+		MempoolEntry originalNetwork = governance(900, ALICE, 1, 100, networkResize);
+		MempoolEntry policyReplacement = governance(901, ALICE, 1, 110, policy);
+
+		assertThat(store.addTransaction(originalNetwork, 0, MempoolTxAddEvent.AddReason.NEW))
+				.matches(StorageAddResult::isSuccess);
+		assertThat(store.isNetworkParamsChangePending()).isTrue();
+		assertThat(store.addTransaction(policyReplacement, 0, MempoolTxAddEvent.AddReason.NEW))
+				.matches(StorageAddResult::isSuccess);
+		assertThat(store.getTxByHash(originalNetwork.getHash())).isEmpty();
+		assertThat(store.isNetworkParamsChangePending()).isFalse();
+		assertThat(store.isValidatorMiningPolicyChangePending(TARGET)).isTrue();
+
+		MempoolEntry independentNetwork = governance(902, CAROL, 1, 100, networkResize);
+		assertThat(store.addTransaction(independentNetwork, 0, MempoolTxAddEvent.AddReason.NEW))
+				.matches(StorageAddResult::isSuccess);
+		MempoolEntry conflictingRemove = governance(903, BOB, 1, 100,
+				addressPayload(TxBipValidatorRemovePayload.class, TARGET));
+		assertThat(store.addTransaction(conflictingRemove, 0, MempoolTxAddEvent.AddReason.NEW))
+				.isEqualTo(StorageAddResult.GOVERNANCE_CONFLICT);
+
+		MempoolEntry failedReplacement = governance(904, CAROL, 1, 110, removeOther);
+		MempoolEntry ownerOfOtherTarget = governance(905, BOB, 1, 100, policyPayload(OTHER_TARGET));
+		assertThat(store.addTransaction(ownerOfOtherTarget, 0, MempoolTxAddEvent.AddReason.NEW))
+				.matches(StorageAddResult::isSuccess);
+		assertThat(store.addTransaction(failedReplacement, 0, MempoolTxAddEvent.AddReason.NEW))
+				.isEqualTo(StorageAddResult.GOVERNANCE_CONFLICT);
+		assertThat(store.getTxByHash(failedReplacement.getHash())).isEmpty();
+		assertThat(store.getTxByHash(independentNetwork.getHash())).containsSame(independentNetwork);
+		assertThat(store.isNetworkParamsChangePending()).isTrue();
+		assertThat(store.isValidatorMiningPolicyChangePending(OTHER_TARGET)).isTrue();
+	}
+
 	private static Stream<Arguments> governanceConflicts() {
 		TxBipAuthorityAddPayload authorityAdd = addressPayload(TxBipAuthorityAddPayload.class, TARGET);
 		TxBipAuthorityRemovePayload authorityRemove = addressPayload(TxBipAuthorityRemovePayload.class, TARGET);
@@ -188,6 +226,8 @@ class MempoolStoreRbfGovernanceMatrixTest {
 		TxBipValidatorAddPayload validatorAdd = addressPayload(TxBipValidatorAddPayload.class, TARGET);
 		TxBipValidatorRemovePayload validatorRemove = addressPayload(TxBipValidatorRemovePayload.class, TARGET);
 		TxBipValidatorAddPayload otherValidator = addressPayload(TxBipValidatorAddPayload.class, OTHER_TARGET);
+		TxBipValidatorMiningPolicySetPayload validatorPolicy = policyPayload(TARGET);
+		TxBipValidatorMiningPolicySetPayload otherValidatorPolicy = policyPayload(OTHER_TARGET);
 
 		TxBipAddressAliasAddPayload aliasAdd = aliasPayload(TxBipAddressAliasAddPayload.class, "target");
 		TxBipAddressAliasRemovePayload aliasRemove = aliasPayload(TxBipAddressAliasRemovePayload.class, "target");
@@ -200,6 +240,8 @@ class MempoolStoreRbfGovernanceMatrixTest {
 		return Stream.of(
 				row("authority add/remove", 1, authorityAdd, authorityRemove, otherAuthority),
 				row("validator add/remove", 10, validatorAdd, validatorRemove, otherValidator),
+				row("validator add/policy", 15, validatorAdd, validatorPolicy, otherValidatorPolicy),
+				row("validator policy/remove", 18, validatorPolicy, validatorRemove, otherValidatorPolicy),
 				row("alias add/remove", 20, aliasAdd, aliasRemove, otherAlias),
 				row("token update", 30, tokenUpdate, sameTokenUpdate, otherTokenUpdate));
 	}
@@ -236,6 +278,12 @@ class MempoolStoreRbfGovernanceMatrixTest {
 	private static TxBipTokenUpdatePayload tokenPayload(Address token) {
 		TxBipTokenUpdatePayload payload = mock(TxBipTokenUpdatePayload.class);
 		when(payload.getTokenAddress()).thenReturn(token);
+		return payload;
+	}
+
+	private static TxBipValidatorMiningPolicySetPayload policyPayload(Address validator) {
+		TxBipValidatorMiningPolicySetPayload payload = mock(TxBipValidatorMiningPolicySetPayload.class);
+		when(payload.getValidatorAddress()).thenReturn(validator);
 		return payload;
 	}
 

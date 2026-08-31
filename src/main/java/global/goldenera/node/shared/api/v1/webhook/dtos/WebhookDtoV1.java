@@ -63,6 +63,5 @@ public class WebhookDtoV1 {
     @FieldDefaults(level = PRIVATE)
     public static class CreatedWebhookDtoV1 {
         WebhookDtoV1 webhook;
-        String secretKey;
     }
 }

@@ -27,10 +27,13 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.List;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.api.v1.blockchain.dtos.BlockHeaderDtoV1;
+import global.goldenera.node.core.node.capabilities.ProofOfWorkRuntimeMode;
+import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
 import lombok.Builder;
 import lombok.Value;
 import lombok.experimental.FieldDefaults;
@@ -56,4 +59,14 @@ public class NodeInfoDtoV1 {
 	Long blocksBehind;
 	Double syncProgress;
 	int connectedPeers;
+
+	// Additive runtime contract metadata
+	ExecutionDomain executionDomain;
+	int capabilityContractVersion;
+	ChainIdentityDtoV1 chainIdentity;
+	ProofOfWorkRuntimeMode proofOfWorkMode;
+	List<String> capabilities;
+	SnapshotAnchorDtoV1 anchor;
+	BuildMetadataDtoV1 buildMetadata;
+	List<OpenApiGroupDtoV1> openApiGroups;
 }

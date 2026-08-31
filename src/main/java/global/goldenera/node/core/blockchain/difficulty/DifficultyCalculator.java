@@ -29,12 +29,11 @@ import java.math.BigInteger;
 
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.utils.DifficultyUtil;
-import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.exceptions.GEFailedException;
 import lombok.AllArgsConstructor;
 import lombok.NonNull;
 import lombok.experimental.FieldDefaults;
@@ -55,6 +54,17 @@ public class DifficultyCalculator {
 	public BigInteger calculateNextDifficulty(
 			@NonNull BlockHeader parentBlock,
 			@NonNull NetworkParamsState params) {
+		return calculateNextDifficulty(parentBlock, params, resolveAnchor(parentBlock, params.getAsertAnchorHeight()));
+	}
+
+	/**
+	 * Calculates difficulty against an anchor that was resolved from the candidate
+	 * branch rather than from the still-canonical height index.
+	 */
+	public BigInteger calculateNextDifficulty(
+			@NonNull BlockHeader parentBlock,
+			@NonNull NetworkParamsState params,
+			@NonNull BlockHeader anchorBlock) {
 
 		long nextHeight = parentBlock.getHeight() + 1;
 
@@ -63,33 +73,59 @@ public class DifficultyCalculator {
 			return params.getMinDifficulty();
 		}
 
-		try {
-			final long anchorHeight = params.getAsertAnchorHeight();
-			final Block anchorBlock = chainQueryService.getStoredBlockByHeight(anchorHeight)
-					.map(sb -> sb.getBlock())
-					.orElseThrow(() -> new GENotFoundException("Anchor block " + anchorHeight + " not found"));
-
-			long timeDelta = parentBlock.getTimestamp().toEpochMilli()
-					- anchorBlock.getHeader().getTimestamp().toEpochMilli();
-			long heightDelta = parentBlock.getHeight() - anchorBlock.getHeight();
-			long targetTimeMs = params.getTargetMiningTimeMs();
-			long tauMs = params.getAsertHalfLifeBlocks() * targetTimeMs;
-
-			BigInteger newDifficulty = DifficultyUtil.calculateAbsoluteAsertDifficulty(
-					anchorBlock.getHeader().getDifficulty(),
-					timeDelta,
-					heightDelta,
-					targetTimeMs,
-					tauMs,
-					params.getMinDifficulty());
-
-			log.debug("ASERT: H={} (Delta {}), TimeDelta={}ms, NewDiff={}",
-					nextHeight, heightDelta, timeDelta, newDifficulty);
-
-			return newDifficulty;
-		} catch (Exception e) {
-			log.error("Failed to calculate ASERT difficulty. Fallback to parent.", e);
-			return parentBlock.getDifficulty();
+		long anchorHeight = params.getAsertAnchorHeight();
+		if (anchorBlock.getHeight() != anchorHeight || anchorHeight > parentBlock.getHeight()) {
+			throw new GEFailedException("ASERT anchor does not belong to the requested branch height");
 		}
+
+		long timeDelta = parentBlock.getTimestamp().toEpochMilli()
+				- anchorBlock.getTimestamp().toEpochMilli();
+		long heightDelta = parentBlock.getHeight() - anchorBlock.getHeight();
+		long targetTimeMs = params.getTargetMiningTimeMs();
+		long tauMs;
+		try {
+			tauMs = Math.multiplyExact(params.getAsertHalfLifeBlocks(), targetTimeMs);
+		} catch (ArithmeticException e) {
+			throw new GEFailedException("ASERT half-life duration overflow", e);
+		}
+
+		BigInteger newDifficulty = DifficultyUtil.calculateAbsoluteAsertDifficulty(
+				anchorBlock.getDifficulty(),
+				timeDelta,
+				heightDelta,
+				targetTimeMs,
+				tauMs,
+				params.getMinDifficulty());
+
+		log.debug("ASERT: H={} (Delta {}), TimeDelta={}ms, NewDiff={}",
+				nextHeight, heightDelta, timeDelta, newDifficulty);
+
+		return newDifficulty;
+	}
+
+	private BlockHeader resolveAnchor(BlockHeader parentBlock, long anchorHeight) {
+		if (anchorHeight < 0 || anchorHeight > parentBlock.getHeight()) {
+			throw new GEFailedException("Invalid ASERT anchor height " + anchorHeight);
+		}
+		if (anchorHeight == parentBlock.getHeight()) {
+			return parentBlock;
+		}
+
+		boolean canonicalParent = chainQueryService.getCanonicalStoredBlockHeaderByHash(parentBlock.getHash()).isPresent();
+		if (canonicalParent) {
+			return chainQueryService.getStoredBlockHeaderByHeight(anchorHeight)
+					.map(storedBlock -> storedBlock.getBlock().getHeader())
+					.orElseThrow(() -> new GEFailedException("ASERT anchor block " + anchorHeight + " not found"));
+		}
+
+		BlockHeader cursor = parentBlock;
+		while (cursor.getHeight() > anchorHeight) {
+			long missingHeight = cursor.getHeight() - 1;
+			cursor = chainQueryService.getStoredBlockHeaderByHash(cursor.getPreviousHash())
+					.map(storedBlock -> storedBlock.getBlock().getHeader())
+					.orElseThrow(() -> new GEFailedException(
+							"ASERT candidate branch is missing block " + missingHeight));
+		}
+		return cursor;
 	}
 }

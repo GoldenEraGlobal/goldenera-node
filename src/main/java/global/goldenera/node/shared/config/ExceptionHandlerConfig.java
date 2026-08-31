@@ -103,7 +103,7 @@ public class ExceptionHandlerConfig {
 
     @ResponseBody
     @ExceptionHandler(AuthorizationDeniedException.class)
-    @ResponseStatus(HttpStatus.UNAUTHORIZED)
+    @ResponseStatus(HttpStatus.FORBIDDEN)
     String handleAuthorizationDeniedException(@NonNull AuthorizationDeniedException ex) {
         return wrapToJson(ex.getMessage());
     }

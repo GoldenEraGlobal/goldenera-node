@@ -23,22 +23,19 @@
  */
 package global.goldenera.node.explorer.services.indexer.business;
 
-import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
-import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
-import global.goldenera.node.explorer.entities.ExBlockHeader;
-import global.goldenera.node.explorer.entities.ExStatus;
-import global.goldenera.node.explorer.repositories.ExBlockHeaderRepository;
-import global.goldenera.node.explorer.services.indexer.core.ExIndexerStatusCoreService;
-import global.goldenera.node.shared.properties.GeneralProperties;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessState;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
+import global.goldenera.node.shared.exceptions.GEFailedException;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.AccessLevel;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -49,103 +46,80 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class ExIndexerSyncService {
+	static final int CATCH_UP_BATCH_SIZE = 64;
 
-	GeneralProperties generalProperties;
-	ExBlockHeaderRepository exBlockHeaderRepository;
-	ExIndexerStatusCoreService exStatusCoreService;
-	ExIndexerQueueService exQueueService;
-	ExIndexerRevertService exRevertService;
-
+	ExIndexerStartupRecoveryService recoveryService;
 	ChainQuery chainQuery;
 	ExIndexerEventReconstructionService eventReconstructionService;
+	ExIndexerService indexerService;
+	ExplorerIndexingExecutionGate executionGate;
+	ExplorerRuntimeReadiness readiness;
+	MeterRegistry registry;
 
-	@EventListener(CoreDbReadyEvent.class)
-	@Transactional(rollbackFor = Exception.class)
 	public void syncExplorerOnStartup() {
-		if (!generalProperties.isExplorerEnable()) {
-			log.info("Explorer is disabled. Skipping sync.");
-			return;
-		}
+		executionGate.run(this::syncExplorerOnStartupUnderGate);
+	}
+
+	private void syncExplorerOnStartupUnderGate() {
 		log.info("Checking Explorer synchronization status...");
-		long explorerHeight = validateAndRepairStatus();
-
-		long coreHeight = chainQuery.getLatestBlockHeight().orElse(-1L);
-		log.info("Explorer Height: {}, Core Height: {}", explorerHeight, coreHeight);
-
-		// 1. Handle Reorgs
-		explorerHeight = handleStartupReorgs(explorerHeight);
-
-		// 2. Sync Forward
-		if (explorerHeight < coreHeight) {
-			log.info("Explorer is behind. Starting sync from {} to {}...", explorerHeight + 1, coreHeight);
-
-			for (long h = explorerHeight + 1; h <= coreHeight; h++) {
-				StoredBlock storedBlock = chainQuery.getStoredBlockByHeight(h).orElse(null);
-				if (storedBlock == null) {
-					log.error("Critical: Missing block #{} in Core during Explorer sync!", h);
-					break;
+		readiness.rebuilding("Explorer is catching up from the local canonical archive");
+		Timer.Sample timer = Timer.start(registry);
+		try {
+			long explorerHeight = recoveryService.reconcileCanonicalHead();
+			while (true) {
+				long targetHeight = chainQuery.getLatestBlockHeight().orElse(-1L);
+				if (explorerHeight < targetHeight) {
+					log.info("Explorer catch-up from #{} to #{} in batches of {}",
+							explorerHeight + 1, targetHeight, CATCH_UP_BATCH_SIZE);
+					explorerHeight = catchUpRange(explorerHeight + 1, targetHeight);
 				}
-				try {
-					BlockConnectedEvent reconstructedEvent = eventReconstructionService.reconstructEvent(storedBlock);
-					exQueueService.pushConnect(reconstructedEvent);
-				} catch (Exception e) {
-					log.error("Failed to reconstruct event for block #{}", h, e);
-					throw new RuntimeException("Explorer sync failed at block " + h, e);
+
+				explorerHeight = recoveryService.reconcileCanonicalHead();
+				long currentCoreHeight = chainQuery.getLatestBlockHeight().orElse(-1L);
+				if (explorerHeight == currentCoreHeight) {
+					readiness.ready();
+					log.info("Explorer startup catch-up complete at block #{}", explorerHeight);
+					return;
 				}
 			}
-		} else {
-			log.info("Explorer is fully synced.");
+		} catch (RuntimeException failure) {
+			if (readiness.status().state() == ExplorerReadinessState.REBUILDING) {
+				readiness.failed(ExplorerReadinessState.STORAGE_CORRUPT,
+						"Explorer startup catch-up failed: " + rootMessage(failure));
+			}
+			throw failure;
+		} finally {
+			timer.stop(registry.timer("explorer.startup.catchup.time"));
 		}
 	}
 
-	private long handleStartupReorgs(long explorerHeight) {
-		while (explorerHeight >= 0) {
-			Hash explorerHash = exStatusCoreService.getStatus().map(ExStatus::getSyncedBlockHash).orElse(null);
-			// Use StoredBlock instead of Block, use StoredBlock.getHash() for pre-computed
-			// hash
-			StoredBlock coreStoredBlock = chainQuery.getStoredBlockByHeight(explorerHeight).orElse(null);
-			if (explorerHash != null && coreStoredBlock != null && coreStoredBlock.getHash().equals(explorerHash)) {
-				return explorerHeight;
+	private long catchUpRange(long startHeight, long targetHeight) {
+		List<BlockConnectedEvent> batch = new ArrayList<>(CATCH_UP_BATCH_SIZE);
+		long indexedHeight = startHeight - 1;
+		for (long height = startHeight; height <= targetHeight; height++) {
+			StoredBlock storedBlock = chainQuery.getStoredBlockByHeight(height).orElse(null);
+			if (storedBlock == null) {
+				String detail = "Missing canonical core block " + height + " during Explorer startup catch-up";
+				readiness.failed(ExplorerReadinessState.STORAGE_CORRUPT, detail);
+				throw new GEFailedException(detail);
 			}
-			log.warn("Explorer DETECTED FORK at startup on block #{}. ExplorerHash: {}, CoreHash: {}. Reverting...",
-					explorerHeight, explorerHash, (coreStoredBlock != null ? coreStoredBlock.getHash() : "null"));
-
-			exRevertService.revertBlock(explorerHash, explorerHeight);
-			explorerHeight--;
+			batch.add(eventReconstructionService.reconstructEvent(storedBlock));
+			if (batch.size() == CATCH_UP_BATCH_SIZE || height == targetHeight) {
+				indexerService.handleBlockConnectedBatch(List.copyOf(batch));
+				registry.counter("explorer.startup.catchup.blocks").increment(batch.size());
+				registry.counter("explorer.startup.catchup.batches").increment();
+				indexedHeight = height;
+				batch.clear();
+			}
 		}
-		return -1;
+		return indexedHeight;
 	}
 
-	private long validateAndRepairStatus() {
-		Optional<ExBlockHeader> realTopBlockOpt = exBlockHeaderRepository.findLatest();
-		if (realTopBlockOpt.isEmpty()) {
-			log.info("Self-Heal: No blocks found in Explorer DB. Ensuring Status is initialized/empty.");
-			return -1;
+	private String rootMessage(Throwable failure) {
+		Throwable current = failure;
+		while (current.getCause() != null) {
+			current = current.getCause();
 		}
-
-		ExBlockHeader realTopBlock = realTopBlockOpt.get();
-		long realHeight = realTopBlock.getHeight();
-		Hash realHash = realTopBlock.getHash();
-		ExStatus currentStatus = exStatusCoreService.getStatus().orElse(null);
-		boolean isCorrupted = false;
-
-		if (currentStatus == null) {
-			log.warn("Self-Heal: Status row MISSING! Repairing based on block #{}", realHeight);
-			isCorrupted = true;
-		} else if (currentStatus.getSyncedBlockHeight() != realHeight) {
-			log.warn("Self-Heal: Height mismatch! Status: {}, DB: {}. Repairing...",
-					currentStatus.getSyncedBlockHeight(), realHeight);
-			isCorrupted = true;
-		} else if (!currentStatus.getSyncedBlockHash().equals(realHash)) {
-			log.warn("Self-Heal: Hash mismatch (Corrupted/Manual edit)! Status: {}, DB: {}. Repairing...",
-					currentStatus.getSyncedBlockHash(), realHash);
-			isCorrupted = true;
-		}
-
-		if (isCorrupted) {
-			exStatusCoreService.updateStatus(realTopBlock);
-			log.info("Self-Heal: Status successfully REPAIRED to match block #{}", realHeight);
-		}
-		return realHeight;
+		return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
 	}
 }

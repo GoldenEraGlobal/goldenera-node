@@ -289,19 +289,22 @@ public class BlockchainApiV1 {
     @CoreApiSecurity(ApiKeyPermission.READ_VALIDATOR)
     @GetMapping("worldstate/validator/{address}")
     public ResponseEntity<ValidatorStateDtoV1> getWorldStateValidator(@PathVariable Address address) {
-        var validatorState = chainHeadStateCache.getHeadState().getValidator(address);
+        WorldState headState = chainHeadStateCache.getHeadState();
+        var validatorState = headState.getValidator(address);
         if (!validatorState.exists()) {
             throw new GENotFoundException("Validator not found");
         }
-        return ResponseEntity.ok(stateMapper.map(validatorState));
+        return ResponseEntity.ok(stateMapper.map(address, validatorState, headState));
     }
 
     @CoreApiSecurity(ApiKeyPermission.READ_VALIDATOR)
     @GetMapping("worldstate/validators")
     public ResponseEntity<Map<Address, ValidatorStateDtoV1>> getAllValidators() {
+        WorldState headState = chainHeadStateCache.getHeadState();
         return ResponseEntity.ok(
                 entityIndexRepository.getAllValidatorsWithAddresses().entrySet().stream()
-                        .collect(Collectors.toMap(Map.Entry::getKey, e -> stateMapper.map(e.getValue()))));
+                        .collect(Collectors.toMap(Map.Entry::getKey,
+                                e -> stateMapper.map(e.getKey(), e.getValue(), headState))));
     }
 
     // ========================
@@ -318,7 +321,12 @@ public class BlockchainApiV1 {
         AccountBalanceState balanceState = state.getBalance(address, Address.NATIVE_TOKEN);
         AccountNonceState nonceState = state.getNonce(address);
 
-        Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
+	        Wei nativeBalance = balanceState.exists() ? balanceState.getBalance() : Wei.ZERO;
+		Wei lockedMiningReward = balanceState.exists() ? balanceState.getLockedMiningReward() : Wei.ZERO;
+		Wei pendingMiningRewardCancellation = balanceState.exists()
+				? balanceState.getPendingMiningRewardCancellation()
+				: Wei.ZERO;
+		Wei spendableNativeBalance = balanceState.exists() ? balanceState.getSpendableBalance() : Wei.ZERO;
         // If account never sent a tx, confirmedNonce is -1
         long confirmedNonce = nonceState.exists() ? nonceState.getNonce() : -1L;
         int pendingTxCount = mempoolStore.getPendingTxCount(address);
@@ -329,7 +337,10 @@ public class BlockchainApiV1 {
 
         AccountSummaryDtoV1.AccountSummaryDtoV1Builder builder = AccountSummaryDtoV1.builder()
                 .address(address)
-                .nativeBalance(nativeBalance)
+	                .nativeBalance(nativeBalance)
+				.lockedMiningReward(lockedMiningReward)
+				.pendingMiningRewardCancellation(pendingMiningRewardCancellation)
+				.spendableNativeBalance(spendableNativeBalance)
                 .nonce(confirmedNonce)
                 .nextNonce(nextNonce)
                 .pendingTxCount(pendingTxCount);

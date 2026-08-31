@@ -47,7 +47,11 @@ public record BulkMemTransferPageRequestV1(
         TransferType transferType,
         TxType txType,
         Set<Address> fromAddresses,
-        Set<Address> toAddresses,
-        Set<Address> tokenAddresses,
-        Hash referenceHash) {
+			Set<Address> toAddresses,
+			Set<Address> tokenAddresses,
+			Hash referenceHash) {
+	public BulkMemTransferPageRequestV1 {
+		BulkPageRequestValidator.validate(
+				pageNumber, pageSize, addresses, fromAddresses, toAddresses, tokenAddresses);
+	}
 }

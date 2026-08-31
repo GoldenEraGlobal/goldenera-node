@@ -41,6 +41,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
@@ -66,6 +67,7 @@ import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenMint
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenSupplyUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.TokenUpdated;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorAdded;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorMiningPolicyChanged;
 import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.ValidatorRemoved;
 
 /**
@@ -99,8 +101,9 @@ public class BlockEventExtractor {
         public List<BlockEvent> extractEvents(
                         Wei blockRewardAmount,
                         Wei feesAmount,
-                        Address minerAddress,
-                        Address rewardPoolAddress,
+	                        Address minerAddress,
+	                        Address rewardPoolAddress,
+	                        Long rewardUnlockBlockHeight,
                         Map<Hash, StateDiff<BipState>> bipDiffs,
                         Map<Address, StateDiff<TokenState>> tokenDiffs,
                         Map<Hash, Wei> actualBurnAmounts,
@@ -110,7 +113,9 @@ public class BlockEventExtractor {
 
                 // 1. Block reward event (from pool or minted - excludes fees)
                 if (blockRewardAmount != null && blockRewardAmount.compareTo(Wei.ZERO) > 0) {
-                        events.add(new BlockReward(minerAddress, rewardPoolAddress, blockRewardAmount));
+	                        events.add(new BlockReward(
+	                                        minerAddress, rewardPoolAddress, blockRewardAmount,
+	                                        rewardUnlockBlockHeight));
                 }
 
                 // 2. Fees collected event (tx fees paid by users)
@@ -235,6 +240,11 @@ public class BlockEventExtractor {
                                         p);
 
                         case TxBipValidatorRemovePayload p -> new ValidatorRemoved(
+                                        bipHash,
+                                        txVersion,
+                                        p);
+
+                        case TxBipValidatorMiningPolicySetPayload p -> new ValidatorMiningPolicyChanged(
                                         bipHash,
                                         txVersion,
                                         p);

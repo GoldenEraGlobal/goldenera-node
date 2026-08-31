@@ -28,12 +28,14 @@ import java.io.InputStream;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.StreamSupport;
 
 import org.apache.tuweni.units.ethereum.Wei;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import global.goldenera.cryptoj.common.MiningConsensusRules;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.enums.Network;
 import lombok.experimental.UtilityClass;
@@ -86,14 +88,27 @@ public class GenesisConfigLoader {
             }
 
             JsonNode root = OBJECT_MAPPER.readTree(is);
-            return parseGenesisSettings(root);
+            return parseProductionGenesisSettings(root, network);
 
         } catch (IOException e) {
             throw new IllegalStateException("Failed to load genesis configuration from: " + fileName, e);
         }
     }
 
-    private static GenesisSettings parseGenesisSettings(JsonNode root) {
+    static GenesisSettings parseGenesisSettings(JsonNode root) {
+		return parseGenesisSettings(root, null);
+	}
+
+	public static GenesisSettings parseProductionGenesisSettings(JsonNode root, Network network) {
+		return parseGenesisSettings(root, legacyMiningWindowDefault(network), legacyMiningRewardVestingDefault(network));
+	}
+
+	private static GenesisSettings parseGenesisSettings(JsonNode root, Long missingMiningWindowDefault) {
+		return parseGenesisSettings(root, missingMiningWindowDefault, null);
+	}
+
+	private static GenesisSettings parseGenesisSettings(JsonNode root, Long missingMiningWindowDefault,
+			Long missingMiningRewardVestingDefault) {
         // Size limits
         JsonNode limits = requireNode(root, "limits");
         long maxHeaderSizeInBytes = requireLong(limits, "maxHeaderSizeInBytes");
@@ -117,6 +132,24 @@ public class GenesisConfigLoader {
         BigInteger minDifficulty = new BigInteger(requireString(networkParams, "minDifficulty"));
         Wei minTxBaseFee = Wei.valueOf(new BigInteger(requireString(networkParams, "minTxBaseFee")));
         Wei minTxByteFee = Wei.valueOf(new BigInteger(requireString(networkParams, "minTxByteFee")));
+        long validatorMiningWindowBlocks = networkParams.has("validatorMiningWindowBlocks")
+				? requireConsensusLong(networkParams, "validatorMiningWindowBlocks")
+				: requireLegacyMiningWindowDefault(missingMiningWindowDefault);
+	        try {
+	            MiningConsensusRules.validateWindowSize(validatorMiningWindowBlocks);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("Invalid networkParams.validatorMiningWindowBlocks: "
+                    + validatorMiningWindowBlocks, e);
+	        }
+		long miningRewardVestingBlocks = networkParams.has("miningRewardVestingBlocks")
+				? requireConsensusLong(networkParams, "miningRewardVestingBlocks")
+				: requireLegacyMiningRewardVestingDefault(missingMiningRewardVestingDefault);
+		try {
+			MiningConsensusRules.validateMiningRewardVestingBlocks(miningRewardVestingBlocks);
+		} catch (RuntimeException e) {
+			throw new IllegalStateException("Invalid networkParams.miningRewardVestingBlocks: "
+					+ miningRewardVestingBlocks, e);
+		}
 
         // Authorities
         JsonNode authoritiesNode = requireNode(root, "authorities");
@@ -162,7 +195,9 @@ public class GenesisConfigLoader {
                 asertHalfLifeBlocks,
                 minDifficulty,
                 minTxBaseFee,
-                minTxByteFee,
+	                minTxByteFee,
+	                validatorMiningWindowBlocks,
+	                miningRewardVestingBlocks,
                 authorities,
                 initialMintForAuthority,
                 validators,
@@ -178,6 +213,33 @@ public class GenesisConfigLoader {
                 randomXGenesisKey,
                 randomXBatchSize);
     }
+
+	private static long requireLegacyMiningWindowDefault(Long value) {
+		if (value == null) {
+			throw new IllegalStateException("Missing required field: validatorMiningWindowBlocks");
+		}
+		return value;
+	}
+
+	private static long requireLegacyMiningRewardVestingDefault(Long value) {
+		if (value == null) {
+			throw new IllegalStateException("Missing required field: miningRewardVestingBlocks");
+		}
+		return value;
+	}
+
+	private static long legacyMiningWindowDefault(Network network) {
+		return switch (network) {
+			case MAINNET -> 1_000L;
+			case TESTNET -> 100L;
+		};
+	}
+
+	private static long legacyMiningRewardVestingDefault(Network network) {
+		return switch (network) {
+			case MAINNET, TESTNET -> 518_400L;
+		};
+	}
 
     // =============================================
     // HELPER METHODS
@@ -207,6 +269,14 @@ public class GenesisConfigLoader {
         return node.asLong();
     }
 
+    private static long requireConsensusLong(JsonNode parent, String fieldName) {
+        JsonNode node = parent.get(fieldName);
+        if (node == null || node.isNull() || !node.isIntegralNumber() || !node.canConvertToLong()) {
+            throw new IllegalStateException("Missing or invalid consensus long field: " + fieldName);
+        }
+        return node.longValue();
+    }
+
     private static int requireInt(JsonNode parent, String fieldName) {
         JsonNode node = parent.get(fieldName);
         if (node == null || node.isNull() || !node.isNumber()) {
@@ -227,7 +297,7 @@ public class GenesisConfigLoader {
         if (!arrayNode.isArray()) {
             throw new IllegalStateException("Expected array for authorities");
         }
-        return java.util.stream.StreamSupport.stream(arrayNode.spliterator(), false)
+        return StreamSupport.stream(arrayNode.spliterator(), false)
                 .map(JsonNode::asText)
                 .map(Address::fromHexString)
                 .collect(Collectors.toList());

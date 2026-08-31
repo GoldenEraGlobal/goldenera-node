@@ -43,9 +43,7 @@ import lombok.experimental.FieldDefaults;
 public class WebhookMapper {
 
     public WebhookDtoV1.CreatedWebhookDtoV1 map(@NonNull WebhookService.CreatedWebhook in) {
-        return new WebhookDtoV1.CreatedWebhookDtoV1(
-                map(in.getWebhook()),
-                in.getSecretKey());
+        return new WebhookDtoV1.CreatedWebhookDtoV1(map(in.getWebhook()));
     }
 
     public WebhookDtoV1 map(@NonNull Webhook in) {

@@ -28,51 +28,65 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.p2p.manager.PeerRegistry;
 import global.goldenera.node.core.p2p.manager.RemotePeer;
-import global.goldenera.node.core.p2p.reputation.PeerReputationService;
-import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Service
 @Slf4j
-@RequiredArgsConstructor
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class BlockPropagationService {
 
 	PeerRegistry peerRegistry;
-	PeerReputationService peerReputationService;
+	Executor p2pSendExecutor;
 
 	static int BROADCAST_PEER_COUNT = 16;
 
+	public BlockPropagationService(
+			PeerRegistry peerRegistry,
+			@Qualifier(P2P_SEND_EXECUTOR) Executor p2pSendExecutor) {
+		this.peerRegistry = peerRegistry;
+		this.p2pSendExecutor = p2pSendExecutor;
+	}
+
 	@EventListener
-	@Async(P2P_SEND_EXECUTOR)
 	public void onBlockConnected(BlockConnectedEvent event) {
 		if (event.getConnectedSource() == ConnectedSource.REORG || event.getConnectedSource() == ConnectedSource.SYNC) {
 			return;
 		}
+		BlockHeader header = event.getBlock().getHeader();
+		Address receivedFrom = event.getReceivedFrom();
+		try {
+			p2pSendExecutor.execute(() -> announce(header, receivedFrom));
+		} catch (RejectedExecutionException exception) {
+			log.warn("Dropping block header announcement because the P2P send queue is full");
+		}
+	}
 
-		List<RemotePeer> targetPeers = selectPeersForBroadcast(event.getReceivedFrom());
+	private void announce(BlockHeader header, Address receivedFrom) {
+		List<RemotePeer> targetPeers = selectPeersForBroadcast(receivedFrom);
 		if (targetPeers.isEmpty()) {
 			return;
 		}
 
 		log.info("Announcing block {} (Header Only) to {} peers",
-				event.getBlock().getHeight(), targetPeers.size());
+				header.getHeight(), targetPeers.size());
 
 		for (RemotePeer peer : targetPeers) {
 			try {
-				peer.sendBlockHeaders(Collections.singletonList(event.getBlock().getHeader()), 0);
-				peerReputationService.recordSuccess(peer.getIdentity());
+				peer.sendBlockHeaders(Collections.singletonList(header), 0);
 			} catch (Exception e) {
 				log.trace("Failed to announce block to peer {}", peer.getIdentity(), e);
 			}

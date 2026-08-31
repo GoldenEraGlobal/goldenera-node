@@ -73,6 +73,10 @@ public class BlockEventDecoder {
 				BlockEvent.ValidatorAdded::payload, BlockEvent.ValidatorAdded::txVersion));
 		codecs.put(BlockEventType.VALIDATOR_REMOVED, new GenericPayloadEventCodec<>(BlockEvent.ValidatorRemoved::new,
 				BlockEvent.ValidatorRemoved::payload, BlockEvent.ValidatorRemoved::txVersion));
+		codecs.put(BlockEventType.VALIDATOR_MINING_POLICY_CHANGED,
+				new GenericPayloadEventCodec<>(BlockEvent.ValidatorMiningPolicyChanged::new,
+						BlockEvent.ValidatorMiningPolicyChanged::payload,
+						BlockEvent.ValidatorMiningPolicyChanged::txVersion));
 		codecs.put(BlockEventType.NETWORK_PARAMS_CHANGED,
 				new GenericPayloadEventCodec<>(BlockEvent.NetworkParamsChanged::new,
 						BlockEvent.NetworkParamsChanged::payload, BlockEvent.NetworkParamsChanged::txVersion));

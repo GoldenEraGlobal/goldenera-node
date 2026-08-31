@@ -36,6 +36,7 @@ import java.util.List;
 
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
@@ -49,8 +50,10 @@ import org.springframework.context.annotation.Configuration;
 
 import global.goldenera.node.core.properties.PeerReputationDbProperties;
 import global.goldenera.node.core.storage.peers.PeerReputationColumnFamilies;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import lombok.experimental.NonFinal;
 import lombok.extern.slf4j.Slf4j;
 
 @Configuration(proxyBeanMethods = false)
@@ -61,8 +64,10 @@ public class PeerReputationDBConfig {
 
 	PeerReputationDbProperties peerReputationDbProperties;
 	PeerReputationColumnFamilies columnFamilies;
+	@NonFinal
+	RocksDB openedDatabase;
 
-	@Bean(name = "peerReputationDB", destroyMethod = "close")
+	@Bean(name = "peerReputationDB", destroyMethod = "")
 	public RocksDB peerReputationDB() throws RocksDBException, IOException {
 		String dbPath = peerReputationDbProperties.getPath();
 		Files.createDirectories(Paths.get(dbPath));
@@ -70,43 +75,65 @@ public class PeerReputationDBConfig {
 
 		// Lighter configuration for Peer Reputation (less memory intensive than
 		// blockchain)
-		final BlockBasedTableConfig tableOptions = new BlockBasedTableConfig()
-				.setBlockCache(new LRUCache(64 * 1024 * 1024L)) // 64MB Cache
-				.setFilterPolicy(new BloomFilter(10, false))
-				.setBlockSize(4 * 1024L) // Smaller block size for small reputation records
-				.setCacheIndexAndFilterBlocks(true);
+		try (Cache blockCache = new LRUCache(16 * 1024 * 1024L);
+				BloomFilter bloomFilter = new BloomFilter(10, false);
+				ColumnFamilyOptions cfOpts = new ColumnFamilyOptions();
+				DBOptions dbOptions = new DBOptions()) {
+			final BlockBasedTableConfig tableOptions = new BlockBasedTableConfig()
+					.setBlockCache(blockCache)
+					.setFilterPolicy(bloomFilter)
+					.setBlockSize(4 * 1024L)
+					.setCacheIndexAndFilterBlocks(true);
 
-		final ColumnFamilyOptions cfOpts = new ColumnFamilyOptions()
-				.setTableFormatConfig(tableOptions)
-				.setWriteBufferSize(16 * 1024 * 1024L) // 16MB Memtable
-				.setLevelCompactionDynamicLevelBytes(true)
-				.setCompressionType(CompressionType.LZ4_COMPRESSION); // LZ4 is sufficient here
+			cfOpts.setTableFormatConfig(tableOptions)
+					.setWriteBufferSize(4 * 1024 * 1024L)
+					.setLevelCompactionDynamicLevelBytes(true)
+					.setCompressionType(CompressionType.LZ4_COMPRESSION);
 
-		final List<ColumnFamilyDescriptor> cfDescriptors = Arrays.asList(
-				new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts),
-				new ColumnFamilyDescriptor(
-						PeerReputationColumnFamilies.CF_PEER_REPUTATION.getBytes(StandardCharsets.UTF_8),
-						cfOpts));
+			final List<ColumnFamilyDescriptor> cfDescriptors = Arrays.asList(
+					new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, cfOpts),
+					new ColumnFamilyDescriptor(
+							PeerReputationColumnFamilies.CF_PEER_REPUTATION.getBytes(StandardCharsets.UTF_8),
+							cfOpts));
 
-		final DBOptions dbOptions = new DBOptions()
-				.setCreateIfMissing(true)
-				.setCreateMissingColumnFamilies(true)
-				.setMaxBackgroundJobs(2); // Fewer threads for auxiliary DB
+			dbOptions.setCreateIfMissing(true)
+					.setCreateMissingColumnFamilies(true)
+					.setMaxBackgroundJobs(2);
 
-		final List<ColumnFamilyHandle> handles = new ArrayList<>();
+			final List<ColumnFamilyHandle> handles = new ArrayList<>();
 
-		File dbDir = new File(dbPath);
-		if (!dbDir.exists()) {
-			dbDir.mkdirs();
+			File dbDir = new File(dbPath);
+			if (!dbDir.exists()) {
+				dbDir.mkdirs();
+			}
+			log.info("Opening Peer Reputation RocksDB at path: {}", dbDir.getAbsolutePath());
+
+			RocksDB rocksDB = null;
+			try {
+				rocksDB = RocksDB.open(dbOptions, dbDir.getAbsolutePath(), cfDescriptors, handles);
+
+				columnFamilies.addHandle("default", handles.get(0));
+				columnFamilies.addHandle(PeerReputationColumnFamilies.CF_PEER_REPUTATION, handles.get(1));
+				openedDatabase = rocksDB;
+
+				log.info("Peer Reputation RocksDB initialized.");
+				return rocksDB;
+			} catch (RuntimeException | RocksDBException failure) {
+				handles.forEach(ColumnFamilyHandle::close);
+				if (rocksDB != null) {
+					rocksDB.close();
+				}
+				throw failure;
+			}
 		}
-		log.info("Opening Peer Reputation RocksDB at path: {}", dbDir.getAbsolutePath());
+	}
 
-		RocksDB rocksDB = RocksDB.open(dbOptions, dbDir.getAbsolutePath(), cfDescriptors, handles);
-
-		columnFamilies.addHandle("default", handles.get(0));
-		columnFamilies.addHandle(PeerReputationColumnFamilies.CF_PEER_REPUTATION, handles.get(1));
-
-		log.info("Peer Reputation RocksDB initialized.");
-		return rocksDB;
+	@PreDestroy
+	public void close() {
+		columnFamilies.close();
+		if (openedDatabase != null) {
+			openedDatabase.close();
+			openedDatabase = null;
+		}
 	}
 }

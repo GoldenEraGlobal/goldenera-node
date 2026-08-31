@@ -30,6 +30,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
@@ -39,16 +41,21 @@ import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
-import global.goldenera.node.core.blockchain.events.CoreDbReadyEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.events.MempoolTxRemoveEvent;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.explorer.entities.ExMemTransfer;
 import global.goldenera.node.explorer.enums.TransferType;
 import global.goldenera.node.explorer.services.indexer.core.ExIndexerMempoolCoreService;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessListener;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessState;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerReadinessStatus;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.AccessLevel;
 import lombok.Value;
 import lombok.experimental.FieldDefaults;
@@ -57,23 +64,29 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-public class ExIndexerMempoolService {
+public class ExIndexerMempoolService implements ExplorerReadinessListener {
+	private static final int MAX_FLUSH_ACTIONS = 1_000;
 
 	GeneralProperties generalProperties;
+	ExplorerRuntimeReadiness explorerReadiness;
 	MeterRegistry registry;
 	ExIndexerMempoolCoreService exMempoolCoreService;
 	ThreadPoolTaskScheduler explorerScheduler;
 
-	public ExIndexerMempoolService(GeneralProperties generalProperties, MeterRegistry registry,
+	public ExIndexerMempoolService(GeneralProperties generalProperties, ExplorerRuntimeReadiness explorerReadiness,
+			MeterRegistry registry,
 			ExIndexerMempoolCoreService exMempoolCoreService,
 			@Qualifier(EXPLORER_SCHEDULER) ThreadPoolTaskScheduler explorerScheduler) {
 		this.generalProperties = generalProperties;
+		this.explorerReadiness = explorerReadiness;
 		this.registry = registry;
 		this.exMempoolCoreService = exMempoolCoreService;
 		this.explorerScheduler = explorerScheduler;
 	}
 
 	Map<Hash, PendingAction> buffer = new ConcurrentHashMap<>();
+	AtomicBoolean flushScheduled = new AtomicBoolean();
+	AtomicReference<ExplorerReadinessState> observedReadiness = new AtomicReference<>();
 
 	private enum ActionType {
 		ADD, REMOVE
@@ -87,7 +100,7 @@ public class ExIndexerMempoolService {
 
 	@PostConstruct
 	public void init() {
-		if (!generalProperties.isExplorerEnable()) {
+		if (!generalProperties.isExplorerEnable() || !flushScheduled.compareAndSet(false, true)) {
 			return;
 		}
 		// Schedule the flushBuffer task to run every 3 seconds using
@@ -95,25 +108,41 @@ public class ExIndexerMempoolService {
 		explorerScheduler.scheduleWithFixedDelay(
 				this::flushBuffer,
 				Duration.ofMillis(3000));
+		explorerReadiness.registerListener(this);
 		log.info("ExMempoolService: Scheduled flushBuffer on explorerTaskScheduler every 3s");
+		registry.gaugeMapSize("explorer.mempool.pending_actions", Tags.empty(), buffer);
+	}
+
+	@PreDestroy
+	public void destroy() {
+		explorerReadiness.unregisterListener(this);
+	}
+
+	@Override
+	public void onReadinessChanged(ExplorerReadinessStatus status) {
+		ExplorerReadinessState previous = observedReadiness.getAndSet(status.state());
+		if (!status.ready()) {
+			buffer.clear();
+			return;
+		}
+		if (previous != ExplorerReadinessState.READY) {
+			exMempoolCoreService.truncate();
+			registry.counter("explorer.mempool.readiness_resets").increment();
+		}
 	}
 
 	// --------------------------------------------------------
 	// LISTENERS
 	// --------------------------------------------------------
 
-	@EventListener
 	@Transactional(rollbackFor = Exception.class)
-	public void onCoreReady(CoreDbReadyEvent event) {
-		if (!generalProperties.isExplorerEnable()) {
-			return;
-		}
+	public void resetOnCoreReady() {
 		exMempoolCoreService.truncate();
 	}
 
 	@EventListener
 	public void onMempoolAdd(MempoolTxAddEvent event) {
-		if (!generalProperties.isExplorerEnable()) {
+		if (!enabled()) {
 			return;
 		}
 		buffer.put(event.getEntry().getTx().getHash(), new PendingAction(ActionType.ADD, event.getEntry()));
@@ -121,7 +150,7 @@ public class ExIndexerMempoolService {
 
 	@EventListener
 	public void onMempoolRemove(MempoolTxRemoveEvent event) {
-		if (!generalProperties.isExplorerEnable()) {
+		if (!enabled()) {
 			return;
 		}
 		Hash txHash = event.getEntry().getTx().getHash();
@@ -129,7 +158,7 @@ public class ExIndexerMempoolService {
 			if (existingAction != null && existingAction.getType() == ActionType.ADD) {
 				return null;
 			}
-			return new PendingAction(ActionType.REMOVE, event.getEntry());
+			return new PendingAction(ActionType.REMOVE, null);
 		});
 	}
 
@@ -141,26 +170,27 @@ public class ExIndexerMempoolService {
 	 * Flushes pending mempool changes to database.
 	 * Scheduled via explorerTaskScheduler in init().
 	 */
-	@Transactional(rollbackFor = Exception.class)
 	public void flushBuffer() {
-		if (!generalProperties.isExplorerEnable()) {
+		if (!enabled()) {
 			return;
 		}
 		if (buffer.isEmpty()) {
 			return;
 		}
 
-		List<Hash> keysProcessing = new ArrayList<>(buffer.keySet());
+		List<Hash> keysProcessing = buffer.keySet().stream().limit(MAX_FLUSH_ACTIONS).toList();
 
 		if (keysProcessing.isEmpty())
 			return;
 
 		List<ExMemTransfer> toAdd = new ArrayList<>();
 		List<Hash> toRemove = new ArrayList<>();
+		Map<Hash, PendingAction> processing = new ConcurrentHashMap<>();
 
 		for (Hash hash : keysProcessing) {
 			PendingAction action = buffer.remove(hash);
 			if (action != null) {
+				processing.put(hash, action);
 				if (action.getType() == ActionType.ADD) {
 					MempoolEntry entry = action.getEntry();
 					Tx tx = entry.getTx();
@@ -194,14 +224,13 @@ public class ExIndexerMempoolService {
 		int addedCount = 0;
 		int removedCount = 0;
 
-		if (!toAdd.isEmpty()) {
-			exMempoolCoreService.batchInsert(toAdd);
+		try {
+			exMempoolCoreService.applyBatch(toAdd, toRemove);
 			addedCount = toAdd.size();
-		}
-
-		if (!toRemove.isEmpty()) {
-			exMempoolCoreService.batchDelete(toRemove);
 			removedCount = toRemove.size();
+		} catch (RuntimeException failure) {
+			processing.forEach(buffer::putIfAbsent);
+			throw failure;
 		}
 
 		if (addedCount > 0 || removedCount > 0) {
@@ -214,5 +243,9 @@ public class ExIndexerMempoolService {
 		if (removedCount > 0) {
 			registry.summary("explorer.mempool.flush_remove").record(removedCount);
 		}
+	}
+
+	private boolean enabled() {
+		return generalProperties.isExplorerEnable() && explorerReadiness.isReady();
 	}
 }

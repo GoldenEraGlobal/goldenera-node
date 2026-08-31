@@ -35,27 +35,31 @@ public class BlockRewardCodec implements BlockEventCodec<BlockReward> {
     public static final BlockRewardCodec INSTANCE = new BlockRewardCodec();
 
     @Override
-    public int currentVersion() {
-        return 1;
+	    public int currentVersion() {
+	        return 2;
     }
 
     @Override
     public void encode(RLPOutput out, BlockReward event, int version) {
         out.writeBytes(event.minerAddress());
         out.writeBytes(event.rewardPoolAddress());
-        out.writeWeiScalar(event.amount());
+	        out.writeWeiScalar(event.amount());
+		if (version >= 2) {
+			out.writeOptionalLongScalar(event.unlockBlockHeight());
+		}
     }
 
     @Override
     public BlockReward decode(RLPInput input, int version) {
         Address minerAddress = Address.wrap(input.readBytes());
         Address rewardPoolAddress = Address.wrap(input.readBytes());
-        Wei amount = input.readWeiScalar();
-        return new BlockReward(minerAddress, rewardPoolAddress, amount);
+	        Wei amount = input.readWeiScalar();
+		Long unlockBlockHeight = version >= 2 ? input.readOptionalLongScalar() : null;
+	        return new BlockReward(minerAddress, rewardPoolAddress, amount, unlockBlockHeight);
     }
 
     @Override
     public boolean supportsVersion(int version) {
-        return version == 1;
+	        return version == 1 || version == 2;
     }
 }

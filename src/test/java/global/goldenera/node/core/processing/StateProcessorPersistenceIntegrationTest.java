@@ -24,6 +24,7 @@
 package global.goldenera.node.core.processing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 import java.math.BigInteger;
 import java.nio.file.Path;
@@ -39,12 +40,14 @@ import global.goldenera.cryptoj.builder.TxBuilder;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningRewardMaturityStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.PrivateKey;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.cryptoj.enums.TxType;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import global.goldenera.node.core.processing.StateProcessor.ExecutionResult;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
@@ -149,6 +152,113 @@ class StateProcessorPersistenceIntegrationTest {
 		}
 	}
 
+	@Test
+	void miningSubsidyVestsPerBlockWhileTransactionFeesRemainSpendable() throws Exception {
+		PrivateKey senderKey = key(6);
+		Address sender = senderKey.getAddress();
+		Address recipient = key(7).getAddress();
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState state = fundedState(storage, sender, Address.NATIVE_TOKEN, Wei.valueOf(10_000));
+			state.setParams(vestingParams(2));
+			Tx tx = transfer(senderKey, recipient, Address.NATIVE_TOKEN, 1_000, 10);
+			StateProcessor processor = processor(new TransferHandler());
+
+			ExecutionResult first = processor.executeTransactions(
+					state, block(11), List.of(tx), state.getParams());
+
+			assertThat(first.getMinerRewardUnlockBlockHeight()).isEqualTo(13);
+			assertThat(first.getMinerActualRewardPaid()).isEqualTo(Wei.valueOf(110));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.valueOf(110));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(100));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getSpendableBalance())
+					.isEqualTo(Wei.valueOf(10));
+			assertThat(state.getMiningRewardMaturity(13).getRewards()).containsEntry(MINER, Wei.valueOf(100));
+
+			state = storage.reload(storage.persist(state), false);
+			processor.executeTransactions(state, block(12), List.of(), state.getParams());
+			state = storage.reload(storage.persist(state), false);
+			processor.executeTransactions(state, block(13), List.of(), state.getParams());
+
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.valueOf(310));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(200));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getSpendableBalance())
+					.isEqualTo(Wei.valueOf(110));
+			assertThat(state.getMiningRewardMaturity(13).getRewards()).isEmpty();
+			assertThat(state.getMiningRewardMaturity(14).getRewards()).containsEntry(MINER, Wei.valueOf(100));
+			assertThat(state.getMiningRewardMaturity(15).getRewards()).containsEntry(MINER, Wei.valueOf(100));
+
+			state = storage.reload(storage.persist(state), false);
+			assertThat(state.getMiningRewardMaturity(13).getRewards()).isEmpty();
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(200));
+		}
+	}
+
+	@Test
+	void zeroVestingMakesMiningSubsidyImmediatelySpendable() throws Exception {
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState state = fundedState(storage, key(8).getAddress(), Address.NATIVE_TOKEN, Wei.ZERO);
+			state.setParams(vestingParams(0));
+
+			ExecutionResult result = processor(new TransferHandler()).executeTransactions(
+					state, block(20), List.of(), state.getParams());
+
+			assertThat(result.getMinerRewardUnlockBlockHeight()).isEqualTo(20);
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.valueOf(100));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward()).isEqualTo(Wei.ZERO);
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getSpendableBalance()).isEqualTo(Wei.valueOf(100));
+			assertThat(state.getMiningRewardMaturity(20).getRewards()).isEmpty();
+		}
+	}
+
+	@Test
+	void partialPoolRewardLocksOnlyTheAmountActuallyPaid() throws Exception {
+		Address pool = key(9).getAddress();
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState state = fundedState(storage, pool, Address.NATIVE_TOKEN, Wei.valueOf(40));
+			state.setParams(vestingParams(2, pool));
+
+			ExecutionResult result = processor(new TransferHandler()).executeTransactions(
+					state, block(30), List.of(), state.getParams());
+
+			assertThat(result.getMinerActualRewardPaid()).isEqualTo(Wei.valueOf(40));
+			assertThat(result.getTotalSupplyIncrease()).isEqualTo(Wei.ZERO);
+			assertThat(state.getBalance(pool, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.ZERO);
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getBalance()).isEqualTo(Wei.valueOf(40));
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(40));
+			assertThat(state.getMiningRewardMaturity(32).getRewards()).containsEntry(MINER, Wei.valueOf(40));
+		}
+	}
+
+	@Test
+	void snapshotRollbackRestoresMaturityConsumedAtBlockBoundary() throws Exception {
+		try (PersistentWorldStateTestSupport storage = new PersistentWorldStateTestSupport(databaseDirectory)) {
+			WorldState state = storage.createEmpty(true);
+			state.setToken(Address.NATIVE_TOKEN, existingToken(Wei.valueOf(1_000_000)));
+			state.setParams(vestingParams(2).toBuilder().blockReward(Wei.ZERO).build());
+			state.setBalance(MINER, Address.NATIVE_TOKEN,
+					((AccountBalanceStateImpl) AccountBalanceStateImpl.ZERO)
+							.creditLockedMiningReward(Wei.valueOf(100), 10, BLOCK_TIME));
+			state.setMiningRewardMaturity(12,
+					MiningRewardMaturityStateImpl.empty().addReward(MINER, Wei.valueOf(100)));
+			state = storage.reload(storage.persist(state), true);
+			Object snapshot = state.createSnapshot();
+
+			processor(new TransferHandler()).executeTransactions(state, block(12), List.of(), state.getParams());
+
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward()).isEqualTo(Wei.ZERO);
+			assertThat(state.getMiningRewardMaturity(12).getRewards()).isEmpty();
+
+			state.revertToSnapshot(snapshot);
+			assertThat(state.getBalance(MINER, Address.NATIVE_TOKEN).getLockedMiningReward())
+					.isEqualTo(Wei.valueOf(100));
+			assertThat(state.getMiningRewardMaturity(12).getRewards()).containsEntry(MINER, Wei.valueOf(100));
+		}
+	}
+
 	private WorldState fundedState(PersistentWorldStateTestSupport storage, Address sender,
 			Address token, Wei balance) {
 		WorldState state = storage.createEmpty(false);
@@ -192,11 +302,42 @@ class StateProcessorPersistenceIntegrationTest {
 	}
 
 	private StateProcessor processor(TxHandler handler) {
-		return new StateProcessor(List.of(handler));
+		return new StateProcessor(List.of(handler), mock(MiningEconomicsActivationService.class),
+				mock(ValidatorMiningPolicyService.class));
 	}
 
 	private SimpleBlock block() {
-		return SimpleBlock.builder().height(1).timestamp(BLOCK_TIME).coinbase(MINER).build();
+		return block(1);
+	}
+
+	private SimpleBlock block(long height) {
+		return SimpleBlock.builder().height(height).timestamp(BLOCK_TIME).coinbase(MINER).build();
+	}
+
+	private NetworkParamsStateImpl vestingParams(long vestingBlocks) {
+		return vestingParams(vestingBlocks, Address.ZERO);
+	}
+
+	private NetworkParamsStateImpl vestingParams(long vestingBlocks, Address poolAddress) {
+		return NetworkParamsStateImpl.builder()
+				.version(NetworkParamsStateVersion.V2)
+				.blockReward(Wei.valueOf(100))
+				.blockRewardPoolAddress(poolAddress)
+				.targetMiningTimeMs(30_000)
+				.asertHalfLifeBlocks(64)
+				.asertAnchorHeight(0)
+				.minDifficulty(BigInteger.ONE)
+				.minTxBaseFee(Wei.ZERO)
+				.minTxByteFee(Wei.ZERO)
+				.updatedByTxHash(Hash.ZERO)
+				.currentAuthorityCount(1)
+				.currentValidatorCount(1)
+				.currentUnlimitedValidatorCount(1)
+				.validatorMiningWindowBlocks(100)
+				.miningRewardVestingBlocks(vestingBlocks)
+				.updatedAtBlockHeight(0)
+				.updatedAtTimestamp(BLOCK_TIME)
+				.build();
 	}
 
 	private PrivateKey key(int value) {

@@ -15,7 +15,7 @@
 
     <groupId>global.goldenera.node</groupId>
     <artifactId>goldenera-node</artifactId>
-    <version>0.1.1</version>
+    <version>0.2.0</version>
     <name>goldenera-node</name>
 
     <properties>
@@ -42,15 +42,21 @@
         <hibernate-validator.version>9.1.0.Final</hibernate-validator.version>
         <okhttp.version>5.3.0</okhttp.version>
         <rocksdb.version>9.1.0</rocksdb.version>
-        <goldenera-randomx.version>0.0.1</goldenera-randomx.version>
+        <goldenera-randomx.version>0.0.4</goldenera-randomx.version>
+        <goldenera-randomx.source.commit>23f56acaf94978667841cd89b12ed8a0b347fd3a</goldenera-randomx.source.commit>
         <goldenera-rlp.version>0.0.1</goldenera-rlp.version>
-        <goldenera-merkletrie.version>0.0.1</goldenera-merkletrie.version>
-        <goldenera-cryptoj.version>0.0.1</goldenera-cryptoj.version>
+        <goldenera-merkletrie.version>0.0.2</goldenera-merkletrie.version>
+        <goldenera-cryptoj.version>0.0.5</goldenera-cryptoj.version>
+        <goldenera.git.commit>UNKNOWN</goldenera.git.commit>
+        <goldenera.cryptoj.sha256>UNKNOWN</goldenera.cryptoj.sha256>
+        <goldenera.release-metadata.required>false</goldenera.release-metadata.required>
         <micrometer-extras.version>0.2.2</micrometer-extras.version>
         <license-maven-plugin.version>4.6</license-maven-plugin.version>
         <bucket4j.version>8.15.0</bucket4j.version>
+        <zstd-jni.version>1.5.7-6</zstd-jni.version>
         <mockito.version>5.17.0</mockito.version>
         <jmh.version>1.37</jmh.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
     </properties>
 
     <dependencyManagement>
@@ -170,6 +176,18 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
 
@@ -301,6 +319,11 @@
             <groupId>com.bucket4j</groupId>
             <artifactId>bucket4j_jdk17-core</artifactId>
             <version>${bucket4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+            <version>${zstd-jni.version}</version>
         </dependency>
     </dependencies>
 
@@ -490,6 +513,9 @@
                                 <include>src/test/**/*.java</include>
                                 <include>src/jmh/**/*.java</include>
                             </includes>
+                            <excludes>
+                                <exclude>**/._*</exclude>
+                            </excludes>
                             <useDefaultExcludes>false</useDefaultExcludes>
                         </licenseSet>
                     </licenseSets>
@@ -506,6 +532,47 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>release-artifact</id>
+            <properties>
+                <goldenera.release-metadata.required>true</goldenera.release-metadata.required>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-enforcer-plugin</artifactId>
+                        <version>3.6.3</version>
+                        <executions>
+                            <execution>
+                                <id>require-release-build-metadata</id>
+                                <phase>validate</phase>
+                                <goals><goal>enforce</goal></goals>
+                                <configuration>
+                                    <rules>
+                                        <requireProperty>
+                                            <property>goldenera.git.commit</property>
+                                            <regex>^[0-9a-f]{40,64}$</regex>
+                                            <message>Release git commit must be lowercase hexadecimal (40..64 chars).</message>
+                                        </requireProperty>
+                                        <requireProperty>
+                                            <property>goldenera.cryptoj.sha256</property>
+                                            <regex>^[0-9a-f]{64}$</regex>
+                                            <message>Release CryptoJ checksum must be an exact lowercase SHA-256.</message>
+                                        </requireProperty>
+                                        <requireProperty>
+                                            <property>goldenera-randomx.source.commit</property>
+                                            <regex>^[0-9a-f]{40}$</regex>
+                                            <message>Release RandomX source commit must be exact lowercase 40-char hexadecimal.</message>
+                                        </requireProperty>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <profile>
             <id>mempool-benchmarks</id>
             <dependencies>

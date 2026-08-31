@@ -59,6 +59,9 @@ public class NetworkParamsDtoV1 {
     Hash updatedByTxHash;
     long currentAuthorityCount;
     long currentValidatorCount;
+    Long validatorMiningWindowBlocks;
+    Long miningRewardVestingBlocks;
+    long currentUnlimitedValidatorCount;
     long updatedAtBlockHeight;
     Instant updatedAtTimestamp;
 }

@@ -18,7 +18,9 @@
     "asertHalfLifeBlocks": 64,
     "minDifficulty": "5000",
     "minTxBaseFee": "200",
-    "minTxByteFee": "5"
+    "minTxByteFee": "5",
+    "validatorMiningWindowBlocks": 1000,
+    "miningRewardVestingBlocks": 518400
   },
   "authorities": [
     "0x1B4148166C78DBcd66Ffc195ded697dBd681bbD6"

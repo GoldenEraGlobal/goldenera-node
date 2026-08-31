@@ -52,7 +52,7 @@ class CoreAsyncConfigTest {
 			assertThat(ran).isTrue();
 			assertThat(registry.counter("blockchain.mempool.event_queue.backpressure_total").count())
 					.isEqualTo(1);
-			assertThat(threadPool.getQueue().remainingCapacity()).isEqualTo(10000);
+			assertThat(threadPool.getQueue().remainingCapacity()).isEqualTo(256);
 		} finally {
 			executor.shutdown();
 		}
@@ -77,7 +77,7 @@ class CoreAsyncConfigTest {
 				completed.incrementAndGet();
 			});
 			assertThat(workerStarted.await(5, TimeUnit.SECONDS)).isTrue();
-			for (int task = 0; task < 10_000; task++) {
+			for (int task = 0; task < 256; task++) {
 				executor.execute(completed::incrementAndGet);
 			}
 
@@ -90,12 +90,12 @@ class CoreAsyncConfigTest {
 			assertThat(overflowThread.get()).isSameAs(publisher);
 			assertThat(registry.counter("blockchain.mempool.event_queue.backpressure_total").count())
 					.isEqualTo(1);
-			assertThat(executor.getThreadPoolExecutor().getQueue()).hasSize(10_000);
+			assertThat(executor.getThreadPoolExecutor().getQueue()).hasSize(256);
 		} finally {
 			releaseWorker.countDown();
 			executor.shutdown();
 		}
-		assertThat(completed).hasValue(10_002);
+		assertThat(completed).hasValue(258);
 	}
 
 	@Test

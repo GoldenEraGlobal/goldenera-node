@@ -59,7 +59,7 @@ public class ExIndexerBlockDataCoreService {
 			Block block,
 			BigInteger cumulativeDifficulty,
 			BigInteger minerTotalFees,
-			BigInteger minerActualRewardPaid) {
+			BigInteger minerBlockReward) {
 		BlockHeader header = block.getHeader();
 		String sql = """
 				    INSERT INTO explorer_block_header (
@@ -86,7 +86,7 @@ public class ExIndexerBlockDataCoreService {
 				new BigDecimal(cumulativeDifficulty),
 				block.getTxs().size(),
 				new BigDecimal(minerTotalFees),
-				new BigDecimal(minerActualRewardPaid));
+				new BigDecimal(minerBlockReward));
 	}
 
 	public void insertTransactions(List<Tx> txs, long blockHeight, Hash blockHash) {
@@ -144,8 +144,9 @@ public class ExIndexerBlockDataCoreService {
 		String sql = """
 				    INSERT INTO explorer_transfer (
 				        block_height, block_hash, timestamp, tx_hash, tx_index, type,
-				        from_address, to_address, token_address, amount, fee, nonce, message
-				    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				        from_address, to_address, token_address, amount, fee, nonce, message,
+				        unlock_block_height
+				    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				""";
 
 		jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
@@ -180,7 +181,12 @@ public class ExIndexerBlockDataCoreService {
 				} else {
 					ps.setNull(12, Types.BIGINT);
 				}
-				ps.setBytes(13, t.getMessage() != null ? t.getMessage().toArray() : null);
+					ps.setBytes(13, t.getMessage() != null ? t.getMessage().toArray() : null);
+					if (t.getUnlockBlockHeight() != null) {
+						ps.setLong(14, t.getUnlockBlockHeight());
+					} else {
+						ps.setNull(14, Types.BIGINT);
+					}
 			}
 
 			@Override

@@ -46,6 +46,7 @@ import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
 import global.goldenera.node.shared.entities.WebhookEvent;
 import global.goldenera.node.shared.enums.WebhookEventType;
+import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.events.WebhookEventsUpdateEvent;
 import global.goldenera.node.shared.events.WebhookUpdateEvent;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
@@ -82,6 +83,7 @@ public class WebhookCoreService {
         PaginationUtil.validatePageRequest(pageNumber, pageSize);
         Specification<Webhook> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();
+			predicates.add(cb.notEqual(root.get("type"), WebhookType.BRIDGE));
 
             if (createdByApiKeyId != null) {
                 predicates.add(cb.equal(root.get("createdByApiKey").get("id"), createdByApiKeyId));
@@ -169,7 +171,7 @@ public class WebhookCoreService {
 
     @Transactional(readOnly = true)
     public List<Webhook> getAllEnabledWebhooksWithEvents() {
-        return webhookCoreRepository.findAllEnabledWithEvents();
+        return webhookCoreRepository.findAllEnabledWithEvents(WebhookType.BRIDGE);
     }
 
     @Transactional(readOnly = true)
@@ -179,7 +181,7 @@ public class WebhookCoreService {
 
     @Transactional(readOnly = true)
     public List<Webhook> findEnabledByApiKeyIdWithEvents(@NonNull Long apiKeyId) {
-        return webhookCoreRepository.findEnabledByApiKeyIdWithEvents(apiKeyId);
+        return webhookCoreRepository.findEnabledByApiKeyIdWithEvents(apiKeyId, WebhookType.BRIDGE);
     }
 
     @Transactional(readOnly = true)
@@ -189,7 +191,7 @@ public class WebhookCoreService {
 
     @Transactional(readOnly = true)
     public long getCountByApiKeyId(@NonNull Long apiKeyId) {
-        return webhookCoreRepository.countByApiKeyId(apiKeyId);
+        return webhookCoreRepository.countByApiKeyIdAndTypeNot(apiKeyId, WebhookType.BRIDGE);
     }
 
     @Transactional(readOnly = true)
@@ -198,7 +200,7 @@ public class WebhookCoreService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public Webhook create(@NonNull Webhook webhook) {
+	public Webhook create(@NonNull Webhook webhook) {
         Webhook createdWebhook = webhookCoreRepository.persist(webhook);
         applicationEventPublisher
                 .publishEvent(
@@ -229,7 +231,10 @@ public class WebhookCoreService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public int createBulkFilters(Webhook webhook, List<WebhookEventFilter> filtersToCreate) {
+	public int createBulkFilters(
+			Webhook webhook,
+			List<WebhookEventFilter> filtersToCreate,
+			UniversalWebhookActivationBoundary activation) {
         if (filtersToCreate == null || filtersToCreate.isEmpty()) {
             return 0;
         }
@@ -259,15 +264,20 @@ public class WebhookCoreService {
         byte[][] eventAddresses = eventAddressesList.toArray(new byte[0][]);
         byte[][] eventTokenAddresses = eventTokenAddressesList.toArray(new byte[0][]);
 
-        String sql = """
-                INSERT INTO webhook_event
-                    (webhook_id, type, address_filter, token_address_filter, created_at)
-                SELECT
-                    ? AS webhook_id,
-                    d.type,
-                    d.address,
-                    d.token,
-                    NOW() AS created_at
+		String sql = """
+				INSERT INTO webhook_event
+					(webhook_id, type, address_filter, token_address_filter, created_at,
+					 universal_active_after_source_sequence,
+					 universal_canonical_epoch, universal_canonical_after_sequence,
+					 universal_mempool_epoch, universal_mempool_after_sequence,
+					 universal_explorer_after_height)
+				SELECT
+					? AS webhook_id,
+					d.type,
+					d.address,
+					d.token,
+					NOW() AS created_at,
+					?, ?, ?, ?, ?, ?
                 FROM
                     unnest(
                         ?::integer[],
@@ -283,11 +293,17 @@ public class WebhookCoreService {
             Array addressesArray = connection.createArrayOf("bytea", eventAddresses);
             Array tokenAddressesArray = connection.createArrayOf("bytea", eventTokenAddresses);
 
-            PreparedStatement ps = connection.prepareStatement(sql);
-            ps.setObject(1, webhook.getId());
-            ps.setArray(2, typesArray);
-            ps.setArray(3, addressesArray);
-            ps.setArray(4, tokenAddressesArray);
+			PreparedStatement ps = connection.prepareStatement(sql);
+			ps.setObject(1, webhook.getId());
+			ps.setLong(2, activation.sourceEventId());
+			ps.setObject(3, activation.canonicalEpoch());
+			ps.setLong(4, activation.canonicalSequence());
+			ps.setObject(5, activation.mempoolEpoch());
+			ps.setLong(6, activation.mempoolSequence());
+			ps.setLong(7, activation.explorerHeight());
+			ps.setArray(8, typesArray);
+			ps.setArray(9, addressesArray);
+			ps.setArray(10, tokenAddressesArray);
 
             return ps;
         });
@@ -295,8 +311,22 @@ public class WebhookCoreService {
                 .publishEvent(new WebhookEventsUpdateEvent(this, WebhookEventsUpdateEvent.UpdateType.ADD_EVENTS,
                         webhook.getId(),
                         webhook, seenFilters.stream().toList()));
-        return result;
-    }
+		return result;
+	}
+
+	@Transactional
+	public void flush() {
+		webhookCoreRepository.flush();
+	}
+
+	public record UniversalWebhookActivationBoundary(
+			long sourceEventId,
+			UUID canonicalEpoch,
+			long canonicalSequence,
+			UUID mempoolEpoch,
+			long mempoolSequence,
+			long explorerHeight) {
+	}
 
     @Transactional(rollbackFor = Exception.class)
     public int deleteBulkFilters(Webhook webhook, List<WebhookEventFilter> filtersToDelete) {

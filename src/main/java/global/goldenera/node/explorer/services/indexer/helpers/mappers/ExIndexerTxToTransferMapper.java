@@ -46,6 +46,7 @@ import global.goldenera.cryptoj.enums.TxType;
 import global.goldenera.node.Constants;
 import global.goldenera.node.NetworkSettings;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.storage.blockchain.domain.BlockEvent.BlockReward;
 import global.goldenera.node.explorer.entities.ExNetworkParams;
 import global.goldenera.node.explorer.entities.ExTransfer;
 import global.goldenera.node.explorer.enums.TransferType;
@@ -88,13 +89,25 @@ public class ExIndexerTxToTransferMapper {
 		Wei cleanBlockReward = reward.subtract(fees);
 
 		if (cleanBlockReward.compareTo(Wei.ZERO) > 0) {
+			BlockReward blockRewardEvent = event.getEvents().stream()
+					.filter(BlockReward.class::isInstance)
+					.map(BlockReward.class::cast)
+					.findFirst()
+					.orElse(null);
+			Address rewardSource = blockRewardEvent != null
+					? blockRewardEvent.rewardPoolAddress()
+					: currentRewardPool;
+			Long unlockBlockHeight = blockRewardEvent != null
+					? blockRewardEvent.unlockBlockHeight()
+					: null;
 			transfers.add(baseBuilder.build().toBuilder()
 					.txHash(null)
 					.type(TransferType.BLOCK_REWARD)
-					.from(currentRewardPool)
+					.from(rewardSource)
 					.to(block.getHeader().getCoinbase())
 					.amount(cleanBlockReward)
 					.tokenAddress(NATIVE_TOKEN_ADDRESS)
+					.unlockBlockHeight(unlockBlockHeight)
 					.build());
 		}
 
@@ -194,45 +207,26 @@ public class ExIndexerTxToTransferMapper {
 
 	/**
 	 * Creates MINT transfers for the initial genesis token distribution.
-	 * At genesis, tokens are minted to:
-	 * 1. First authority address (initial operating funds)
-	 * 2. Block reward pool address (block rewards for first year)
+	 * The explicit allocation map is consensus input. Production settings derive
+	 * the same legacy authority/reward-pool entries, while sandbox manifests may
+	 * contain additional recipients.
 	 */
 	private void processGenesisMints(ExTransfer.ExTransferBuilder baseBuilder, List<ExTransfer> transfers) {
 		NetworkSettings settings = Constants.getSettings();
 
-		Address firstAuthority = settings.genesisAuthorityAddresses().get(0);
-		Address blockRewardPool = settings.genesisNetworkBlockRewardPoolAddress();
-
-		Wei authorityMint = settings.genesisNetworkInitialMintForAuthority();
-		Wei blockRewardMint = settings.genesisNetworkInitialMintForBlockReward();
-
-		log.info("Processing genesis mints: Authority={} ({}), BlockRewardPool={} ({})",
-				firstAuthority, authorityMint, blockRewardPool, blockRewardMint);
-
-		// Mint to first authority
-		if (authorityMint.compareTo(Wei.ZERO) > 0) {
-			transfers.add(baseBuilder.build().toBuilder()
-					.txHash(null)
-					.type(TransferType.MINT)
-					.from(NULL_ADDRESS)
-					.to(firstAuthority)
-					.amount(authorityMint)
-					.tokenAddress(NATIVE_TOKEN_ADDRESS)
-					.build());
-		}
-
-		// Mint to block reward pool
-		if (blockRewardMint.compareTo(Wei.ZERO) > 0) {
-			transfers.add(baseBuilder.build().toBuilder()
-					.txHash(null)
-					.type(TransferType.MINT)
-					.from(NULL_ADDRESS)
-					.to(blockRewardPool)
-					.amount(blockRewardMint)
-					.tokenAddress(NATIVE_TOKEN_ADDRESS)
-					.build());
-		}
+		log.info("Processing {} explicit genesis mint allocations", settings.genesisInitialBalances().size());
+		settings.genesisInitialBalances().forEach((recipient, amount) -> {
+			if (amount.compareTo(Wei.ZERO) > 0) {
+				transfers.add(baseBuilder.build().toBuilder()
+						.txHash(null)
+						.type(TransferType.MINT)
+						.from(NULL_ADDRESS)
+						.to(recipient)
+						.amount(amount)
+						.tokenAddress(NATIVE_TOKEN_ADDRESS)
+						.build());
+			}
+		});
 	}
 
 	private Address resolveRewardPoolAddress(BlockConnectedEvent event) {

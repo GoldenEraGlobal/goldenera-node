@@ -39,6 +39,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenCreatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipVotePayload;
 import global.goldenera.node.explorer.api.v1.tx.dtos.TxDtoV1;
@@ -122,6 +123,15 @@ public class TxMapper {
             case TxBipValidatorAddPayload p -> {
                 var d = new TxPayloadDtoV1.ValidatorAdd();
                 d.setAddress(p.getAddress());
+                d.setMiningLimitMode(p.getMiningLimitMode());
+                d.setMaxMiningShareBps(p.getMaxMiningShareBps());
+                yield d;
+            }
+            case TxBipValidatorMiningPolicySetPayload p -> {
+                var d = new TxPayloadDtoV1.ValidatorMiningPolicySet();
+                d.setValidatorAddress(p.getValidatorAddress());
+                d.setMiningLimitMode(p.getMiningLimitMode());
+                d.setMaxMiningShareBps(p.getMaxMiningShareBps());
                 yield d;
             }
             case TxBipValidatorRemovePayload p -> {
@@ -138,6 +148,8 @@ public class TxMapper {
                 d.setMinDifficulty(p.getMinDifficulty());
                 d.setMinTxBaseFee(p.getMinTxBaseFee());
                 d.setMinTxByteFee(p.getMinTxByteFee());
+                d.setValidatorMiningWindowBlocks(p.getValidatorMiningWindowBlocks());
+                d.setMiningRewardVestingBlocks(p.getMiningRewardVestingBlocks());
                 yield d;
             }
             case TxBipTokenBurnPayload p -> {
@@ -181,6 +193,7 @@ public class TxMapper {
             }
             default -> throw new IllegalArgumentException("Unknown payload type: " + payload.getClass());
         };
+		dto.setPayloadVersion(payload.getPayloadVersion());
 
         return dto;
     }

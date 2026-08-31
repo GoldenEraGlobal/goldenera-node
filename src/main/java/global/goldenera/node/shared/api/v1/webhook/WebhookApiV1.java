@@ -48,6 +48,7 @@ import global.goldenera.node.shared.api.v1.webhook.dtos.WebhookUpdateInDtoV1;
 import global.goldenera.node.shared.api.v1.webhook.mappers.WebhookMapper;
 import global.goldenera.node.shared.entities.ApiKey;
 import global.goldenera.node.shared.entities.Webhook;
+import global.goldenera.node.shared.enums.WebhookType;
 import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.services.core.WebhookCoreService;
 import global.goldenera.node.shared.services.webhook.WebhookService;
@@ -81,7 +82,7 @@ public class WebhookApiV1 {
 		UUID webhookId = validateWebhookId(id);
 		ApiKey apiKey = validateAuth(authentication);
 		Webhook webhook = webhookCoreService.getById(webhookId);
-		if (!webhook.getCreatedByApiKey().equals(apiKey)) {
+		if (webhook.getType() == WebhookType.BRIDGE || !webhook.getCreatedByApiKey().equals(apiKey)) {
 			throw new GEValidationException("You do not have permission to access this webhook");
 		}
 		return webhookMapper.map(webhook);

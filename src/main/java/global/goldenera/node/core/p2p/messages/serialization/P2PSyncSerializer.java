@@ -23,7 +23,9 @@
  */
 package global.goldenera.node.core.p2p.messages.serialization;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 import org.apache.tuweni.bytes.Bytes;
 
@@ -44,6 +46,13 @@ import lombok.experimental.UtilityClass;
 
 @UtilityClass
 public class P2PSyncSerializer {
+	static final int MAX_LOCATORS = 128;
+	static final int MAX_BODY_HASHES = 64;
+	static final int MAX_HEADERS = 4_096;
+	static final int MAX_BODIES = 64;
+	static final int MAX_TRANSACTIONS_PER_BODY = 50_000;
+	static final int MAX_MEMPOOL_HASHES = 5_000;
+	static final int MAX_MEMPOOL_TRANSACTIONS = 1_000;
 
 	public static Bytes encodeGetHeaders(P2PBlockHeadersReqDto dto) {
 		return RLP.encode(out -> {
@@ -58,7 +67,7 @@ public class P2PSyncSerializer {
 	public static P2PBlockHeadersReqDto decodeGetHeaders(Bytes bytes) {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
-		List<Hash> locators = input.readList(in -> Hash.wrap(in.readBytes32()));
+		List<Hash> locators = readBoundedList(input, MAX_LOCATORS, in -> Hash.wrap(in.readBytes32()));
 		Hash stopHash = Hash.wrap(input.readBytes32());
 		int batchSize = input.readIntScalar();
 		input.leaveList();
@@ -80,7 +89,7 @@ public class P2PSyncSerializer {
 	public static P2PBlockBodiesReqDto decodeGetBodies(Bytes bytes) {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
-		List<Hash> hashes = input.readList(in -> Hash.wrap(in.readBytes32()));
+		List<Hash> hashes = readBoundedList(input, MAX_BODY_HASHES, in -> Hash.wrap(in.readBytes32()));
 		input.leaveList();
 		return P2PBlockBodiesReqDto.builder()
 				.hashes(hashes)
@@ -98,8 +107,8 @@ public class P2PSyncSerializer {
 	public static P2PBlockHeadersDto decodeBlockHeaders(Bytes bytes) {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
-		List<P2PBlockHeaderDto> headers = input
-				.readList(in -> P2PBlockHeaderSerializer.decodeBlockHeader(in.readRaw()));
+		List<P2PBlockHeaderDto> headers = readBoundedList(input, MAX_HEADERS,
+				in -> P2PBlockHeaderSerializer.decodeBlockHeader(in.readRaw()));
 		input.leaveList();
 		return P2PBlockHeadersDto.builder().headers(headers).build();
 	}
@@ -121,9 +130,9 @@ public class P2PSyncSerializer {
 	public static P2PBlockBodiesDto decodeBlockBodies(Bytes bytes) {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
-		List<List<P2PTxDto>> bodies = input.readList(bodyInput -> {
-			return bodyInput.readList(txInput -> P2PTxSerializer.decodeTx(txInput.readAsRlp().raw()));
-		});
+		List<List<P2PTxDto>> bodies = readBoundedList(input, MAX_BODIES,
+				bodyInput -> readBoundedList(bodyInput, MAX_TRANSACTIONS_PER_BODY,
+						txInput -> P2PTxSerializer.decodeTx(txInput.readAsRlp().raw())));
 		input.leaveList();
 		return P2PBlockBodiesDto.builder().bodies(bodies).build();
 	}
@@ -140,7 +149,7 @@ public class P2PSyncSerializer {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
 		P2PMempoolHashesDto dto = P2PMempoolHashesDto.builder()
-				.hashes(input.readList(in -> Hash.wrap(in.readBytes32()))).build();
+				.hashes(readBoundedList(input, MAX_MEMPOOL_HASHES, in -> Hash.wrap(in.readBytes32()))).build();
 		input.leaveList();
 		return dto;
 	}
@@ -165,7 +174,7 @@ public class P2PSyncSerializer {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
 		P2PMempoolTxsReqDto dto = P2PMempoolTxsReqDto.builder()
-				.hashes(input.readList(in -> Hash.wrap(in.readBytes32()))).build();
+				.hashes(readBoundedList(input, MAX_MEMPOOL_TRANSACTIONS, in -> Hash.wrap(in.readBytes32()))).build();
 		input.leaveList();
 		return dto;
 	}
@@ -182,8 +191,23 @@ public class P2PSyncSerializer {
 		RLPInput input = RLP.input(bytes);
 		input.enterList();
 		P2PMempoolTxsDto dto = P2PMempoolTxsDto.builder()
-				.txs(input.readList(in -> P2PTxSerializer.decodeTx(in.readAsRlp().raw()))).build();
+				.txs(readBoundedList(input, MAX_MEMPOOL_TRANSACTIONS,
+						in -> P2PTxSerializer.decodeTx(in.readAsRlp().raw()))).build();
 		input.leaveList();
 		return dto;
+	}
+
+	private static <T> List<T> readBoundedList(RLPInput input, int maximumSize,
+			Function<RLPInput, T> decoder) {
+		int size = input.enterList();
+		if (size < 0 || size > maximumSize) {
+			throw new IllegalArgumentException("RLP list contains " + size + " items; maximum is " + maximumSize);
+		}
+		List<T> values = new ArrayList<>(size);
+		for (int index = 0; index < size; index++) {
+			values.add(decoder.apply(input));
+		}
+		input.leaveList();
+		return values;
 	}
 }

@@ -26,6 +26,7 @@ package global.goldenera.node.explorer.services.core;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.springframework.data.domain.Page;
@@ -40,6 +41,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.explorer.entities.ExToken;
 import global.goldenera.node.explorer.repositories.ExTokenRepository;
 import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.shared.exceptions.GEValidationException;
 import global.goldenera.node.shared.utils.PaginationUtil;
 import jakarta.persistence.criteria.Predicate;
 import lombok.AccessLevel;
@@ -94,9 +96,20 @@ public class ExTokenCoreService {
             }
 
             if (nameOrSmallestUnitNameLike != null && !nameOrSmallestUnitNameLike.trim().isBlank()) {
-                String pattern = "%" + nameOrSmallestUnitNameLike.toLowerCase() + "%";
-                Predicate nameMatch = cb.like(cb.lower(root.get("name")), pattern);
-                Predicate symbolMatch = cb.like(cb.lower(root.get("smallestUnitName")), pattern);
+				String normalized = nameOrSmallestUnitNameLike.trim().toLowerCase(Locale.ROOT);
+				if (normalized.length() < ExCommonCoreService.MIN_TEXT_QUERY_LENGTH) {
+					throw new GEValidationException(
+							String.format("Token search query must contain at least %d characters",
+									ExCommonCoreService.MIN_TEXT_QUERY_LENGTH));
+				}
+				if (normalized.length() > ExCommonCoreService.MAX_QUERY_LENGTH) {
+					throw new GEValidationException(
+							String.format("Token search query exceeds the maximum length (%d)",
+									ExCommonCoreService.MAX_QUERY_LENGTH));
+				}
+				String pattern = "%" + escapeLikePattern(normalized) + "%";
+				Predicate nameMatch = cb.like(cb.lower(root.get("name")), pattern, '\\');
+				Predicate symbolMatch = cb.like(cb.lower(root.get("smallestUnitName")), pattern, '\\');
                 predicates.add(cb.or(nameMatch, symbolMatch));
             }
 
@@ -130,11 +143,17 @@ public class ExTokenCoreService {
 
         return exTokenRepository.findAll(
                 spec, PageRequest.of(pageNumber, pageSize,
-                        direction != null ? Sort.by(direction, "name") : Sort.by("name")));
+                        PaginationUtil.stableSort(direction, "name", "address")));
     }
 
     @Transactional(readOnly = true)
     public long getCount() {
         return exTokenRepository.count();
     }
+
+	private String escapeLikePattern(String value) {
+		return value.replace("\\", "\\\\")
+				.replace("%", "\\%")
+				.replace("_", "\\_");
+	}
 }

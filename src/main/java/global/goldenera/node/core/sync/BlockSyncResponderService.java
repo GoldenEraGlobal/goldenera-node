@@ -77,7 +77,8 @@ public class BlockSyncResponderService {
 			if (startHeight == 0)
 				startHeight = 1;
 
-			int limit = batchSize > 0 ? Math.min(batchSize, 2000) : 500;
+			int negotiatedLimit = event.getPeer().negotiatedHeaderPageLimit();
+			int limit = batchSize > 0 ? Math.min(batchSize, negotiatedLimit) : 500;
 			long endHeight = startHeight + limit - 1; // -1 because range is inclusive
 
 			// Use header-only for stopHash check
@@ -114,6 +115,9 @@ public class BlockSyncResponderService {
 	@Async(P2P_SEND_EXECUTOR)
 	public void handleGetBodies(P2PBlockBodiesRequestedEvent event) {
 		long start = System.currentTimeMillis();
+		if (!event.getPeer().canSend()) {
+			return;
+		}
 		List<Hash> hashes = event.getHashes();
 
 		if (hashes.isEmpty()) {

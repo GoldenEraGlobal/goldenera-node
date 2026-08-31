@@ -23,6 +23,7 @@
  */
 package global.goldenera.node.explorer.repositories;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Optional;
 
@@ -42,7 +43,7 @@ public interface ExBlockHeaderRepository
         JpaSpecificationExecutor<ExBlockHeader> {
 
     @Query(value = "SELECT cumulative_difficulty FROM explorer_block_header WHERE hash = :hash", nativeQuery = true)
-    Optional<Long> findCumulativeDifficultyByHash(@Param("hash") byte[] hash);
+    Optional<BigInteger> findCumulativeDifficultyByHash(@Param("hash") byte[] hash);
 
     @Query(value = "SELECT * FROM explorer_block_header ORDER BY height DESC LIMIT 1", nativeQuery = true)
     Optional<ExBlockHeader> findLatest();

@@ -31,13 +31,17 @@ import java.time.Instant;
 import global.goldenera.cryptoj.common.state.ValidatorState;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
 import global.goldenera.node.explorer.converters.state.ValidatorStateVersionConverter;
 import global.goldenera.node.shared.converters.AddressConverter;
 import global.goldenera.node.shared.converters.HashConverter;
+import global.goldenera.node.shared.enums.MiningPolicySource;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.IdClass;
 import jakarta.persistence.Index;
@@ -80,6 +84,54 @@ public class ExValidator implements ValidatorState {
 
     @Column(name = "created_at_timestamp", nullable = false, updatable = false)
     Instant createdAtTimestamp;
+
+    @Column(name = "mining_limit_mode", length = 16)
+    @Enumerated(EnumType.STRING)
+    MiningLimitMode miningLimitMode;
+
+    @Column(name = "mining_policy_source", length = 32)
+    @Enumerated(EnumType.STRING)
+    MiningPolicySource miningPolicySource;
+
+    @Column(name = "max_mining_share_bps")
+    Long maxMiningShareBpsValue;
+
+    @Column(name = "policy_updated_by_tx_hash", length = 32, columnDefinition = "BYTEA")
+    @Convert(converter = HashConverter.class)
+    Hash policyUpdatedByTxHash;
+
+    @Column(name = "policy_updated_at_block_height")
+    Long policyUpdatedAtBlockHeightValue;
+
+    @Column(name = "policy_updated_at_timestamp")
+    Instant policyUpdatedAtTimestamp;
+
+    @Override
+    public MiningLimitMode getMiningLimitMode() {
+        return version == ValidatorStateVersion.V1 ? MiningLimitMode.UNLIMITED : miningLimitMode;
+    }
+
+    public MiningLimitMode getStoredMiningLimitMode() {
+        return miningLimitMode;
+    }
+
+    public MiningPolicySource getMiningPolicySource() {
+        return version == ValidatorStateVersion.V1 ? MiningPolicySource.LEGACY_DEFAULT : miningPolicySource;
+    }
+
+    public MiningPolicySource getStoredMiningPolicySource() {
+        return miningPolicySource;
+    }
+
+    @Override
+    public long getMaxMiningShareBps() {
+        return version == ValidatorStateVersion.V1 ? 0 : maxMiningShareBpsValue;
+    }
+
+    @Override
+    public long getPolicyUpdatedAtBlockHeight() {
+        return policyUpdatedAtBlockHeightValue != null ? policyUpdatedAtBlockHeightValue : Long.MIN_VALUE;
+    }
 
     @NoArgsConstructor
     @AllArgsConstructor

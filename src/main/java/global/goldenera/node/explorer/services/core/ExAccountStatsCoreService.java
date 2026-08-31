@@ -35,6 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.node.explorer.entities.ExAccountNonce;
+import global.goldenera.node.explorer.repositories.ExTxRepository;
+import global.goldenera.node.explorer.repositories.ExTxRepository.AccountActivityRange;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -51,6 +53,7 @@ public class ExAccountStatsCoreService {
 
 	ExAuthorityCoreService authorityCoreService;
 	ExTxCoreService txCoreService;
+	ExTxRepository txRepository;
 	ExAccountBalanceCoreService accountBalanceCoreService;
 	ExAccountNonceCoreService accountNonceCoreService;
 
@@ -61,8 +64,9 @@ public class ExAccountStatsCoreService {
 
 		Optional<ExAccountNonce> nonceOpt = accountNonceCoreService.getByAddressOptional(address);
 		long nonce = nonceOpt.map(ExAccountNonce::getNonce).orElse(0L);
-		Instant firstActivity = nonceOpt.map(ExAccountNonce::getCreatedAtTimestamp).orElse(null);
-		Instant lastActivity = nonceOpt.map(ExAccountNonce::getUpdatedAtTimestamp).orElse(null);
+		AccountActivityRange activity = txRepository.findAccountActivityRange(address.toArray()).orElse(null);
+		Instant firstActivity = activity != null ? activity.getFirstActivity() : null;
+		Instant lastActivity = activity != null ? activity.getLastActivity() : null;
 
 		boolean isAuthority = authorityCoreService.existsByNodeIdentity(address);
 

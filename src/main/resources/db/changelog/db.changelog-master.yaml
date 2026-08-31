@@ -7,3 +7,17 @@ databaseChangeLog:
                   file: db/changelog/changesets/003-custom-indexes.yaml
         - include:
                   file: db/changelog/changesets/004-transfer-covering-indexes.yaml
+        - include:
+                  file: db/changelog/changesets/005-mining-economics-explorer.yaml
+        - include:
+                  file: db/changelog/changesets/006-explorer-chain-identity.yaml
+        - include:
+                  file: db/changelog/changesets/007-api-key-webhook-secret.yaml
+        - include:
+                  file: db/changelog/changesets/008-bridge-delivery.yaml
+        - include:
+                  file: db/changelog/changesets/009-explorer-read-indexes.yaml
+        - include:
+                  file: db/changelog/changesets/010-durable-universal-webhook.yaml
+        - include:
+                  file: db/changelog/changesets/011-api-key-auth-epoch.yaml

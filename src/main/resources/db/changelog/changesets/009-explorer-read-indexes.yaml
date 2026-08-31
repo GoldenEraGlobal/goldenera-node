@@ -1,0 +1,362 @@
+databaseChangeLog:
+  # Legacy TIMESTAMP columns were written as UTC wall-clock values. The upgrade
+  # deliberately interprets every legacy value as UTC; it never applies the
+  # database/session time zone. Operators must stop writers before migration.
+  - changeSet:
+      id: 009-explorer-instant-columns-utc-preflight
+      author: goldenera
+      dbms: postgresql
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$
+              DECLARE
+                relation_name TEXT;
+                column_type TEXT;
+              BEGIN
+                FOREACH relation_name IN ARRAY ARRAY['explorer_tx', 'explorer_transfer'] LOOP
+                  SELECT data_type INTO column_type
+                  FROM information_schema.columns
+                  WHERE table_schema = current_schema()
+                    AND table_name = relation_name
+                    AND column_name = 'timestamp';
+                  IF column_type IS NULL THEN
+                    RAISE EXCEPTION '009 UTC migration requires %.timestamp', relation_name;
+                  END IF;
+                  IF column_type NOT IN ('timestamp without time zone', 'timestamp with time zone') THEN
+                    RAISE EXCEPTION '009 UTC migration does not support %.timestamp type %',
+                      relation_name, column_type;
+                  END IF;
+                END LOOP;
+              END
+              $$;
+
+  - changeSet:
+      id: 009-explorer-instant-columns-utc
+      author: goldenera
+      dbms: postgresql
+      # Development/RC databases may already contain the original 009 body.
+      # Its UTC conversion is semantically identical, so keep those databases
+      # upgradeable while the new preflight remains a separate changeset.
+      validCheckSum: ANY
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              SET LOCAL lock_timeout = '5s';
+              LOCK TABLE explorer_tx, explorer_transfer IN ACCESS EXCLUSIVE MODE;
+              DO $$
+              BEGIN
+                IF EXISTS (
+                  SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema()
+                    AND table_name = 'explorer_tx'
+                    AND column_name = 'timestamp'
+                    AND data_type = 'timestamp without time zone'
+                ) THEN
+                  ALTER TABLE explorer_tx
+                    ALTER COLUMN timestamp TYPE TIMESTAMP(6) WITH TIME ZONE
+                    USING timestamp AT TIME ZONE 'UTC';
+                END IF;
+                IF EXISTS (
+                  SELECT 1 FROM information_schema.columns
+                  WHERE table_schema = current_schema()
+                    AND table_name = 'explorer_transfer'
+                    AND column_name = 'timestamp'
+                    AND data_type = 'timestamp without time zone'
+                ) THEN
+                  ALTER TABLE explorer_transfer
+                    ALTER COLUMN timestamp TYPE TIMESTAMP(6) WITH TIME ZONE
+                    USING timestamp AT TIME ZONE 'UTC';
+                END IF;
+              END
+              $$;
+              COMMENT ON COLUMN explorer_tx.timestamp IS
+                'UTC instant; legacy timestamp-without-time-zone values were interpreted as UTC by changeset 009';
+              COMMENT ON COLUMN explorer_transfer.timestamp IS
+                'UTC instant; legacy timestamp-without-time-zone values were interpreted as UTC by changeset 009';
+
+  # PostgreSQL cannot build a partitioned parent index CONCURRENTLY. Prebuild
+  # every current leaf concurrently, then attach them to a metadata-only parent.
+  # Unexpected extra partitions fail fast so an operator can extend this staged
+  # list instead of accidentally running a blocking recursive parent build.
+  - changeSet:
+      id: 009-explorer-existing-indexes-preflight
+      author: goldenera
+      dbms: postgresql
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$
+              DECLARE
+                page_indexes INTEGER;
+                read_indexes INTEGER;
+                trigram_indexes INTEGER;
+              BEGIN
+                SELECT count(*) INTO page_indexes FROM pg_index
+                WHERE indisvalid
+                  AND indexrelid IN (
+                    to_regclass(current_schema() || '.idx_ex_transfer_page_order'),
+                    to_regclass(current_schema() || '.idx_explorer_tx_page_order'));
+                SELECT count(*) INTO read_indexes FROM pg_class
+                WHERE relnamespace = current_schema()::regnamespace
+                  AND relname IN (
+                    'idx_explorer_account_nonce_nonce_address',
+                    'idx_explorer_account_balance_page_order',
+                    'idx_explorer_address_alias_lower_alias');
+                SELECT count(*) INTO trigram_indexes FROM pg_class
+                WHERE relnamespace = current_schema()::regnamespace
+                  AND relname IN (
+                    'idx_explorer_token_name_trgm',
+                    'idx_explorer_token_smallest_unit_name_trgm');
+                IF page_indexes NOT IN (0, 2)
+                    OR read_indexes NOT IN (0, 3)
+                    OR trigram_indexes NOT IN (0, 2) THEN
+                  RAISE EXCEPTION
+                    '009 found a partial prior index set (page %, read %, trigram %); repair it before migration',
+                    page_indexes, read_indexes, trigram_indexes;
+                END IF;
+              END
+              $$;
+
+  - changeSet:
+      id: 009-explorer-page-partitions-preflight
+      author: goldenera
+      dbms: postgresql
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: |
+              SELECT count(*) FROM pg_index
+              WHERE indisvalid
+                AND indexrelid IN (
+                  to_regclass(current_schema() || '.idx_ex_transfer_page_order'),
+                  to_regclass(current_schema() || '.idx_explorer_tx_page_order'))
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$
+              DECLARE
+                unexpected TEXT;
+              BEGIN
+                SELECT string_agg(child.relname, ', ' ORDER BY child.relname) INTO unexpected
+                FROM pg_inherits inheritance
+                JOIN pg_class parent ON parent.oid = inheritance.inhparent
+                JOIN pg_namespace namespace ON namespace.oid = parent.relnamespace
+                JOIN pg_class child ON child.oid = inheritance.inhrelid
+                WHERE namespace.nspname = current_schema()
+                  AND parent.relname IN ('explorer_tx', 'explorer_transfer')
+                  AND child.relname NOT IN (
+                    'explorer_tx_p0', 'explorer_tx_p1', 'explorer_tx_p2', 'explorer_tx_p3', 'explorer_tx_p4',
+                    'explorer_transfer_p0', 'explorer_transfer_p1', 'explorer_transfer_p2',
+                    'explorer_transfer_p3', 'explorer_transfer_p4');
+                IF unexpected IS NOT NULL THEN
+                  RAISE EXCEPTION
+                    '009 concurrent page-index migration requires an explicit leaf index for partitions: %',
+                    unexpected;
+                END IF;
+              END
+              $$;
+
+  - changeSet:
+      id: 009-explorer-page-index-parents
+      author: goldenera
+      dbms: postgresql
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: |
+              SELECT count(*) FROM pg_index
+              WHERE indisvalid
+                AND indexrelid IN (
+                  to_regclass(current_schema() || '.idx_ex_transfer_page_order'),
+                  to_regclass(current_schema() || '.idx_explorer_tx_page_order'))
+      changes:
+        - sql:
+            sql: |
+              CREATE INDEX IF NOT EXISTS idx_ex_transfer_page_order
+              ON ONLY explorer_transfer (timestamp DESC, block_height DESC, tx_index DESC, id DESC);
+        - sql:
+            sql: |
+              CREATE INDEX IF NOT EXISTS idx_explorer_tx_page_order
+              ON ONLY explorer_tx (timestamp DESC, block_height DESC, tx_index DESC, hash DESC);
+
+  - changeSet:
+      id: 009-explorer-page-index-leaves-concurrent
+      author: goldenera
+      dbms: postgresql
+      runInTransaction: false
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: |
+              SELECT count(*) FROM pg_index
+              WHERE indisvalid
+                AND indexrelid IN (
+                  to_regclass(current_schema() || '.idx_ex_transfer_page_order'),
+                  to_regclass(current_schema() || '.idx_explorer_tx_page_order'))
+      changes:
+        - sql:
+            sql: |
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p0;
+              CREATE INDEX CONCURRENTLY idx_ex_transfer_page_order_p0 ON explorer_transfer_p0 (timestamp DESC, block_height DESC, tx_index DESC, id DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p1;
+              CREATE INDEX CONCURRENTLY idx_ex_transfer_page_order_p1 ON explorer_transfer_p1 (timestamp DESC, block_height DESC, tx_index DESC, id DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p2;
+              CREATE INDEX CONCURRENTLY idx_ex_transfer_page_order_p2 ON explorer_transfer_p2 (timestamp DESC, block_height DESC, tx_index DESC, id DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p3;
+              CREATE INDEX CONCURRENTLY idx_ex_transfer_page_order_p3 ON explorer_transfer_p3 (timestamp DESC, block_height DESC, tx_index DESC, id DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p4;
+              CREATE INDEX CONCURRENTLY idx_ex_transfer_page_order_p4 ON explorer_transfer_p4 (timestamp DESC, block_height DESC, tx_index DESC, id DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p0;
+              CREATE INDEX CONCURRENTLY idx_explorer_tx_page_order_p0 ON explorer_tx_p0 (timestamp DESC, block_height DESC, tx_index DESC, hash DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p1;
+              CREATE INDEX CONCURRENTLY idx_explorer_tx_page_order_p1 ON explorer_tx_p1 (timestamp DESC, block_height DESC, tx_index DESC, hash DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p2;
+              CREATE INDEX CONCURRENTLY idx_explorer_tx_page_order_p2 ON explorer_tx_p2 (timestamp DESC, block_height DESC, tx_index DESC, hash DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p3;
+              CREATE INDEX CONCURRENTLY idx_explorer_tx_page_order_p3 ON explorer_tx_p3 (timestamp DESC, block_height DESC, tx_index DESC, hash DESC);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p4;
+              CREATE INDEX CONCURRENTLY idx_explorer_tx_page_order_p4 ON explorer_tx_p4 (timestamp DESC, block_height DESC, tx_index DESC, hash DESC);
+      rollback:
+        - sql:
+            sql: |
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p0;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p1;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p2;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p3;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_ex_transfer_page_order_p4;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p0;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p1;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p2;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p3;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_tx_page_order_p4;
+
+  - changeSet:
+      id: 009-explorer-page-index-attach
+      author: goldenera
+      dbms: postgresql
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: |
+              SELECT count(*) FROM pg_index
+              WHERE indisvalid
+                AND indexrelid IN (
+                  to_regclass(current_schema() || '.idx_ex_transfer_page_order'),
+                  to_regclass(current_schema() || '.idx_explorer_tx_page_order'))
+      changes:
+        - sql:
+            splitStatements: false
+            sql: |
+              DO $$
+              DECLARE
+                suffix INTEGER;
+                child_index TEXT;
+                parent_index TEXT;
+              BEGIN
+                FOR suffix IN 0..4 LOOP
+                  FOREACH parent_index IN ARRAY ARRAY[
+                    'idx_ex_transfer_page_order', 'idx_explorer_tx_page_order'
+                  ] LOOP
+                    child_index := parent_index || '_p' || suffix;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_inherits
+                      WHERE inhparent = parent_index::regclass
+                        AND inhrelid = child_index::regclass
+                    ) THEN
+                      EXECUTE format('ALTER INDEX %I ATTACH PARTITION %I', parent_index, child_index);
+                    END IF;
+                  END LOOP;
+                END LOOP;
+                IF EXISTS (
+                  SELECT 1 FROM pg_index
+                  WHERE indexrelid IN (
+                    'idx_ex_transfer_page_order'::regclass,
+                    'idx_explorer_tx_page_order'::regclass)
+                    AND NOT indisvalid
+                ) THEN
+                  RAISE EXCEPTION '009 partitioned page index did not become valid after leaf attachment';
+                END IF;
+              END
+              $$;
+      rollback:
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_ex_transfer_page_order;
+        - sql:
+            sql: DROP INDEX IF EXISTS idx_explorer_tx_page_order;
+
+  - changeSet:
+      id: 009-explorer-read-indexes-concurrent
+      author: goldenera
+      dbms: postgresql
+      runInTransaction: false
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: |
+              SELECT count(*) FROM pg_class
+              WHERE relnamespace = current_schema()::regnamespace
+                AND relname IN (
+                  'idx_explorer_account_nonce_nonce_address',
+                  'idx_explorer_account_balance_page_order',
+                  'idx_explorer_address_alias_lower_alias')
+      changes:
+        - sql:
+            sql: |
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_account_nonce_nonce_address;
+              CREATE INDEX CONCURRENTLY idx_explorer_account_nonce_nonce_address ON explorer_account_nonce (nonce, address);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_account_balance_page_order;
+              CREATE INDEX CONCURRENTLY idx_explorer_account_balance_page_order ON explorer_account_balance (balance, address, token_address);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_address_alias_lower_alias;
+              CREATE INDEX CONCURRENTLY idx_explorer_address_alias_lower_alias ON explorer_address_alias (LOWER(alias));
+      rollback:
+        - sql:
+            sql: |
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_account_nonce_nonce_address;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_account_balance_page_order;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_address_alias_lower_alias;
+
+  - changeSet:
+      id: 009-explorer-token-trigram-extension
+      author: goldenera
+      dbms: postgresql
+      changes:
+        - sql:
+            sql: CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+  - changeSet:
+      id: 009-explorer-token-trigram-search-concurrent
+      author: goldenera
+      dbms: postgresql
+      runInTransaction: false
+      preConditions:
+        - onFail: MARK_RAN
+        - sqlCheck:
+            expectedResult: 0
+            sql: |
+              SELECT count(*) FROM pg_class
+              WHERE relnamespace = current_schema()::regnamespace
+                AND relname IN (
+                  'idx_explorer_token_name_trgm',
+                  'idx_explorer_token_smallest_unit_name_trgm')
+      changes:
+        - sql:
+            sql: |
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_token_name_trgm;
+              CREATE INDEX CONCURRENTLY idx_explorer_token_name_trgm ON explorer_token USING GIN (name gin_trgm_ops);
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_token_smallest_unit_name_trgm;
+              CREATE INDEX CONCURRENTLY idx_explorer_token_smallest_unit_name_trgm ON explorer_token USING GIN (smallest_unit_name gin_trgm_ops);
+      rollback:
+        - sql:
+            sql: |
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_token_name_trgm;
+              DROP INDEX CONCURRENTLY IF EXISTS idx_explorer_token_smallest_unit_name_trgm;

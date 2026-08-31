@@ -38,7 +38,9 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.common.Block;
+import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
@@ -75,7 +77,8 @@ public class BlockOrphanBufferService {
 		log.info("BlockOrphanBufferService: Scheduled cleanup on coreTaskScheduler every 60s");
 	}
 
-	public void addOrphan(Block block, global.goldenera.cryptoj.datatypes.Address receivedFrom, Instant receivedAt) {
+	public void addOrphan(StatelessValidatedBlock validatedBlock, Address receivedFrom, Instant receivedAt) {
+		Block block = validatedBlock.block();
 		if (orphansByHash.containsKey(block.getHash())) {
 			return;
 		}
@@ -84,7 +87,7 @@ public class BlockOrphanBufferService {
 			return;
 		}
 
-		OrphanBlockWrapper wrapper = new OrphanBlockWrapper(block, receivedFrom, receivedAt);
+		OrphanBlockWrapper wrapper = new OrphanBlockWrapper(validatedBlock, receivedFrom, receivedAt);
 		orphansByHash.put(block.getHash(), wrapper);
 
 		orphansByParent.computeIfAbsent(block.getHeader().getPreviousHash(), k -> new ArrayList<>()).add(wrapper);
@@ -139,8 +142,12 @@ public class BlockOrphanBufferService {
 	@Data
 	@AllArgsConstructor
 	public static class OrphanBlockWrapper {
-		Block block;
-		global.goldenera.cryptoj.datatypes.Address receivedFrom;
+		StatelessValidatedBlock validatedBlock;
+		Address receivedFrom;
 		Instant receivedAt;
+
+		public Block getBlock() {
+			return validatedBlock.block();
+		}
 	}
 }

@@ -42,7 +42,10 @@ public record BulkValidatorPageRequestV1(
         Set<Address> addresses,
         Hash originTxHash,
         Long createdAtBlockHeightFrom,
-        Long createdAtBlockHeightTo,
-        Instant createdAtTimestampFrom,
-        Instant createdAtTimestampTo) {
+			Long createdAtBlockHeightTo,
+			Instant createdAtTimestampFrom,
+			Instant createdAtTimestampTo) {
+	public BulkValidatorPageRequestV1 {
+		BulkPageRequestValidator.validate(pageNumber, pageSize, addresses);
+	}
 }

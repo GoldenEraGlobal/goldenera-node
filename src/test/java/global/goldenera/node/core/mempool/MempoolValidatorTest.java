@@ -25,12 +25,14 @@ package global.goldenera.node.core.mempool;
 
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.ALICE;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.BOB;
+import static global.goldenera.node.core.mempool.MempoolTestFixtures.governance;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.hash;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.transfer;
 import static global.goldenera.node.core.mempool.MempoolTestFixtures.vote;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Answers.RETURNS_DEEP_STUBS;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -45,19 +47,27 @@ import org.junit.jupiter.api.Test;
 
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.Tx;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayloadImpl;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayloadImpl;
 import global.goldenera.cryptoj.common.state.AccountBalanceState;
 import global.goldenera.cryptoj.common.state.AccountNonceState;
 import global.goldenera.cryptoj.common.state.BipState;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.cryptoj.common.state.TokenState;
+import global.goldenera.cryptoj.common.state.impl.MiningRewardMaturityStateImpl;
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
+import global.goldenera.cryptoj.enums.TxPayloadVersion;
 import global.goldenera.cryptoj.enums.state.BipStatus;
+import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.node.core.blockchain.events.MempoolTxAddEvent;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.time.ChainClock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
 import global.goldenera.node.core.mempool.MempoolValidator.MempoolValidationResult;
 import global.goldenera.node.core.mempool.MempoolValidator.ValidationStatus;
+import global.goldenera.node.core.mempool.MempoolManager.MempoolReasonCode;
 import global.goldenera.node.core.mempool.MempoolStore.ReservationSnapshot;
 import global.goldenera.node.core.mempool.domain.MempoolEntry;
 import global.goldenera.node.core.properties.MempoolProperties;
@@ -70,6 +80,9 @@ class MempoolValidatorTest {
 	WorldState worldState;
 	MempoolStore store;
 	MempoolValidator validator;
+	ChainClock chainClock;
+	Block block;
+	NetworkParamsState params;
 
 	@BeforeEach
 	void setUp() {
@@ -79,17 +92,21 @@ class MempoolValidatorTest {
 		when(chainHead.getHeadState()).thenReturn(worldState);
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		StoredBlock storedBlock = mock(StoredBlock.class);
-		Block block = mock(Block.class, RETURNS_DEEP_STUBS);
-		when(block.getHeight()).thenReturn(10L);
+		block = mock(Block.class, RETURNS_DEEP_STUBS);
+		when(block.getHeight()).thenReturn(753_996L);
 		when(block.getHeader().getTimestamp()).thenReturn(Instant.now().minusSeconds(10));
 		when(storedBlock.getBlock()).thenReturn(block);
 		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(storedBlock);
 
 		MempoolProperties properties = MempoolTestFixtures.properties(100);
-		NetworkParamsState params = mock(NetworkParamsState.class);
+		params = mock(NetworkParamsState.class);
 		when(params.getMinTxBaseFee()).thenReturn(Wei.ZERO);
 		when(params.getMinTxByteFee()).thenReturn(Wei.ZERO);
+		when(params.getValidatorMiningWindowBlocks()).thenReturn(100L);
+		when(params.getCurrentValidatorCount()).thenReturn(1L);
+		when(params.getCurrentUnlimitedValidatorCount()).thenReturn(1L);
 		when(worldState.getParams()).thenReturn(params);
+		when(worldState.getMiningRewardMaturity(anyLong())).thenReturn(MiningRewardMaturityStateImpl.ZERO);
 		AccountNonceState nonce = mock(AccountNonceState.class);
 		when(nonce.getNonce()).thenReturn(0L);
 		when(worldState.getNonce(any(Address.class))).thenReturn(nonce);
@@ -98,8 +115,10 @@ class MempoolValidatorTest {
 				.thenAnswer(invocation -> affordable(invocation.getArgument(2)));
 		when(store.tokenReservation(any(Address.class), any(Address.class), any(Tx.class), any(Wei.class)))
 				.thenAnswer(invocation -> affordable(invocation.getArgument(3)));
+		chainClock = mock(ChainClock.class);
+		when(chainClock.earliestNextBlockTimestamp(any())).thenReturn(Instant.now());
 		validator = new MempoolValidator(new SimpleMeterRegistry(), chainHead, chainQuery, properties, store,
-				mock(TxValidator.class));
+				mock(TxValidator.class), chainClock);
 	}
 
 	@Test
@@ -114,6 +133,7 @@ class MempoolValidatorTest {
 		MempoolValidationResult result = admit(candidate);
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isNull();
 		assertThat(result.getErrorMessage()).contains("Insufficient native funds");
 	}
 
@@ -165,6 +185,95 @@ class MempoolValidatorTest {
 	}
 
 	@Test
+	void nativeAdmissionUsesSpendableBalanceInsteadOfTotalBalance() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 25, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(100));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(30));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(30))))
+				.thenReturn(reservation(0, 0, 35, 30));
+
+		MempoolValidationResult result = admit(candidate);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
+		assertThat(result.getErrorMessage()).contains("Insufficient native funds");
+	}
+
+	@Test
+	void governanceAdmissionReportsLockedMiningRewardAsSpendabilityCause() {
+		MempoolEntry vote = vote(1, ALICE, 1, 10, hash(50));
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(100));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(store.nativeReservation(eq(ALICE), eq(vote.getTx()), eq(Wei.valueOf(5))))
+				.thenReturn(reservation(0, 0, 10, 5));
+
+		MempoolValidationResult result = admit(vote);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
+	}
+
+	@Test
+	void nativeTransferCanUseRewardMaturingAtCandidateBlockHeight() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 25, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(40));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(worldState.getMiningRewardMaturity(11)).thenReturn(
+				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(40))))
+				.thenReturn(reservation(0, 0, 35, 40));
+
+		assertThat(admit(candidate).getStatus()).isEqualTo(ValidationStatus.VALID);
+	}
+
+	@Test
+	void nativeTransferCannotUseRewardMaturingAfterCandidateBlockHeight() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 25, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(40));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(worldState.getMiningRewardMaturity(12)).thenReturn(
+				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(5))))
+				.thenReturn(reservation(0, 0, 35, 5));
+
+		MempoolValidationResult result = admit(candidate);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.INSUFFICIENT_SPENDABLE_BALANCE);
+	}
+
+	@Test
+	void cancelledMaturityIsNotProjectedAsSpendableAtCandidateHeight() {
+		MempoolEntry candidate = nativeTransfer(1, 1, 1, 10);
+		AccountBalanceState balance = mock(AccountBalanceState.class);
+		when(balance.getBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(5));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.valueOf(35));
+		when(worldState.getBalance(ALICE, Address.NATIVE_TOKEN)).thenReturn(balance);
+		when(worldState.getMiningRewardMaturity(11)).thenReturn(
+				MiningRewardMaturityStateImpl.empty().addReward(ALICE, Wei.valueOf(35)));
+		when(store.nativeReservation(eq(ALICE), eq(candidate.getTx()), eq(Wei.valueOf(5))))
+				.thenReturn(reservation(0, 0, 11, 5));
+
+		MempoolValidationResult result = admit(candidate);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isNull();
+	}
+
+	@Test
 	void expiredVoteIsRejectedEvenWhenStoredStatusIsPending() {
 		MempoolEntry vote = vote(1, ALICE, 1, 10, hash(50));
 		balance(Address.NATIVE_TOKEN, 100);
@@ -179,6 +288,24 @@ class MempoolValidatorTest {
 
 		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
 		assertThat(result.getErrorMessage()).contains("expired");
+	}
+
+	@Test
+	void deterministicChainTimeDoesNotExpireAValidVoteAgainstTheHostWallClock() {
+		Instant deterministicNextBlock = Instant.parse("2023-11-14T22:13:41Z");
+		when(chainClock.earliestNextBlockTimestamp(any())).thenReturn(deterministicNextBlock);
+		MempoolEntry vote = vote(1, ALICE, 1, 10, hash(50));
+		balance(Address.NATIVE_TOKEN, 100);
+		BipState bip = mock(BipState.class);
+		when(bip.exists()).thenReturn(true);
+		when(bip.getStatus()).thenReturn(BipStatus.PENDING);
+		when(bip.getExpirationTimestamp()).thenReturn(deterministicNextBlock.plusSeconds(60));
+		when(bip.getAllVoters()).thenReturn(new LinkedHashSet<>());
+		when(worldState.getBip(hash(50))).thenReturn(bip);
+
+		MempoolValidationResult result = admit(vote);
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.VALID);
 	}
 
 	@Test
@@ -200,6 +327,95 @@ class MempoolValidatorTest {
 		when(worldState.getNonce(ALICE)).thenThrow(new IllegalStateException("rocks unavailable"));
 
 		assertThat(admit(entry).getStatus()).isEqualTo(ValidationStatus.TRANSIENT_ERROR);
+	}
+
+	@Test
+	void postForkAdmissionRejectsLegacyValidatorAddAndAcceptsCanonicalV2() {
+		balance(Address.NATIVE_TOKEN, 100);
+		Address validatorAddress = MempoolTestFixtures.address(91);
+		TxBipValidatorAddPayloadImpl legacy = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.address(validatorAddress)
+				.build();
+		TxBipValidatorAddPayloadImpl versionTwo = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(4000L)
+				.build();
+
+		assertThat(admit(governance(90, ALICE, 1, 10, legacy)).getStatus())
+				.isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(admit(governance(91, ALICE, 1, 10, versionTwo)).getStatus())
+				.isEqualTo(ValidationStatus.VALID);
+	}
+
+	@Test
+	void firstLimitedValidatorUsesStableLastUnlimitedReasonCode() {
+		balance(Address.NATIVE_TOKEN, 100);
+		when(worldState.getParams().getCurrentValidatorCount()).thenReturn(0L);
+		when(worldState.getParams().getCurrentUnlimitedValidatorCount()).thenReturn(0L);
+		Address validatorAddress = MempoolTestFixtures.address(92);
+		TxBipValidatorAddPayloadImpl limited = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(4000L)
+				.build();
+
+		MempoolValidationResult result = admit(governance(92, ALICE, 1, 10, limited));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.LAST_UNLIMITED_REQUIRED);
+	}
+
+	@Test
+	void limitedPolicyWithZeroIntegerQuotaUsesStableReasonCode() {
+		balance(Address.NATIVE_TOKEN, 100);
+		Address validatorAddress = MempoolTestFixtures.address(93);
+		TxBipValidatorAddPayloadImpl limited = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(1L)
+				.build();
+
+		MempoolValidationResult result = admit(governance(93, ALICE, 1, 10, limited));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.LIMITED_QUOTA_ZERO);
+	}
+
+	@Test
+	void activationCandidateUsesConfiguredWindowInsteadOfLegacyParentZero() {
+		balance(Address.NATIVE_TOKEN, 100);
+		when(block.getHeight()).thenReturn(753_995L);
+		when(params.getVersion()).thenReturn(NetworkParamsStateVersion.V1);
+		when(params.getValidatorMiningWindowBlocks()).thenReturn(0L);
+		Address validatorAddress = MempoolTestFixtures.address(94);
+		TxBipValidatorAddPayloadImpl limited = TxBipValidatorAddPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V2)
+				.address(validatorAddress)
+				.miningLimitMode(MiningLimitMode.LIMITED)
+				.maxMiningShareBps(100L)
+				.build();
+
+		MempoolValidationResult result = admit(governance(94, ALICE, 1, 10, limited));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.VALID);
+	}
+
+	@Test
+	void networkParamsVersionMismatchIsNotReportedAsWindowBoundsFailure() {
+		balance(Address.NATIVE_TOKEN, 100);
+		TxBipNetworkParamsSetPayloadImpl legacy = TxBipNetworkParamsSetPayloadImpl.builder()
+				.payloadVersion(TxPayloadVersion.V1)
+				.build();
+
+		MempoolValidationResult result = admit(governance(95, ALICE, 1, 10, legacy));
+
+		assertThat(result.getStatus()).isEqualTo(ValidationStatus.STATE_INVALID);
+		assertThat(result.getReasonCode()).isEqualTo(MempoolReasonCode.VALIDATION_STATELESS_INVALID);
 	}
 
 	private MempoolValidationResult admit(MempoolEntry entry) {
@@ -227,6 +443,8 @@ class MempoolValidatorTest {
 	private void balance(Address token, long value) {
 		AccountBalanceState balance = mock(AccountBalanceState.class);
 		when(balance.getBalance()).thenReturn(Wei.valueOf(value));
+		when(balance.getSpendableBalance()).thenReturn(Wei.valueOf(value));
+		when(balance.getPendingMiningRewardCancellation()).thenReturn(Wei.ZERO);
 		when(worldState.getBalance(ALICE, token)).thenReturn(balance);
 	}
 

@@ -126,7 +126,7 @@ public class ExAccountNonceCoreService {
 		};
 
 		return addressNonceCoreRepository.findAll(spec, PageRequest.of(pageNumber, pageSize,
-				direction != null ? Sort.by(direction, "nonce") : Sort.by("nonce")));
+				PaginationUtil.stableSort(direction, "nonce", "address")));
 	}
 
 	@Transactional(readOnly = true)

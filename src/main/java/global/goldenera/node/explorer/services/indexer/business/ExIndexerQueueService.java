@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -37,6 +38,7 @@ import org.springframework.stereotype.Service;
 
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
 import global.goldenera.node.core.blockchain.events.BlockDisconnectedEvent;
+import global.goldenera.node.explorer.storage.chainidentity.ExplorerRuntimeReadiness;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
@@ -51,26 +53,30 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class ExIndexerQueueService {
 
-	private static final int MAX_QUEUE_CAPACITY = 10000;
-	private static final long OFFER_TIMEOUT_MS = 10; // Max time to wait when queue is full
+	static final int MAX_QUEUE_CAPACITY = 64;
 
 	GeneralProperties generalProperties;
+	ExplorerRuntimeReadiness explorerReadiness;
 	MeterRegistry registry;
 	Deque<ExIndexerTask> queue = new ArrayDeque<>(MAX_QUEUE_CAPACITY);
+	AtomicLong catchUpLagBlocks = new AtomicLong();
 
 	ReentrantLock lock = new ReentrantLock(true);
 	Condition notEmpty = lock.newCondition();
-	Condition notFull = lock.newCondition();
 
 	@PostConstruct
 	public void initMetrics() {
-		if (!generalProperties.isExplorerEnable()) {
+		if (!enabled()) {
 			return;
 		}
 		registry.gaugeCollectionSize("explorer.queue.size", Tags.empty(), queue);
+		registry.gauge("explorer.catchup.lag.blocks", catchUpLagBlocks);
 	}
 
-	public void pushConnect(BlockConnectedEvent event) {
+	public BatchAdmission pushConnect(BlockConnectedEvent event) {
+		if (!enabled()) {
+			return BatchAdmission.IGNORED;
+		}
 		lock.lock();
 		try {
 			// Optimization: Remove immediate Disconnect-Connect flicker
@@ -80,33 +86,52 @@ public class ExIndexerQueueService {
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
-				notFull.signalAll();
+				markTaskProcessed();
 				log.debug("Optimization: Skipped flickering (Disconnect->Connect) for block #{}",
 						event.getBlock().getHeight());
-				return;
+				return BatchAdmission.ENQUEUED;
 			}
 
-			// Non-blocking offer with short timeout when queue is at hard limit
 			if (queue.size() >= MAX_QUEUE_CAPACITY) {
-				registry.counter("explorer.queue.blocked").increment();
-				if (!notFull.await(OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-					log.warn("Explorer Queue FULL ({}). Event for block #{} added despite limit.",
-							queue.size(), event.getBlock().getHeight());
-				}
+				return overflowToRebuild(1, "live connect");
 			}
 
 			queue.addLast(new ExIndexerTask.ConnectTask(event));
+			catchUpLagBlocks.incrementAndGet();
 			notEmpty.signalAll();
-
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			log.warn("Interrupted while pushing Connect task");
+			return BatchAdmission.ENQUEUED;
 		} finally {
 			lock.unlock();
 		}
 	}
 
-	public void pushDisconnect(BlockDisconnectedEvent event) {
+	/**
+	 * Atomically enqueues a committed sync batch without waiting for explorer
+	 * capacity. Overflow abandons the stale live queue and requests a canonical
+	 * archive rebuild so the core sync publisher can return immediately.
+	 */
+	public BatchAdmission pushConnectBatch(List<BlockConnectedEvent> events) {
+		if (!enabled() || events.isEmpty()) {
+			return BatchAdmission.IGNORED;
+		}
+		lock.lock();
+		try {
+			if (queue.size() >= MAX_QUEUE_CAPACITY) {
+				return overflowToRebuild(events.size(), "sync batch");
+			}
+			queue.addLast(new ExIndexerTask.ConnectBatchTask(events));
+			catchUpLagBlocks.addAndGet(events.size());
+			notEmpty.signalAll();
+			return BatchAdmission.ENQUEUED;
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	public BatchAdmission pushDisconnect(BlockDisconnectedEvent event) {
+		if (!enabled()) {
+			return BatchAdmission.IGNORED;
+		}
 		lock.lock();
 		try {
 			// Optimization: Remove immediate Connect-Disconnect flicker
@@ -116,30 +141,68 @@ public class ExIndexerQueueService {
 					&& lastTask.getHash().equals(event.getBlock().getHash())) {
 
 				queue.removeLast();
-				notFull.signalAll();
+				markTaskProcessed();
 				log.debug("Optimization: Skipped indexing/reverting block #{} (cancelled in queue)",
 						event.getBlock().getHeight());
-				return;
+				return BatchAdmission.ENQUEUED;
 			}
 
-			// Non-blocking offer with short timeout when queue is at hard limit
 			if (queue.size() >= MAX_QUEUE_CAPACITY) {
-				registry.counter("explorer.queue.blocked").increment();
-				if (!notFull.await(OFFER_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-					log.warn("Explorer Queue FULL ({}). Event for block #{} added despite limit.",
-							queue.size(), event.getBlock().getHeight());
-				}
+				return overflowToRebuild(1, "live disconnect");
 			}
 
 			queue.addLast(new ExIndexerTask.DisconnectTask(event));
+			catchUpLagBlocks.incrementAndGet();
 			notEmpty.signalAll();
-
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-			log.warn("Interrupted while pushing Disconnect task");
+			return BatchAdmission.ENQUEUED;
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	private BatchAdmission overflowToRebuild(int incomingTasks, String source) {
+		int discarded = queue.size();
+		queue.clear();
+		catchUpLagBlocks.addAndGet(incomingTasks);
+		explorerReadiness.rebuilding(
+				"Explorer live queue overflowed and is rebuilding from the local canonical archive");
+		registry.counter("explorer.queue.overflow_to_rebuild", "source", source).increment();
+		log.warn("Explorer queue rejected {} {} task(s) with {} queued; switching to canonical rebuild",
+				incomingTasks, source, discarded);
+		return BatchAdmission.REBUILD_REQUIRED;
+	}
+
+	public void discardForRebuild(String source) {
+		lock.lock();
+		try {
+			overflowToRebuild(0, source);
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	public void recordSkippedBatch(List<BlockConnectedEvent> events) {
+		if (generalProperties.isExplorerEnable() && !events.isEmpty()) {
+			catchUpLagBlocks.addAndGet(events.size());
+		}
+	}
+
+	public void recordSkippedDisconnect() {
+		if (generalProperties.isExplorerEnable()) {
+			catchUpLagBlocks.incrementAndGet();
+		}
+	}
+
+	public void markTaskProcessed() {
+		markTasksProcessed(1);
+	}
+
+	public void markTasksProcessed(int processedBlocks) {
+		catchUpLagBlocks.updateAndGet(current -> Math.max(0L, current - processedBlocks));
+	}
+
+	public void markRebuildComplete() {
+		catchUpLagBlocks.set(0L);
 	}
 
 	public ExIndexerTask take() throws InterruptedException {
@@ -149,11 +212,14 @@ public class ExIndexerQueueService {
 				notEmpty.await();
 			}
 			ExIndexerTask task = queue.pollFirst();
-			notFull.signalAll();
 			return task;
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	private boolean enabled() {
+		return generalProperties.isExplorerEnable() && explorerReadiness.isReady();
 	}
 
 	/**
@@ -166,9 +232,6 @@ public class ExIndexerQueueService {
 			List<ExIndexerTask> batch = new ArrayList<>(Math.min(maxElements, queue.size()));
 			while (!queue.isEmpty() && batch.size() < maxElements) {
 				batch.add(queue.pollFirst());
-			}
-			if (!batch.isEmpty()) {
-				notFull.signalAll();
 			}
 			return batch;
 		} finally {
@@ -186,9 +249,6 @@ public class ExIndexerQueueService {
 				notEmpty.await(timeoutMs, TimeUnit.MILLISECONDS);
 			}
 			ExIndexerTask task = queue.pollFirst();
-			if (task != null) {
-				notFull.signalAll();
-			}
 			return task;
 		} finally {
 			lock.unlock();
@@ -202,5 +262,11 @@ public class ExIndexerQueueService {
 		} finally {
 			lock.unlock();
 		}
+	}
+
+	public enum BatchAdmission {
+		ENQUEUED,
+		REBUILD_REQUIRED,
+		IGNORED
 	}
 }

@@ -27,17 +27,16 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
 import java.time.Instant;
-import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Service;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
-import global.goldenera.cryptoj.common.BlockImpl;
 import global.goldenera.cryptoj.common.state.impl.AccountBalanceStateImpl;
 import global.goldenera.cryptoj.common.state.impl.AuthorityStateImpl;
+import global.goldenera.cryptoj.common.state.impl.MiningWindowStateImpl;
 import global.goldenera.cryptoj.common.state.impl.NetworkParamsStateImpl;
 import global.goldenera.cryptoj.common.state.impl.TokenStateImpl;
 import global.goldenera.cryptoj.common.state.impl.ValidatorStateImpl;
@@ -45,19 +44,19 @@ import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.datatypes.Signature;
 import global.goldenera.cryptoj.enums.BlockVersion;
+import global.goldenera.cryptoj.enums.MiningLimitMode;
 import global.goldenera.cryptoj.enums.state.AuthorityStateVersion;
 import global.goldenera.cryptoj.enums.state.NetworkParamsStateVersion;
 import global.goldenera.cryptoj.enums.state.TokenStateVersion;
 import global.goldenera.cryptoj.enums.state.ValidatorStateVersion;
-import global.goldenera.merkletrie.MerkleTrie;
+import global.goldenera.cryptoj.utils.BlockHeaderUtil;
 import global.goldenera.node.Constants;
+import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.NetworkSettings;
-import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.state.BlockStateTransitions;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.state.WorldState;
-import global.goldenera.node.core.state.WorldStateFactory;
-import global.goldenera.node.shared.exceptions.GEFailedException;
+import global.goldenera.node.core.storage.chainidentity.ChainIdentityGenesisVerifier;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -74,59 +73,28 @@ public class GenesisInitializer {
 
 	ChainQuery chainQuery;
 	BlockStateTransitions blockStateTransitionService;
-	WorldStateFactory worldStateFactory;
+	ChainIdentityGenesisVerifier genesisVerifier;
 
 	public void checkAndInitGenesisBlock() throws Exception {
 		if (chainQuery.getStoredBlockByHeight(GENESIS_HEIGHT).isPresent()) {
 			return;
 		}
-		log.warn("Genesis block missing. Initializing from Hardcoded Constants...");
-		NetworkSettings settings = Constants.getSettings();
-		Instant timestamp = Instant.ofEpochMilli(settings.genesisBlockTimestamp());
-		List<Address> authorities = settings.genesisAuthorityAddresses();
-
-		if (authorities.isEmpty()) {
-			throw new GEFailedException("Cannot initialize genesis block. Initial genesis authorities are empty");
-		}
-
-		WorldState worldState = worldStateFactory.createForValidation(MerkleTrie.EMPTY_TRIE_NODE_HASH);
-		executeGenesisStateExplicitly(worldState, authorities, timestamp);
-
-		Hash stateRootHash = worldState.calculateRootHash();
-		Hash txRootHash = Hash.ZERO;
-
-		GenesisBlockHeaderTemplate header = GenesisBlockHeaderTemplate.builder()
-				.version(BlockVersion.V1)
-				.height(GENESIS_HEIGHT)
-				.timestamp(timestamp)
-				.previousHash(Hash.ZERO)
-				.difficulty(settings.genesisBlockDifficulty())
-				.txRootHash(txRootHash)
-				.stateRootHash(stateRootHash)
-				.coinbase(Address.ZERO)
-				.build();
-
-		Block genesisBlock = BlockImpl.builder().header(header).txs(Collections.emptyList()).build();
-
-		blockStateTransitionService.connectBlock(
-				genesisBlock,
-				worldState,
-				ConnectedSource.GENESIS,
-				null,
-				authorities.get(0),
-				timestamp);
-		log.info("Genesis initialized. Hash: {}", genesisBlock.getHash());
+		var plan = genesisVerifier.verifiedGenesisPlan();
+		blockStateTransitionService.connectVerifiedGenesis(plan);
+		log.info("Verified genesis initialized. Hash: {}", plan.genesisHash());
 	}
 
-	private void executeGenesisStateExplicitly(WorldState worldState, List<Address> authorities, Instant timestamp) {
-		NetworkSettings settings = Constants.getSettings();
-		Wei totalSupply = settings.genesisNetworkInitialMintForAuthority()
-				.addExact(settings.genesisNetworkInitialMintForBlockReward());
+	public static void executeGenesisStateExplicitly(WorldState worldState, List<Address> authorities, Instant timestamp,
+			NetworkSettings settings) {
+		Wei totalSupply = settings.genesisInitialBalances().values().stream()
+				.reduce(Wei.ZERO, Wei::addExact);
 		List<Address> validators = settings.genesisValidatorAddresses();
 
 		// 1. Network Params
-		NetworkParamsStateImpl params = NetworkParamsStateImpl.builder()
-				.version(NetworkParamsStateVersion.V1)
+		boolean miningEconomicsAtGenesis = settings.forkActivationBlocks()
+				.getOrDefault(ForkName.MINING_ECONOMICS, Long.MAX_VALUE) == GENESIS_HEIGHT;
+		var paramsBuilder = NetworkParamsStateImpl.builder()
+				.version(miningEconomicsAtGenesis ? NetworkParamsStateVersion.V2 : NetworkParamsStateVersion.V1)
 				.blockReward(settings.genesisNetworkBlockReward())
 				.targetMiningTimeMs(settings.genesisNetworkTargetMiningTimeMs())
 				.blockRewardPoolAddress(settings.genesisNetworkBlockRewardPoolAddress())
@@ -139,9 +107,19 @@ public class GenesisInitializer {
 				.currentValidatorCount(validators.size())
 				.updatedByTxHash(Hash.ZERO)
 				.updatedAtBlockHeight(GENESIS_HEIGHT)
-				.updatedAtTimestamp(timestamp)
-				.build();
+				.updatedAtTimestamp(timestamp);
+		if (miningEconomicsAtGenesis) {
+			paramsBuilder
+					.currentUnlimitedValidatorCount(validators.size())
+					.validatorMiningWindowBlocks(settings.genesisNetworkValidatorMiningWindowBlocks())
+					.miningRewardVestingBlocks(settings.genesisNetworkMiningRewardVestingBlocks());
+		}
+		NetworkParamsStateImpl params = paramsBuilder.build();
 		worldState.setParams(params);
+		if (miningEconomicsAtGenesis) {
+			worldState.setMiningWindow(MiningWindowStateImpl.empty(
+					settings.genesisNetworkValidatorMiningWindowBlocks(), GENESIS_HEIGHT));
+		}
 
 		// 2. Native Token
 		TokenStateImpl token = TokenStateImpl.builder()
@@ -174,34 +152,30 @@ public class GenesisInitializer {
 
 		// 4. Validators
 		for (Address validator : validators) {
-			ValidatorStateImpl validatorState = ValidatorStateImpl.builder()
-					.version(ValidatorStateVersion.V1)
+			var validatorBuilder = ValidatorStateImpl.builder()
+					.version(miningEconomicsAtGenesis ? ValidatorStateVersion.V2 : ValidatorStateVersion.V1)
 					.originTxHash(Hash.ZERO)
 					.createdAtBlockHeight(GENESIS_HEIGHT)
-					.createdAtTimestamp(timestamp)
-					.build();
+					.createdAtTimestamp(timestamp);
+			if (miningEconomicsAtGenesis) {
+				validatorBuilder
+						.miningLimitMode(MiningLimitMode.UNLIMITED)
+						.maxMiningShareBps(0)
+						.policyUpdatedByTxHash(Hash.ZERO)
+						.policyUpdatedAtBlockHeight(GENESIS_HEIGHT)
+						.policyUpdatedAtTimestamp(timestamp);
+			}
+			ValidatorStateImpl validatorState = validatorBuilder.build();
 			worldState.addValidator(validator, validatorState);
 		}
 
-		Address firstAuthorityAddress = authorities.get(0);
-		Address blockRewardPoolAddress = settings.genesisNetworkBlockRewardPoolAddress();
-
-		// Credit first authority with initial mint (credit() returns new immutable
-		// object)
-		AccountBalanceStateImpl firstAuthorityBalance = (AccountBalanceStateImpl) worldState
-				.getBalance(firstAuthorityAddress, Address.NATIVE_TOKEN);
-		AccountBalanceStateImpl newFirstAuthorityBalance = firstAuthorityBalance
-				.credit(settings.genesisNetworkInitialMintForAuthority(), GENESIS_HEIGHT, timestamp);
-		worldState.setBalance(firstAuthorityAddress, Address.NATIVE_TOKEN, newFirstAuthorityBalance);
-
-		// Credit block reward pool with initial mint
-		// Note: If blockRewardPoolAddress == firstAuthorityAddress, we need to get the
-		// updated balance
-		AccountBalanceStateImpl blockRewardPoolBalance = (AccountBalanceStateImpl) worldState
-				.getBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN);
-		AccountBalanceStateImpl newBlockRewardPoolBalance = blockRewardPoolBalance
-				.credit(settings.genesisNetworkInitialMintForBlockReward(), GENESIS_HEIGHT, timestamp);
-		worldState.setBalance(blockRewardPoolAddress, Address.NATIVE_TOKEN, newBlockRewardPoolBalance);
+		for (Map.Entry<Address, Wei> allocation : settings.genesisInitialBalances().entrySet()) {
+			AccountBalanceStateImpl initialBalance = (AccountBalanceStateImpl) worldState
+					.getBalance(allocation.getKey(), Address.NATIVE_TOKEN);
+			AccountBalanceStateImpl allocatedBalance = initialBalance
+					.credit(allocation.getValue(), GENESIS_HEIGHT, timestamp);
+			worldState.setBalance(allocation.getKey(), Address.NATIVE_TOKEN, allocatedBalance);
+		}
 	}
 
 	@Data
@@ -215,20 +189,21 @@ public class GenesisInitializer {
 		Hash txRootHash;
 		Hash stateRootHash;
 		Address coinbase;
+		long nonce;
 
 		@Override
 		public long getNonce() {
-			return 0;
+			return nonce;
 		}
 
 		@Override
 		public Hash getHash() {
-			return global.goldenera.cryptoj.utils.BlockHeaderUtil.hash(this);
+			return BlockHeaderUtil.hash(this);
 		}
 
 		@Override
 		public int getSize() {
-			return global.goldenera.cryptoj.utils.BlockHeaderUtil.size(this);
+			return BlockHeaderUtil.size(this);
 		}
 
 		@Override

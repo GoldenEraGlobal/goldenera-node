@@ -23,11 +23,14 @@
  */
 package global.goldenera.node;
 
+import java.net.URI;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import global.goldenera.cryptoj.datatypes.Address;
+import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.shared.utils.VersionUtil;
 import lombok.experimental.UtilityClass;
@@ -55,7 +58,8 @@ public class Constants {
         // FORK NAMES
         // =============================================
         public enum ForkName {
-                GENESIS;
+                GENESIS,
+                MINING_ECONOMICS;
                 // Add future forks here, e.g.:
                 // UPGRADE_1,
                 // UPGRADE_2;
@@ -106,6 +110,36 @@ public class Constants {
         }
 
         // =============================================
+        // SNAPSHOT DISTRIBUTION (service configuration)
+        // =============================================
+
+        /** Trusted HTTPS origins allowed to distribute immutable snapshots. */
+        public record SnapshotDistributionConfig(List<URI> trustedSources) {
+                public SnapshotDistributionConfig {
+                        trustedSources = List.copyOf(trustedSources);
+                }
+        }
+
+        private static final SnapshotDistributionConfig MAINNET_SNAPSHOT_DISTRIBUTION =
+                        new SnapshotDistributionConfig(List.of(
+                                        URI.create("https://node-eu2.goldenera.global/"),
+                                        URI.create("https://node-eu1.goldenera.global/"),
+                                        URI.create("https://node-us1.goldenera.global/"),
+                                        URI.create("https://node-me1.goldenera.global/"),
+                                        URI.create("https://node-asia1.goldenera.global/")));
+
+        private static final SnapshotDistributionConfig TESTNET_SNAPSHOT_DISTRIBUTION =
+                        new SnapshotDistributionConfig(List.of(
+                                        URI.create("https://node-eu1.geram1.com/")));
+
+        public static SnapshotDistributionConfig getSnapshotDistributionConfig(Network network) {
+                return switch (network) {
+                        case MAINNET -> MAINNET_SNAPSHOT_DISTRIBUTION;
+                        case TESTNET -> TESTNET_SNAPSHOT_DISTRIBUTION;
+                };
+        }
+
+        // =============================================
         // CONSENSUS SETTINGS (hardcoded, same for all nodes)
         // =============================================
 
@@ -116,15 +150,20 @@ public class Constants {
         private static final ConsensusSettings MAINNET_CONSENSUS = new ConsensusSettings(
                         // Fork activation blocks
                         Map.of(
-                                        ForkName.GENESIS, 0L
+                                        ForkName.GENESIS, 0L,
+						// 14,400 blocks (~5 days) after block 739,596 at 30 seconds per block
+						ForkName.MINING_ECONOMICS, 753_996L
                         // Add future forks here, e.g.:
                         // ForkName.UPGRADE_1, 100000L
                         ),
                         // Block checkpoints (height -> hash)
                         Map.of(
-                        // Add verified block hashes here, e.g.:
-                        // 0L, Hash.fromHexString("0x..."),
-                        // 10000L, Hash.fromHexString("0x...")
+						0L, Hash.fromHexString("0x924fd3c5b501e1ccef10ca08cb6b473382d44618533d32339752988e469a516f"),
+                                        100_000L, Hash.fromHexString("0x61c97a01fe7c09baf1d6bc4b7c994825e505bf52c6a282b8171e38c81681a4f2"),
+                                        300_000L, Hash.fromHexString("0x1462f92f895ed3a939455f10954b3c4f9874abebde421579024b51dc27ddcea6"),
+                                        500_000L, Hash.fromHexString("0xd399f6e1482df71b4a5e22d9ac02a01950d52d58abea53fb40d2babba7852e6c"),
+                                        650_000L, Hash.fromHexString("0x21f8484a3bbbe789446554fc0a8a8381aa96a3215572aa44fa82e85067a33e0e"),
+                                        700_000L, Hash.fromHexString("0xb40f6cf8be10d312abe76b2173f1e1c52634b0b4b0be4a0a93a5eb3ff4491dcc")
                         ),
                         // Max block size overrides (height -> new value)
                         Map.of(),
@@ -142,9 +181,17 @@ public class Constants {
         private static final ConsensusSettings TESTNET_CONSENSUS = new ConsensusSettings(
                         // Fork activation blocks
                         Map.of(
-                                        ForkName.GENESIS, 0L),
+                                        ForkName.GENESIS, 0L,
+                                        // 150 blocks (~1 hour 15 minutes) after block 716,674 at 30 seconds per block
+                                        ForkName.MINING_ECONOMICS, 716_824L),
                         // Block checkpoints
-                        Map.of(),
+                        Map.of(
+						0L, Hash.fromHexString("0xf403f287a52b794eba7645d193c53c2dfa084a52db11ad94d70d0c79107c05cc"),
+                                        100_000L, Hash.fromHexString("0x6531a7858c0fb1ad1e96c873fef8d3b37715f2296c514cd84215ce34e04d2f36"),
+                                        300_000L, Hash.fromHexString("0x58c6458894f68eac3ea3902f5da9367e254fed46996140790871dc7cde5e38ad"),
+                                        500_000L, Hash.fromHexString("0x1c11a5108c88519c6b6111d23de3e0d597b17f71b8ccd914ad3e28bfaedbc646"),
+                                        650_000L, Hash.fromHexString("0x507d1433a743026caa86e64d711bdeea55392dc1e585aa4fa43e5399cf557859"),
+                                        700_000L, Hash.fromHexString("0x12f484b7f5fb54df56108bb7fdad7f916df468d35c3ee11c3ca562c0a4a9915e")),
                         // Max block size overrides
                         Map.of(),
                         // Max tx size overrides
@@ -179,8 +226,12 @@ public class Constants {
          * For dev profile, returns settings with all forks activated at block 0.
          */
         public static ConsensusSettings getConsensusSettings(Network network) {
+                return getConsensusSettings(network, getActiveProfile());
+        }
+
+        static ConsensusSettings getConsensusSettings(Network network, String profile) {
                 // For dev profile, activate all forks at block 0
-                if ("dev".equals(getActiveProfile())) {
+                if ("dev".equals(profile)) {
                         return createDevConsensus();
                 }
 
@@ -245,7 +296,13 @@ public class Constants {
         public static ForkName getActiveForkName(Network network, long blockHeight) {
                 return getSettings(network).forkActivationBlocks().entrySet().stream()
                                 .filter(entry -> entry.getValue() <= blockHeight)
-                                .max(Map.Entry.comparingByValue())
+                                .max((left, right) -> {
+                                        int heightComparison = Long.compare(left.getValue(), right.getValue());
+                                        return heightComparison != 0
+                                                        ? heightComparison
+                                                        : Integer.compare(left.getKey().ordinal(),
+                                                                        right.getKey().ordinal());
+                                })
                                 .map(Map.Entry::getKey)
                                 .orElse(ForkName.GENESIS);
         }

@@ -34,7 +34,9 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Service;
 
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.blockchain.events.BlockConnectionBatchCompletedEvent;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent;
+import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.state.WorldStateFactory;
@@ -72,12 +74,36 @@ public class ChainHeadStateCache {
 		return refreshState(expectedRootHash);
 	}
 
+	public HeadStateSnapshot getHeadSnapshot() {
+		for (int attempt = 0; attempt < 5; attempt++) {
+			StoredBlock before = chainQueryService.getLatestStoredBlockOrThrow();
+			WorldState state = refreshState(before.getBlock().getHeader().getStateRootHash());
+			StoredBlock after = chainQueryService.getLatestStoredBlockOrThrow();
+			if (before.getHash().equals(after.getHash())
+					&& state.getFinalStateRoot().equals(after.getBlock().getHeader().getStateRootHash())) {
+				return new HeadStateSnapshot(after, state);
+			}
+		}
+		throw new IllegalStateException("Canonical head changed repeatedly while capturing WorldState snapshot");
+	}
+
 	@EventListener
 	@Order(Ordered.HIGHEST_PRECEDENCE)
 	public void onBlockConnected(BlockConnectedEvent event) {
+		if (event.isBatchMember()) {
+			return;
+		}
 		// Keep block publication cheap. getHeadState() verifies the canonical root and
 		// performs one synchronized lazy reload on the first consumer thread.
 		activeState.set(null);
+	}
+
+	@EventListener
+	@Order(Ordered.HIGHEST_PRECEDENCE)
+	public void onBlockConnectionBatchCompleted(BlockConnectionBatchCompletedEvent event) {
+		if (event.getConnectedSource() == ConnectedSource.SYNC) {
+			activeState.set(null);
+		}
 	}
 
 	private synchronized WorldState refreshState(Hash rootHash) {
@@ -120,5 +146,8 @@ public class ChainHeadStateCache {
 		log.error("CRITICAL: Failed to load WorldState for root {} after {} attempts.", rootHash, maxRetries,
 				lastException);
 		throw new RuntimeException("Could not load WorldState for " + rootHash, lastException);
+	}
+
+	public record HeadStateSnapshot(StoredBlock head, WorldState state) {
 	}
 }

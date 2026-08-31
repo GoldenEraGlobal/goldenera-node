@@ -36,10 +36,28 @@ import lombok.Setter;
 @ConfigurationProperties(prefix = "ge.core.mining", ignoreUnknownFields = false)
 public class MiningProperties {
 
+	public static final int MAX_LIGHT_HASHING_THREADS = 4;
+
 	@NonNull
 	Boolean enable;
 
 	@NonNull
 	Integer hashingThreads;
+
+	@NonNull
+	RandomXMiningMemoryMode memoryMode = RandomXMiningMemoryMode.FULL;
+
+	/**
+	 * Resolves the worker count while keeping cache-only RandomX mining bounded.
+	 * Full-mode production mining preserves its existing configured/automatic
+	 * behavior.
+	 */
+	public int resolveHashingThreads(int availableProcessors) {
+		int automatic = Math.max(1, availableProcessors - 2);
+		int requested = hashingThreads != null && hashingThreads > 0 ? hashingThreads : automatic;
+		return memoryMode == RandomXMiningMemoryMode.LIGHT
+				? Math.min(requested, MAX_LIGHT_HASHING_THREADS)
+				: requested;
+	}
 
 }

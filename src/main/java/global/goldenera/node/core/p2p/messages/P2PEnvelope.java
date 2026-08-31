@@ -34,4 +34,16 @@ public class P2PEnvelope {
 	long requestId;
 	P2PMessageType messageType;
 	NetworkMessage payload;
+	int wireSizeBytes;
+
+	public P2PEnvelope(long requestId, P2PMessageType messageType, NetworkMessage payload) {
+		this(requestId, messageType, payload, 0);
+	}
+
+	public P2PEnvelope(long requestId, P2PMessageType messageType, NetworkMessage payload, int wireSizeBytes) {
+		this.requestId = requestId;
+		this.messageType = messageType;
+		this.payload = payload;
+		this.wireSizeBytes = Math.max(0, wireSizeBytes);
+	}
 }

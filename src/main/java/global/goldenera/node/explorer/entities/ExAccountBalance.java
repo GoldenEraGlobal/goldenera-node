@@ -84,6 +84,29 @@ public class ExAccountBalance implements AccountBalanceState {
     @Convert(converter = WeiConverter.class)
     Wei balance;
 
+    @Column(name = "locked_mining_reward", nullable = false, updatable = true, precision = 80, scale = 0, columnDefinition = "NUMERIC")
+    @Convert(converter = WeiConverter.class)
+    Wei lockedMiningReward;
+
+    @Column(name = "pending_mining_reward_cancellation", nullable = false, updatable = true, precision = 80, scale = 0, columnDefinition = "NUMERIC")
+    @Convert(converter = WeiConverter.class)
+    Wei pendingMiningRewardCancellation;
+
+    @Override
+    public Wei getLockedMiningReward() {
+        return lockedMiningReward == null ? Wei.ZERO : lockedMiningReward;
+    }
+
+    @Override
+    public Wei getPendingMiningRewardCancellation() {
+        return pendingMiningRewardCancellation == null ? Wei.ZERO : pendingMiningRewardCancellation;
+    }
+
+    @Override
+    public Wei getSpendableBalance() {
+        return balance.subtract(getLockedMiningReward());
+    }
+
     @Column(name = "created_at_block_height", nullable = false, updatable = false)
     long createdAtBlockHeight;
 

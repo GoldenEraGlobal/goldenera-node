@@ -49,6 +49,9 @@ public record BulkAccountBalancePageRequestV1(
         Long updatedAtBlockHeightTo,
         Instant createdAtTimestampFrom,
         Instant createdAtTimestampTo,
-        Instant updatedAtTimestampFrom,
-        Instant updatedAtTimestampTo) {
+			Instant updatedAtTimestampFrom,
+			Instant updatedAtTimestampTo) {
+	public BulkAccountBalancePageRequestV1 {
+		BulkPageRequestValidator.validate(pageNumber, pageSize, addresses, tokenAddresses);
+	}
 }

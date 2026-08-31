@@ -25,12 +25,9 @@ package global.goldenera.node.core.blockchain.reorg;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.util.List;
-
 import org.springframework.stereotype.Service;
 
-import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
-import lombok.NonNull;
+import global.goldenera.node.core.sync.ValidatedSyncBatch;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,10 +42,11 @@ public class BlockReorgs {
 		this.chainSwitchService = chainSwitchService;
 	}
 
-	public void executeAtomicReorgSwap(
-			@NonNull StoredBlock commonAncestor,
-			@NonNull List<StoredBlock> newChainHeaders) throws Exception {
-		chainSwitchService.executeAtomicReorgSwap(commonAncestor, newChainHeaders, false,
-				ChainSwitchService.SwitchType.SYNC);
+	public void executeAtomicReorgSwap(ValidatedSyncBatch batch) throws Exception {
+		chainSwitchService.executeAtomicSyncSwap(batch.commonAncestor(), batch.blocks());
+	}
+
+	public void stageValidatedForkBatch(ValidatedSyncBatch batch) {
+		chainSwitchService.stageValidatedSyncBatch(batch.commonAncestor(), batch.blocks());
 	}
 }

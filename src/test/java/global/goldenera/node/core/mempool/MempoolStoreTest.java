@@ -69,6 +69,7 @@ import global.goldenera.cryptoj.common.payloads.bip.TxBipNetworkParamsSetPayload
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenMintPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipTokenUpdatePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorAddPayload;
+import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorMiningPolicySetPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipValidatorRemovePayload;
 import global.goldenera.cryptoj.datatypes.Address;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -117,8 +118,12 @@ class MempoolStoreTest {
 		assertThat(store.getTxByHash(oldEntry.getHash())).isEmpty();
 		assertThat(store.getTxByHash(replacement.getHash())).containsSame(replacement);
 		assertThat(executable()).containsExactly(replacement);
-		assertThat(removeEvents(MempoolTxRemoveEvent.RemoveReason.RBF)).extracting(MempoolTxRemoveEvent::getEntry)
-				.containsExactly(oldEntry);
+		assertThat(removeEvents(MempoolTxRemoveEvent.RemoveReason.RBF))
+				.singleElement()
+				.satisfies(event -> {
+					assertThat(event.getEntry()).isSameAs(oldEntry);
+					assertThat(event.getReplacementTxHash()).isEqualTo(replacement.getHash());
+				});
 		assertInvariants();
 	}
 
@@ -331,6 +336,11 @@ class MempoolStoreTest {
 		TxBipValidatorRemovePayload validatorRemove = mock(TxBipValidatorRemovePayload.class);
 		when(validatorRemove.getAddress()).thenReturn(target);
 		assertReservation(governance(4, ALICE, 1, 10, validatorRemove), () -> store.isValidatorRemovePending(target));
+
+		TxBipValidatorMiningPolicySetPayload validatorPolicy = mock(TxBipValidatorMiningPolicySetPayload.class);
+		when(validatorPolicy.getValidatorAddress()).thenReturn(target);
+		assertReservation(governance(9, ALICE, 1, 10, validatorPolicy),
+				() -> store.isValidatorMiningPolicyChangePending(target));
 
 		TxBipAddressAliasAddPayload aliasAdd = mock(TxBipAddressAliasAddPayload.class);
 		when(aliasAdd.getAlias()).thenReturn("alice");

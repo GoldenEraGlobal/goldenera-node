@@ -27,6 +27,8 @@ import static lombok.AccessLevel.PRIVATE;
 
 import java.util.List;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -48,14 +50,22 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import global.goldenera.node.shared.components.HmacComponent;
 import global.goldenera.node.shared.filters.ApiKeyAuthFilter;
+import global.goldenera.node.shared.filters.PreAuthenticationThrottleFilter;
 import global.goldenera.node.shared.filters.ThrottlingFilter;
 import global.goldenera.node.shared.properties.GeneralProperties;
+import global.goldenera.node.shared.services.ThrottlingService;
 import global.goldenera.node.shared.services.core.ApiKeyCoreService;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 
 @Configuration
+@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+@ConditionalOnProperty(
+                prefix = "ge.general",
+                name = "postgresql-enable",
+                havingValue = "true",
+                matchIfMissing = true)
 @EnableWebSecurity
 @AllArgsConstructor
 @EnableMethodSecurity(prePostEnabled = true)
@@ -64,6 +74,20 @@ import lombok.extern.slf4j.Slf4j;
 public class SecurityConfig {
 
         GeneralProperties generalProperties;
+
+        @Bean
+        @Order(0)
+        public SecurityFilterChain coreHealthFilterChain(HttpSecurity http) throws Exception {
+                http
+                                .securityMatcher("/api/core/v1/health/**")
+                                .cors(Customizer.withDefaults())
+                                .csrf(csrf -> csrf.disable())
+                                .formLogin(login -> login.disable())
+                                .httpBasic(basic -> basic.disable())
+                                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+                return http.build();
+        }
 
         /**
          * Filter chain for the "master password" admin area.
@@ -84,13 +108,38 @@ public class SecurityConfig {
         }
 
         /**
+         * Filter chain for the bridge API, always protected by API Keys.
+         */
+        @Bean
+        @Order(2)
+        public SecurityFilterChain bridgeApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
+                        ThrottlingFilter throttlingFilter)
+                        throws Exception {
+                http
+                                .securityMatcher("/api/bridge/**")
+                                .cors(Customizer.withDefaults())
+                                .csrf(csrf -> csrf.disable())
+                                .httpBasic(basic -> basic.disable())
+                                .formLogin(login -> login.disable());
+
+                http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                                .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+                                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
+                                .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
+                return http.build();
+        }
+
+        /**
          * Filter chain for the shared API, always protected by API Keys.
          * <p>
          * Unlike explorer API, shared API always requires authentication.
          */
         @Bean
-        @Order(2)
+        @Order(3)
         public SecurityFilterChain sharedApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
                 http
@@ -103,6 +152,7 @@ public class SecurityConfig {
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -117,8 +167,9 @@ public class SecurityConfig {
          * explorerApiEnabled property.
          */
         @Bean
-        @Order(3)
+        @Order(4)
         public SecurityFilterChain explorerApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter)
                         throws Exception {
                 http
@@ -138,6 +189,7 @@ public class SecurityConfig {
 
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -146,8 +198,9 @@ public class SecurityConfig {
          * Filter chain for the CORE API
          */
         @Bean
-        @Order(4)
+        @Order(5)
         public SecurityFilterChain coreApiFilterChain(HttpSecurity http, ApiKeyAuthFilter apiKeyAuthFilter,
+                        PreAuthenticationThrottleFilter preAuthenticationThrottleFilter,
                         ThrottlingFilter throttlingFilter) throws Exception {
                 http
                                 .securityMatcher("/api/core/**")
@@ -160,6 +213,7 @@ public class SecurityConfig {
 
                 http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                                 .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                                .addFilterBefore(preAuthenticationThrottleFilter, ApiKeyAuthFilter.class)
                                 .addFilterAfter(throttlingFilter, ApiKeyAuthFilter.class);
                 return http.build();
         }
@@ -174,6 +228,12 @@ public class SecurityConfig {
         public ApiKeyAuthFilter apiKeyAuthFilter(ApiKeyCoreService apiKeyCoreService, HmacComponent hmacComponent,
                         ObjectMapper objectMapper) {
                 return new ApiKeyAuthFilter(apiKeyCoreService, hmacComponent, objectMapper);
+        }
+
+        @Bean
+        public PreAuthenticationThrottleFilter preAuthenticationThrottleFilter(
+                        ThrottlingService throttlingService) {
+                return new PreAuthenticationThrottleFilter(throttlingService);
         }
 
         @Bean
