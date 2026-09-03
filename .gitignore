@@ -76,6 +76,14 @@ application-h2-2.properties
 .temp_gh_token
 /ignored-files/
 
+# Private installers (kept locally, not published)
+/scripts/install.sh
+/scripts/install.ps1
+/scripts/tests/install-smoke.sh
+/scripts/tests/install-smoke.ps1
+/scripts/tests/install-e2e.sh
+/scripts/AUTO_INSTALL.md
+
 # Genesis dev configurations (each developer creates their own)
 src/main/resources/genesis/*-dev.json
 .agents

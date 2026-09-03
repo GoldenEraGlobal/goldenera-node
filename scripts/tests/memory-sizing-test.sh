@@ -85,18 +85,4 @@ GOLDENERA_CGROUP_V1_MEMORY_LIMIT_PATH="$fixture_dir/memory.limit_in_bytes" \
 assert_eq "$GE_CGROUP_MEMORY_LIMIT_MB" 4096 "cgroup v1 limit detection"
 assert_eq "$GE_EFFECTIVE_MEMORY_MB" 4096 "effective cgroup v1 memory limit"
 
-(
-  GOLDENERA_INSTALLER_LIBRARY_ONLY=true
-  # shellcheck source=../install.sh
-  . "$ROOT_DIR/scripts/install.sh"
-  assert_eq "$(resolve_mining_workers -1 16)" 14 "automatic mining worker count"
-  assert_eq "$(resolve_mining_workers 8 16)" 8 "explicit mining worker count"
-	assert_eq "$(calculate_randomx_hugepages 14)" 1280 "typical RandomX huge-page target"
-	assert_eq "$(calculate_randomx_hugepages 64)" 1296 "large-worker RandomX huge-page target"
-  assert_eq "$(read_linux_hugepage_count HugePages_Total "$fixture_dir/meminfo")" 1280 \
-    "installer huge-page total verification"
-  assert_eq "$(read_linux_hugepage_count HugePages_Free "$fixture_dir/meminfo")" 1200 \
-    "installer huge-page free verification"
-)
-
 printf 'GoldenEra memory sizing tests passed.\n'

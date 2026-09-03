@@ -10,7 +10,6 @@ an optional Explorer/indexer and webhook service.
 - **RAM:** at least 8 GB without mining; 16 GB for production `FULL` mining.
 - **Storage:** SSD or NVMe.
 - **Docker Engine and Compose**, or **Docker Desktop** on macOS/Windows.
-  The installer installs them if needed.
 
 See [memory profiles](#memory-and-mining) before enabling mining or the Explorer.
 For an existing deployment with old memory settings, follow the
@@ -18,33 +17,10 @@ For an existing deployment with old memory settings, follow the
 
 ## Installation
 
-### Automated installer
-
-Ubuntu, Debian, or macOS:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.sh | bash
-```
-
-Windows PowerShell:
-
-```powershell
-irm https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/scripts/install.ps1 | iex
-```
-
-On a fresh installation, **Automatic** setup uses the public MAINNET image,
-enables mining, and disables the Explorer and PostgreSQL. It asks for a mining
-reward address and a public P2P IP if detection fails. Choose **Manual** to
-configure the network, services, mining, ports, identity, and memory budget.
-
-The installer generates secrets, writes the configuration, and starts the node.
-On macOS and Windows, Docker Desktop setup may need administrator access or a
-restart; Windows may also require WSL2.
-
-### Manual Docker Compose setup
-
 Install Docker and Compose first. In a new installation directory, download the
 maintained [Compose file](docker-compose.yml) and [environment template](.env.example):
+
+Ubuntu, Debian, or macOS:
 
 ```bash
 mkdir -p ~/goldenera-node
@@ -54,8 +30,34 @@ curl -fsSL https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main
 chmod 600 .env
 ```
 
+Windows PowerShell:
+
+```powershell
+$installDir = Join-Path $HOME "goldenera-node"
+New-Item -ItemType Directory -Force $installDir | Out-Null
+Set-Location $installDir
+Invoke-WebRequest "https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/docker-compose.yml" -OutFile "docker-compose.yml"
+Invoke-WebRequest "https://raw.githubusercontent.com/GoldenEraGlobal/goldenera-node/main/.env.example" -OutFile ".env"
+```
+
 Do not overwrite an existing installation's configuration with these commands.
-Edit `.env` using the settings below, then start the node:
+The template is intentionally not ready for an unattended first start. Edit
+`.env` and complete this checklist before starting the node:
+
+- Set `P2P_HOST` to the host's public IPv4 address. If the host is behind a
+  router, forward TCP `P2P_PORT` (default `9000`) and allow it through the host
+  firewall. A host behind CGNAT may not be reachable by inbound peers.
+- Generate two different Base64 secrets for `SECURITY_HMAC_SECRET` and
+  `SECURITY_AES_GCM_SECRET`. The node rejects empty or malformed secrets; do not
+  reuse the same value for both settings.
+- Replace `ADMIN_PASSWORD` and, when PostgreSQL is enabled,
+  `POSTGRESQL_PASSWORD`.
+- If mining is enabled, replace the zero `BENEFICIARY_ADDRESS` with the intended
+  reward address and select a memory profile from [Memory and mining](#memory-and-mining).
+- On Docker Desktop, allocate enough memory to the Docker VM for the node,
+  PostgreSQL when enabled, and Docker overhead.
+
+Then validate the Compose model and start the node:
 
 ```bash
 docker compose config --quiet
@@ -63,10 +65,17 @@ docker compose up -d
 docker compose logs -f node
 ```
 
+`docker compose config` validates Compose syntax and variable expansion; it
+does not validate application values inside `.env`. After startup,
+`docker compose ps` should show `node` running and `db` healthy when PostgreSQL
+is enabled. If `node` is restarting or stopped, inspect it with
+`docker compose logs --tail=200 node`. The first image download and initial
+blockchain synchronization can take time.
+
 The checked-in Compose file includes PostgreSQL; the template enables the
 Explorer and webhooks, with mining disabled. For a SQL-free deployment, use
-the installer or remove both the `db` service and `node.depends_on` from Compose,
-then apply the core-only settings below.
+the core-only settings below, remove the `db` service, and remove
+`node.depends_on` from Compose.
 
 ## Configuration
 
@@ -89,6 +98,19 @@ security secret:
 
 ```bash
 openssl rand -base64 32
+```
+
+On Windows PowerShell, this equivalent command prints two independently
+generated values:
+
+```powershell
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+1..2 | ForEach-Object {
+    $bytes = New-Object byte[] 32
+    $rng.GetBytes($bytes)
+    [Convert]::ToBase64String($bytes)
+}
+$rng.Dispose()
 ```
 
 Keep secrets and the node identity private and preserve them across upgrades.
@@ -126,11 +148,11 @@ These are node-container limits, not total host budgets. PostgreSQL has a
 separate limit (`POSTGRESQL_MEMORY_LIMIT_MB=1024` by default); leave room for
 the OS and any host huge-page reservation.
 
-On Linux, the installer can reserve a worker-dependent pool of at least 1280
-two-megabyte huge pages (about 2.5 GB). This is an explicit host-wide opt-in via
-`CONFIGURE_RANDOMX_HUGEPAGES`; setting it in a manually managed `.env` does
-not configure the kernel. Compose grants `IPC_LOCK` for huge-page access.
-See the [upgrade guide](docs/upgrading.md#linux-huge-pages) for manual host setup.
+On Linux, configure a worker-dependent pool of at least 1280 two-megabyte huge
+pages (about 2.5 GB) before enabling `FULL` mining. Setting
+`CONFIGURE_RANDOMX_HUGEPAGES` in `.env` does not configure the kernel. Compose
+grants `IPC_LOCK` for huge-page access. See the
+[upgrade guide](docs/upgrading.md#linux-huge-pages) for the required host setup.
 
 `MINING_HASHING_THREADS=-1` selects the thread count automatically.
 `MINING_MEMORY_MODE=FULL` is the production mode; `LIGHT` mining is restricted
@@ -153,27 +175,8 @@ Two settings have behavior beyond performance tuning:
 
 ## Operations
 
-For installer-managed deployments, run commands from the installation directory
-(`~/goldenera-node` by default on Linux/macOS):
-
-```bash
-./goldenera status
-./goldenera logs
-./goldenera update
-./goldenera restart
-./goldenera stop
-./goldenera start
-```
-
-On Windows, use the equivalent PowerShell controller, for example:
-
-```powershell
-& "$env:LOCALAPPDATA\GoldenEra\Node\goldenera.ps1" update
-```
-
-`update` pulls the configured public image and recreates containers while
-preserving data. Images configured with `--local-image` are never pulled.
-For manually managed deployments:
+Run these commands from the installation directory to update the image and
+inspect the deployment:
 
 ```bash
 docker compose pull
@@ -204,7 +207,6 @@ when exposing it remotely.
 
 Adjust URLs for your host and port. When changing `LISTEN_PORT` or `P2P_PORT`
 in the checked-in Compose setup, also update the container-side port mappings.
-The installer generates matching mappings automatically.
 
 ### P2P chain identity
 
@@ -220,10 +222,10 @@ It is not an authentication or authorization mechanism.
 
 ## Development
 
-Local image builds, reproducible sandbox images, and installer tests are
-documented in [scripts/README.md](scripts/README.md). Sandbox builds require a
-clean committed worktree, the project [.mise.toml](.mise.toml) toolchain, and
-locally installed Maven dependencies.
+Local image builds and reproducible sandbox images are documented in
+[scripts/README.md](scripts/README.md). Sandbox builds require a clean committed
+worktree, the project [.mise.toml](.mise.toml) toolchain, and locally installed
+Maven dependencies.
 
 ## License
 

@@ -16,21 +16,6 @@ This directory contains build and deployment scripts for the GoldenEra Node.
   - Builds Docker image with secure token handling
   - Tags image as `goldenera-node:local`
 
-- **`install.sh`** - Interactive Ubuntu, Debian, and macOS installer
-  - Installs Docker when needed
-  - Offers automatic mining defaults or manual configuration
-  - Generates a secure Compose deployment and management command
-  - Supports public-image updates and local sandbox images
-
-- **`install.ps1`** - Equivalent Windows PowerShell installer
-  - Uses the same automatic/manual profiles, arrow-key menus, and `(y/N)` prompts
-
-- **`tests/install-smoke.sh`** and **`tests/install-smoke.ps1`**
-  - Validate generated configuration without changing the host
-
-- **`tests/install-e2e.sh`**
-  - Starts and probes the real local sandbox image
-
 - **`tests/memory-sizing-test.sh`**
   - Validates automatic heap sizing and RandomX huge-page targets
 
@@ -69,16 +54,8 @@ commit, CryptoJ SHA-256, and Maven-pinned RandomX source commit. The build rejec
 a dirty worktree or invalid release metadata. The published release image remains
 the default Docker target.
 
-### Testing the automated installer
-
-Build the sandbox image above before running the end-to-end test:
+### Testing memory sizing
 
 ```bash
 ./scripts/tests/memory-sizing-test.sh
-./scripts/tests/install-smoke.sh
-./scripts/tests/install-e2e.sh
 ```
-
-The end-to-end test creates a temporary installation using
-`goldenera-node:sandbox-local`, starts the node, checks its liveness API, and
-removes the test containers and temporary data on exit.
