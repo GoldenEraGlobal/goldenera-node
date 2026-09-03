@@ -37,6 +37,7 @@ public class StoredBlockV1EncodingStrategy implements StoredBlockEncodingStrateg
 
 	@Override
 	public void encode(RLPOutput out, StoredBlock storedBlock) {
+		storedBlock.validateTransactionIndexAgainstBody();
 		Bytes blockBytes = BlockEncoder.INSTANCE.encode(storedBlock.getBlock(), true);
 		out.writeRaw(blockBytes);
 		out.writeBigIntegerScalar(storedBlock.getCumulativeDifficulty());

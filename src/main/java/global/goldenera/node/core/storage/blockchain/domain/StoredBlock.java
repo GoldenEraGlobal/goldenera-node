@@ -136,14 +136,25 @@ public class StoredBlock {
 		 * Derives hashToIndex and indexToHash maps from hashes array.
 		 */
 		public static TxIndex fromStored(Hash[] hashes, int[] sizes, Address[] senders) {
-			if (hashes == null || hashes.length == 0) {
+			if (hashes == null || sizes == null || senders == null) {
+				throw new IllegalArgumentException("Stored transaction index arrays are required");
+			}
+			if (hashes.length != sizes.length || hashes.length != senders.length) {
+				throw new IllegalArgumentException("Stored transaction index arrays have different lengths");
+			}
+			if (hashes.length == 0) {
 				return empty();
 			}
 			int count = hashes.length;
 			Map<Hash, Integer> hashToIdx = new HashMap<>(count);
 			Map<Integer, Hash> idxToHash = new HashMap<>(count);
 			for (int i = 0; i < count; i++) {
-				hashToIdx.put(hashes[i], i);
+				if (hashes[i] == null || sizes[i] <= 0 || senders[i] == null) {
+					throw new IllegalArgumentException("Stored transaction index contains an invalid entry at " + i);
+				}
+				if (hashToIdx.put(hashes[i], i) != null) {
+					throw new IllegalArgumentException("Stored transaction index contains a duplicate hash");
+				}
 				idxToHash.put(i, hashes[i]);
 			}
 			return new TxIndex(hashes, sizes, senders, hashToIdx, idxToHash);
@@ -236,6 +247,37 @@ public class StoredBlock {
 
 	public Map<Integer, Hash> getReverseTransactionIndex() {
 		return txIndex != null ? txIndex.getIndexToHash() : null;
+	}
+
+	/**
+	 * Verifies the persisted transaction metadata against the full block body.
+	 * This is intentionally performed before serialization, while metadata
+	 * calculated during block validation/admission is still cached on each
+	 * transaction. Read paths can then trust the stored index without repeating
+	 * RLP encoding and signature recovery.
+	 */
+	public void validateTransactionIndexAgainstBody() {
+		if (block == null || block.getTxs() == null) {
+			throw new IllegalArgumentException("Cannot validate transaction index without a full block body");
+		}
+		Hash[] hashes = getTransactionHashes();
+		int[] sizes = getTransactionSizes();
+		Address[] senders = getTransactionSenders();
+		TxIndex validatedIndex = TxIndex.fromStored(hashes, sizes, senders);
+		List<Tx> transactions = block.getTxs();
+		if (validatedIndex.count() != transactions.size()) {
+			throw new IllegalArgumentException("Stored transaction index does not match the block body count");
+		}
+		for (int index = 0; index < transactions.size(); index++) {
+			Tx transaction = transactions.get(index);
+			if (transaction == null
+					|| !hashes[index].equals(transaction.getHash())
+					|| sizes[index] != transaction.getSize()
+					|| !senders[index].equals(transaction.getSender())) {
+				throw new IllegalArgumentException(
+						"Stored transaction index does not match the block body at transaction " + index);
+			}
+		}
 	}
 
 	// ========================

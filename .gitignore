@@ -83,6 +83,8 @@ application-h2-2.properties
 /scripts/tests/install-smoke.ps1
 /scripts/tests/install-e2e.sh
 /scripts/AUTO_INSTALL.md
+/scripts/goldenera-linux-installer.zip
+/scripts/goldenera-windows-installer.zip
 
 # Genesis dev configurations (each developer creates their own)
 src/main/resources/genesis/*-dev.json

@@ -23,8 +23,7 @@
  */
 package global.goldenera.node.core.api.v1.mempool.mappers;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
+import java.math.BigInteger;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.stereotype.Component;
@@ -32,8 +31,13 @@ import org.springframework.stereotype.Component;
 import global.goldenera.cryptoj.common.state.NetworkParamsState;
 import global.goldenera.node.core.api.v1.mempool.dtos.RecommendedFeesDtoV1;
 import global.goldenera.node.core.blockchain.state.ChainHeadStateCache;
+import global.goldenera.node.core.blockchain.state.ChainHeadStateCache.HeadStateSnapshot;
+import global.goldenera.node.core.mempool.FeeRecommendationService;
+import global.goldenera.node.core.mempool.FeeRecommendationService.FeeHistoryUnavailableException;
+import global.goldenera.node.core.mempool.FeeRecommendationService.FeeTotals;
 import global.goldenera.node.core.mempool.MempoolStore;
 import global.goldenera.node.core.properties.MempoolProperties;
+import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -47,74 +51,148 @@ import lombok.experimental.FieldDefaults;
 public class MempoolTxMapper {
 
     static final long AVERAGE_TX_SIZE = 150L;
+    static final int MAX_SNAPSHOT_ATTEMPTS = 3;
+    private static final BigInteger AVERAGE_TX_SIZE_VALUE = BigInteger.valueOf(AVERAGE_TX_SIZE);
+    private static final BigInteger UINT256_MAX = BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE);
 
     ChainHeadStateCache chainHeadStateCache;
     MempoolStore mempoolStore;
     MempoolProperties mempoolProperties;
+    FeeRecommendationService feeRecommendationService;
 
     /**
-     * Calculates and returns recommended fees based on network params and mempool
-     * state.
+     * Calculates recommended fees from network parameters and recent canonical
+     * blocks. The mempool contributes only the reported size.
      */
     public RecommendedFeesDtoV1 mapRecommendedFees() {
-        NetworkParamsState networkParams = chainHeadStateCache.getHeadState().getParams();
-        Wei networkMinBaseFee = networkParams.getMinTxBaseFee();
-        Wei networkMinByteFee = networkParams.getMinTxByteFee();
-        Wei nodeMinFee = Wei.valueOf(mempoolProperties.getMinAcceptableFeeWei());
-        Wei networkMinTotal = networkMinBaseFee.add(networkMinByteFee.multiply(AVERAGE_TX_SIZE));
-        Wei effectiveMinTotal = networkMinTotal.compareTo(nodeMinFee) >= 0 ? networkMinTotal : nodeMinFee;
+        return mapRecommendedFeesAtHead().fees();
+    }
 
-        Wei minBaseFee = networkMinBaseFee;
-        Wei minByteFee = calculateMinByteFee(effectiveMinTotal, networkMinTotal, minBaseFee, networkMinByteFee);
+    public RecommendedFeesAtHead mapRecommendedFeesAtHead() {
+        FeeHistoryUnavailableException lastFailure = null;
+        for (int attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt++) {
+            HeadStateSnapshot snapshot = chainHeadStateCache.getHeadSnapshot();
+            try {
+                return new RecommendedFeesAtHead(snapshot.head(), mapRecommendedFees(snapshot));
+            } catch (FeeHistoryUnavailableException failure) {
+                lastFailure = failure;
+            }
+        }
+        throw new FeeHistoryUnavailableException(
+                "Canonical fee history changed or remained incomplete after " + MAX_SNAPSHOT_ATTEMPTS
+                        + " attempts: " + lastFailure.getMessage());
+    }
 
-        MempoolStore.FeeStatistics feeStats = mempoolStore.getFeeStatistics();
+    private RecommendedFeesDtoV1 mapRecommendedFees(HeadStateSnapshot snapshot) {
+        NetworkParamsState networkParams = snapshot.state().getParams();
+        BigInteger minBaseFee = networkParams.getMinTxBaseFee().toBigInteger();
+        BigInteger minByteFee = networkParams.getMinTxByteFee().toBigInteger();
+        BigInteger nodeMinFee = requireUint256(
+                mempoolProperties.getMinAcceptableFeeWei(), "Minimum acceptable fee");
+        BigInteger networkMinTotal = requireUint256(
+                minBaseFee.add(minByteFee.multiply(AVERAGE_TX_SIZE_VALUE)),
+                "Network minimum fee for an average transaction");
+        BigInteger minimumTotal = max(networkMinTotal, nodeMinFee);
+        BigInteger configuredMaximum = configuredMaximumFee(minimumTotal);
+        BigInteger maximumByteFee = calculateMaximumByteFee(configuredMaximum, minBaseFee, minByteFee);
+        BigInteger maximumMiningFee = configuredMaximum.divide(AVERAGE_TX_SIZE_VALUE);
+        BigInteger maximumTotal = calculateTotalFee(
+                nodeMinFee, minBaseFee, maximumByteFee, maximumMiningFee);
+
+        FeeTotals feeTotals = feeRecommendationService.recommend(
+                snapshot.head(), wei(minimumTotal), AVERAGE_TX_SIZE, wei(maximumTotal));
 
         // Slow = minimum acceptable
         RecommendedFeesDtoV1.FeeLevel slow = new RecommendedFeesDtoV1.FeeLevel(
-                minBaseFee, minByteFee, effectiveMinTotal);
+                wei(minBaseFee), wei(minByteFee), wei(nodeMinFee), Wei.ZERO, wei(minimumTotal));
 
-        // Standard = median from mempool or 10% above min
-        Wei standardByteFee = calculateStandardByteFee(feeStats, minByteFee);
-        Wei standardTotal = minBaseFee.add(standardByteFee.multiply(AVERAGE_TX_SIZE));
+        // Standard = 60th percentile from the recent-block fee oracle.
+        BigInteger standardByteFee = minByteFee;
+        BigInteger standardMiningFee = clamp(
+                feeTotals.standardMiningFeePerByte().toBigInteger(), BigInteger.ZERO, maximumMiningFee);
+        BigInteger standardTotal = calculateTotalFee(
+                nodeMinFee, minBaseFee, standardByteFee, standardMiningFee);
         RecommendedFeesDtoV1.FeeLevel standard = new RecommendedFeesDtoV1.FeeLevel(
-                minBaseFee, standardByteFee, standardTotal);
+                wei(minBaseFee), wei(standardByteFee), wei(nodeMinFee), wei(standardMiningFee), wei(standardTotal));
 
-        // Fast = 75th percentile from mempool or 25% above min
-        Wei fastByteFee = calculateFastByteFee(feeStats, minByteFee, standardByteFee);
-        Wei fastTotal = minBaseFee.add(fastByteFee.multiply(AVERAGE_TX_SIZE));
+        // Fast = 90th percentile with a small minimum premium for an idle chain.
+        BigInteger fastFloor = min(percentageCeiling(minByteFee, 120), maximumByteFee);
+        BigInteger fastByteFee = max(standardByteFee, fastFloor);
+        BigInteger fastMiningFee = clamp(
+                feeTotals.fastMiningFeePerByte().toBigInteger(),
+                standardMiningFee,
+                maximumMiningFee);
+        BigInteger fastTotal = calculateTotalFee(nodeMinFee, minBaseFee, fastByteFee, fastMiningFee);
         RecommendedFeesDtoV1.FeeLevel fast = new RecommendedFeesDtoV1.FeeLevel(
-                minBaseFee, fastByteFee, fastTotal);
+                wei(minBaseFee), wei(fastByteFee), wei(nodeMinFee), wei(fastMiningFee), wei(fastTotal));
 
         return new RecommendedFeesDtoV1(slow, standard, fast, mempoolStore.getCount());
     }
 
-    private Wei calculateMinByteFee(Wei effectiveMinTotal, Wei networkMinTotal, Wei minBaseFee, Wei networkMinByteFee) {
-        if (effectiveMinTotal.compareTo(networkMinTotal) > 0) {
-            return effectiveMinTotal.subtract(minBaseFee).divide(AVERAGE_TX_SIZE);
+    private BigInteger configuredMaximumFee(BigInteger minimumTotal) {
+        BigInteger configured = requireUint256(
+                mempoolProperties.getMaxRecommendedFeeWei(), "Maximum recommended fee");
+        if (configured.signum() == 0) {
+            throw new IllegalStateException("Maximum recommended fee must be positive");
         }
-        return networkMinByteFee;
+        return max(configured, minimumTotal);
     }
 
-    private Wei calculateStandardByteFee(MempoolStore.FeeStatistics feeStats, Wei minByteFee) {
-        if (feeStats.txCount() == 0 || feeStats.medianFeePerByte() <= 0) {
-            return minByteFee.multiply(110).divide(100);
-        }
-        Wei medianFromMempool = Wei.valueOf(BigDecimal.valueOf(feeStats.medianFeePerByte())
-                .setScale(0, RoundingMode.CEILING)
-                .toBigInteger());
-        return medianFromMempool.compareTo(minByteFee) >= 0 ? medianFromMempool : minByteFee;
+    private BigInteger calculateMaximumByteFee(
+            BigInteger maximumTotal,
+            BigInteger baseFee,
+            BigInteger minimumByteFee) {
+        BigInteger available = maximumTotal.subtract(baseFee);
+        BigInteger maximumByteFee = available.divide(AVERAGE_TX_SIZE_VALUE);
+        return max(maximumByteFee, minimumByteFee);
     }
 
-    private Wei calculateFastByteFee(MempoolStore.FeeStatistics feeStats, Wei minByteFee, Wei standardByteFee) {
-        if (feeStats.txCount() == 0 || feeStats.fastFeePerByte() <= 0) {
-            return minByteFee.multiply(125).divide(100);
+    private BigInteger clamp(BigInteger value, BigInteger minimum, BigInteger maximum) {
+        return min(max(value, minimum), maximum);
+    }
+
+    private BigInteger calculateTotalFee(
+            BigInteger minimumTotalFee,
+            BigInteger baseFee,
+            BigInteger byteFee,
+            BigInteger miningFee) {
+        BigInteger networkFee = baseFee.add(byteFee.multiply(AVERAGE_TX_SIZE_VALUE));
+        BigInteger congestionFee = miningFee.multiply(AVERAGE_TX_SIZE_VALUE);
+        return requireUint256(
+                max(minimumTotalFee, max(networkFee, congestionFee)),
+                "Recommended fee for an average transaction");
+    }
+
+    private BigInteger percentageCeiling(BigInteger value, long percentage) {
+        return divideCeiling(value.multiply(BigInteger.valueOf(percentage)), BigInteger.valueOf(100));
+    }
+
+    private BigInteger divideCeiling(BigInteger dividend, BigInteger divisor) {
+        BigInteger[] result = dividend.divideAndRemainder(divisor);
+        return result[1].signum() == 0 ? result[0] : result[0].add(BigInteger.ONE);
+    }
+
+    private BigInteger requireUint256(BigInteger value, String field) {
+        if (value == null || value.signum() < 0 || value.compareTo(UINT256_MAX) > 0) {
+            throw new IllegalStateException(field + " must fit into uint256");
         }
-        Wei fastFromMempool = Wei.valueOf(BigDecimal.valueOf(feeStats.fastFeePerByte())
-                .setScale(0, RoundingMode.CEILING)
-                .toBigInteger());
-        if (fastFromMempool.compareTo(standardByteFee) > 0) {
-            return fastFromMempool;
-        }
-        return standardByteFee.multiply(120).divide(100);
+        return value;
+    }
+
+    private Wei wei(BigInteger value) {
+        return Wei.valueOf(requireUint256(value, "Recommended fee component"));
+    }
+
+    private BigInteger max(BigInteger first, BigInteger second) {
+        return first.compareTo(second) >= 0 ? first : second;
+    }
+
+    private BigInteger min(BigInteger first, BigInteger second) {
+        return first.compareTo(second) <= 0 ? first : second;
+    }
+
+    public record RecommendedFeesAtHead(
+            StoredBlock head,
+            RecommendedFeesDtoV1 fees) {
     }
 }

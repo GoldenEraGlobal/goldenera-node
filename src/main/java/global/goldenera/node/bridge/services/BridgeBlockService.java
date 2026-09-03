@@ -27,8 +27,7 @@ import org.springframework.stereotype.Service;
 
 import global.goldenera.node.bridge.api.v1.dtos.BridgeLastBlockDtoV1;
 import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper;
-import global.goldenera.node.core.blockchain.storage.ChainQuery;
-import global.goldenera.node.shared.exceptions.GENotFoundException;
+import global.goldenera.node.core.api.v1.mempool.mappers.MempoolTxMapper.RecommendedFeesAtHead;
 import global.goldenera.node.shared.properties.GeneralProperties;
 import lombok.RequiredArgsConstructor;
 
@@ -37,17 +36,13 @@ import lombok.RequiredArgsConstructor;
 public class BridgeBlockService {
 
 	private final GeneralProperties generalProperties;
-	private final ChainQuery chainQuery;
     private final MempoolTxMapper mempoolTxMapper;
 
 	public BridgeLastBlockDtoV1 getLastBlock() {
-		Long height = chainQuery.getLatestBlockHeight().orElse(null);
-        if (height == null) {
-            throw new GENotFoundException("Latest canonical block not found");
-        }
+        RecommendedFeesAtHead recommendation = mempoolTxMapper.mapRecommendedFeesAtHead();
         return new BridgeLastBlockDtoV1(
                 generalProperties.getNetwork(),
-                height,
-                mempoolTxMapper.mapRecommendedFees().getFast().getTotalForAverageTx().toBigInteger());
+                recommendation.head().getHeight(),
+                recommendation.fees().getStandard().getTotalForAverageTx().toBigInteger());
     }
 }

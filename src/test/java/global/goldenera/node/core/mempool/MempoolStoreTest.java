@@ -61,6 +61,7 @@ import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.context.ApplicationEvent;
 import org.springframework.context.ApplicationEventPublisher;
 
+import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasAddPayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAddressAliasRemovePayload;
 import global.goldenera.cryptoj.common.payloads.bip.TxBipAuthorityAddPayload;
@@ -281,6 +282,27 @@ class MempoolStoreTest {
 		assertThat(store.getFeeStatistics().txCount()).isOne();
 		assertThat(store.getFeeStatistics().medianFeePerByte()).isEqualTo(1.0);
 		assertThat(registry.get("blockchain.mempool.future_tx_count").gauge().value()).isEqualTo(1.0);
+	}
+
+	@Test
+	void feeComparatorPreservesExactDensityAtUint256Scale() {
+		BigInteger lowerFee = BigInteger.ONE.shiftLeft(255);
+		Tx higherTx = mock(Tx.class);
+		when(higherTx.getFee()).thenReturn(Wei.valueOf(lowerFee.add(BigInteger.ONE)));
+		when(higherTx.getSize()).thenReturn(1);
+		when(higherTx.getNonce()).thenReturn(2L);
+		when(higherTx.getHash()).thenReturn(hash(200));
+		Tx lowerTx = mock(Tx.class);
+		when(lowerTx.getFee()).thenReturn(Wei.valueOf(lowerFee));
+		when(lowerTx.getSize()).thenReturn(1);
+		when(lowerTx.getNonce()).thenReturn(1L);
+		when(lowerTx.getHash()).thenReturn(hash(201));
+
+		MempoolEntry higher = new MempoolEntry(higherTx);
+		MempoolEntry lower = new MempoolEntry(lowerTx);
+
+		assertThat(MempoolStore.TX_FEE_COMPARATOR.compare(higher, lower)).isNegative();
+		assertThat(MempoolStore.TX_FEE_COMPARATOR.compare(lower, higher)).isPositive();
 	}
 
 	@Test

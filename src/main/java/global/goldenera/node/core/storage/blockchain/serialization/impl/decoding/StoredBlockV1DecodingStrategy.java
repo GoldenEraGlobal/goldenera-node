@@ -82,8 +82,13 @@ public class StoredBlockV1DecodingStrategy implements StoredBlockDecodingStrateg
 		}
 		input.leaveList();
 
-		// Create TxIndex from stored data (derives hash maps internally)
+		// Semantic equality with the body is enforced before StoredBlock
+		// serialization, while the transaction metadata is already cached. Decode
+		// repeats only structural checks so historical reads remain inexpensive.
 		StoredBlock.TxIndex txIndex = StoredBlock.TxIndex.fromStored(hashes, sizes, senders);
+		if (!withoutBody && (block.getTxs() == null || block.getTxs().size() != txIndex.count())) {
+			throw new IllegalArgumentException("Stored transaction index does not match the block body");
+		}
 
 		// Read block events (invisible state changes)
 		List<BlockEvent> events = BlockEventDecoder.INSTANCE.decodeList(input);

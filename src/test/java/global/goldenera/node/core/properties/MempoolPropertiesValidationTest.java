@@ -23,45 +23,34 @@
  */
 package global.goldenera.node.core.properties;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.math.BigInteger;
 
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.validation.annotation.Validated;
+import org.junit.jupiter.api.Test;
 
-import jakarta.validation.constraints.DecimalMax;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import jakarta.validation.ValidatorFactory;
 
-import lombok.Getter;
-import lombok.NonNull;
-import lombok.Setter;
+class MempoolPropertiesValidationTest {
 
-@Getter
-@Setter
-@Configuration
-@Validated
-@ConfigurationProperties(prefix = "ge.core.mempool", ignoreUnknownFields = false)
-public class MempoolProperties {
-	public static final String UINT256_MAX_VALUE =
-			"115792089237316195423570985008687907853269984665640564039457584007913129639935";
+	@Test
+	void maximumRecommendedFeeMustBeAPositiveUint256() {
+		try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
+			Validator validator = factory.getValidator();
+			MempoolProperties properties = new MempoolProperties();
 
-	@NonNull
-	Long maxSize;
+			properties.setMaxRecommendedFeeWei(BigInteger.ZERO);
+			assertThat(validator.validate(properties))
+					.anyMatch(violation -> violation.getPropertyPath().toString().equals("maxRecommendedFeeWei"));
 
-	@NonNull
-	Integer txExpireTimeInMinutes;
+			properties.setMaxRecommendedFeeWei(BigInteger.ONE.shiftLeft(256));
+			assertThat(validator.validate(properties))
+					.anyMatch(violation -> violation.getPropertyPath().toString().equals("maxRecommendedFeeWei"));
 
-	@NonNull
-	BigInteger minAcceptableFeeWei;
-
-	@NonNull
-	@NotNull
-	@Positive
-	@DecimalMax(UINT256_MAX_VALUE)
-	BigInteger maxRecommendedFeeWei;
-
-	@NonNull
-	Long maxNonceGap;
-
+			properties.setMaxRecommendedFeeWei(BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE));
+			assertThat(validator.validate(properties)).isEmpty();
+		}
+	}
 }

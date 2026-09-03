@@ -103,10 +103,7 @@ import lombok.extern.slf4j.Slf4j;
 @FieldDefaults(level = PRIVATE, makeFinal = true)
 public class MempoolStore {
 
-	static Comparator<MempoolEntry> TX_FEE_COMPARATOR = Comparator
-			.comparing(MempoolStore::calculateFeePerByte, Comparator.reverseOrder())
-			.thenComparing(MempoolEntry::getNonce)
-			.thenComparing(MempoolEntry::getHash);
+	static Comparator<MempoolEntry> TX_FEE_COMPARATOR = MempoolStore::compareByFeeDensity;
 
 	MeterRegistry registry;
 	MempoolProperties mempoolProperties;
@@ -1689,6 +1686,22 @@ public class MempoolStore {
 
 	private static double calculateFeePerByte(MempoolEntry entry) {
 		return entry.getSizeInBytes() == 0 ? 0.0 : entry.getFeeAsDouble() / entry.getSizeInBytes();
+	}
+
+	private static int compareByFeeDensity(MempoolEntry first, MempoolEntry second) {
+		int feeComparison = compareFeeDensity(second, first);
+		if (feeComparison != 0) {
+			return feeComparison;
+		}
+		int nonceComparison = first.getNonce().compareTo(second.getNonce());
+		return nonceComparison != 0 ? nonceComparison : first.getHash().compareTo(second.getHash());
+	}
+
+	private static int compareFeeDensity(MempoolEntry first, MempoolEntry second) {
+		BigInteger firstFee = first.getTx().getFee().toBigInteger();
+		BigInteger secondFee = second.getTx().getFee().toBigInteger();
+		return firstFee.multiply(BigInteger.valueOf(second.getSizeInBytes()))
+				.compareTo(secondFee.multiply(BigInteger.valueOf(first.getSizeInBytes())));
 	}
 
 	private record TokenMintReservation(Address tokenAddress, BigInteger amount) {

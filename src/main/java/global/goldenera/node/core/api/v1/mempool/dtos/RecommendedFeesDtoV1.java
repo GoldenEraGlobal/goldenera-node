@@ -33,8 +33,11 @@ import lombok.NoArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 /**
- * DTO for recommended transaction fees based on current mempool state.
+ * DTO for recommended transaction fees based on recent canonical blocks.
  * All fees are in Wei (smallest unit).
+ * Clients should calculate an exact transaction fee as:
+ * max(minimumTotalFee, baseFee + feePerByte * actualSignedSize,
+ * miningFeePerByte * actualSignedSize).
  */
 @Data
 @AllArgsConstructor
@@ -49,13 +52,14 @@ public class RecommendedFeesDtoV1 {
     FeeLevel slow;
 
     /**
-     * Standard fee - median fee in the mempool.
+     * Standard fee - 60th percentile from the recent canonical block fee oracle.
      * Typical confirmation time.
      */
     FeeLevel standard;
 
     /**
-     * Fast/Priority fee - fee to get into top 20% of mempool.
+     * Fast/Priority fee - 90th percentile from the recent canonical block fee
+     * oracle.
      * Faster confirmation.
      */
     FeeLevel fast;
@@ -84,8 +88,19 @@ public class RecommendedFeesDtoV1 {
         Wei feePerByte;
 
         /**
-         * Total fee for a transaction of average size (250 bytes).
-         * Calculated as: baseFee + (feePerByte * 250)
+         * Absolute node admission floor independent of transaction size.
+         */
+        Wei minimumTotalFee;
+
+        /**
+         * Whole-transaction fee density needed for the requested recent-block
+         * percentile. This is not added to the base fee.
+         */
+        Wei miningFeePerByte;
+
+        /**
+         * Total fee for a transaction of average size (150 bytes).
+         * Calculated using the same max formula documented on the DTO.
          */
         Wei totalForAverageTx;
     }
