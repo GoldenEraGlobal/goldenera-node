@@ -367,6 +367,12 @@ public class MiningService {
 						|| reason == MiningSuspensionReason.SYNC && activeWork == ActiveWork.EXACT_ONE) {
 					requestActiveAttemptCancellation(false);
 				}
+				// Native initialization cannot be interrupted and the cancelled attempt stops before hashing,
+				// so waiting would only delay sync.
+				if (reason == MiningSuspensionReason.SYNC
+						&& (proofOfWorkInitializationActive || proofOfWorkProvider.isInitializationInProgress())) {
+					break;
+				}
 				try {
 					remaining = coordinationChanged.awaitNanos(remaining);
 				} catch (InterruptedException e) {
@@ -1128,7 +1134,11 @@ public class MiningService {
 			}
 			return;
 		}
-		if (context.submittedHash != null && context.submittedHash.equals(event.getBlock().getHash())) {
+		Hash connectedHash = event.getBlock().getHash();
+		Hash parentHash = context.parentHash;
+		// Events are delivered after the chain lock is released: an attempt that has not read its parent yet will
+		// read this block, and an attempt whose parent is this block already builds on it.
+		if (parentHash == null || connectedHash.equals(parentHash) || connectedHash.equals(context.submittedHash)) {
 			return;
 		}
 		context.parentChanged.set(true);

@@ -180,8 +180,6 @@ final class SandboxControlDtos {
 			long persistenceBatchCurrentBytes,
 			long persistenceBatchPeakBytes,
 			int maxHeaderPageRequested,
-			long legacyHeaderPageRequests,
-			long v2HeaderPageRequests,
 			int headerPrefetchDepthLimit,
 			int bufferedHeaderWindows,
 			int bufferedHeaderCount,

@@ -30,12 +30,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import java.math.BigInteger;
@@ -161,7 +162,7 @@ class MempoolManagerTest {
 
 	@Test
 	void disconnectedBlockHandlerRevalidatesTransactionsBeforeReAdmission() {
-		MempoolStore mockedStore = mock(MempoolStore.class);
+		MempoolStore mockedStore = runningExclusiveOperations(mock(MempoolStore.class));
 		MempoolManager eventManager = new MempoolManager(new SimpleMeterRegistry(), mockedStore, validator,
 				MempoolTestFixtures.properties(100), mock(ChainHeadStateCache.class),
 				Runnable::run,
@@ -178,7 +179,8 @@ class MempoolManagerTest {
 
 		verify(validator).validateAgainstChainAndMempool(any(MempoolEntry.class),
 				eq(MempoolTxAddEvent.AddReason.REORG), eq(false));
-		verifyNoInteractions(mockedStore);
+		verify(mockedStore).executeWithoutConcurrentMutations(any());
+		verifyNoMoreInteractions(mockedStore);
 	}
 
 	@Test
@@ -291,7 +293,7 @@ class MempoolManagerTest {
 
 	@Test
 	void revalidationDoesNotMaskBalanceReconciliationFailuresAsUnavailableChainState() {
-		MempoolStore failingStore = mock(MempoolStore.class);
+		MempoolStore failingStore = runningExclusiveOperations(mock(MempoolStore.class));
 		MempoolEntry entry = nativeTransfer(44, ALICE, 1, 40);
 		MempoolStore.AdmissionConstraints constraints = new MempoolStore.AdmissionConstraints(
 				Wei.valueOf(100), Map.of(), null);
@@ -350,6 +352,14 @@ class MempoolManagerTest {
 		when(payload.getTokenAddress()).thenReturn(token);
 		when(payload.getAmount()).thenReturn(Wei.valueOf(amount));
 		return MempoolTestFixtures.governance(id, sender, nonce, 1, payload);
+	}
+
+	private MempoolStore runningExclusiveOperations(MempoolStore mockedStore) {
+		doAnswer(invocation -> {
+			invocation.<Runnable>getArgument(0).run();
+			return null;
+		}).when(mockedStore).executeWithoutConcurrentMutations(any());
+		return mockedStore;
 	}
 
 }

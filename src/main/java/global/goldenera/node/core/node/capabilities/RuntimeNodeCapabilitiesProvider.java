@@ -113,9 +113,6 @@ public final class RuntimeNodeCapabilitiesProvider implements NodeCapabilitiesPr
 		if (manifest.features().deterministicClock()) {
 			capabilities.add("clock-deterministic-v1");
 		}
-		if (manifest.features().legacyPeerCompatibility()) {
-			capabilities.add("legacy-peer-compatibility-v1");
-		}
 		if (manifest.features().controlApi()
 				&& environment.getProperty(CONTROL_ENABLED, Boolean.class, false)) {
 			capabilities.add("sandbox-control-v1");

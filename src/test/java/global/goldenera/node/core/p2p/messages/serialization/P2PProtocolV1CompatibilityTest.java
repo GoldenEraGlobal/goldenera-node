@@ -108,7 +108,7 @@ class P2PProtocolV1CompatibilityTest {
 	}
 
 	@Test
-	void legacyPeerWithoutCapabilitiesUsesOnlyProtocolV1SyncMessages() {
+	void syncRequestsKeepTheirProtocolV1MessageCodes() {
 		EmbeddedChannel channel = new EmbeddedChannel();
 		RemotePeer peer = new RemotePeer(channel, new SimpleMeterRegistry());
 		peer.completeCapabilityNegotiation(List.of());
@@ -118,8 +118,6 @@ class P2PProtocolV1CompatibilityTest {
 
 		P2PEnvelope headersRequest = channel.readOutbound();
 		P2PEnvelope bodiesRequest = channel.readOutbound();
-		assertThat(peer.getCapabilitiesSnapshot()).isEmpty();
-		assertThat(peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT);
 		assertThat(headersRequest.getMessageType()).isEqualTo(P2PMessageType.GET_BLOCK_HEADERS);
 		assertThat(bodiesRequest.getMessageType()).isEqualTo(P2PMessageType.GET_BLOCK_BODIES);
 		assertThat(List.of(headersRequest, bodiesRequest))
@@ -128,36 +126,23 @@ class P2PProtocolV1CompatibilityTest {
 	}
 
 	@Test
-	void explicitBlockSyncV2CapabilityRaisesOnlyTheHeaderPageLimitAndCannotBeRenegotiated() {
+	void negotiatedCapabilitiesCannotBeChangedAfterHandshake() {
 		RemotePeer peer = new RemotePeer(new EmbeddedChannel(), new SimpleMeterRegistry());
 		peer.completeCapabilityNegotiation(List.of(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY));
 		peer.completeCapabilityNegotiation(List.of(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY));
 
-		assertThat(peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
 		assertThatThrownBy(() -> peer.completeCapabilityNegotiation(List.of()))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("already negotiated");
-		assertThat(peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
+		assertThat(peer.supportsCapability(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)).isTrue();
 	}
 
 	@Test
-	void legacyCapabilitySnapshotCannotBeSpoofedIntoV2AfterHandshake() {
-		RemotePeer peer = new RemotePeer(new EmbeddedChannel(), new SimpleMeterRegistry());
-		peer.completeCapabilityNegotiation(List.of());
-
-		assertThatThrownBy(() -> peer.completeCapabilityNegotiation(
-				List.of(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)))
-				.isInstanceOf(IllegalStateException.class)
-				.hasMessageContaining("already negotiated");
-		assertThat(peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT);
-	}
-
-	@Test
-	void negotiatedV2HeaderLimitRoundTripsThroughTheExistingRequestShape() {
+	void headerPageLimitRoundTripsThroughTheExistingRequestShape() {
 		P2PBlockHeadersReqDto request = P2PBlockHeadersReqDto.builder()
 				.locators(List.of(Hash.ZERO))
 				.stopHash(Hash.ZERO)
-				.batchSize(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT)
+				.batchSize(P2PSyncProtocol.HEADER_PAGE_LIMIT)
 				.build();
 
 		Bytes encoded = P2PSerializer.encodePayload(P2PMessageType.GET_BLOCK_HEADERS, request);
@@ -165,17 +150,9 @@ class P2PProtocolV1CompatibilityTest {
 				P2PMessageType.GET_BLOCK_HEADERS,
 				encoded);
 
-		assertThat(decoded.getBatchSize()).isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
+		assertThat(decoded.getBatchSize()).isEqualTo(P2PSyncProtocol.HEADER_PAGE_LIMIT);
 		assertThat(decoded.getLocators()).containsExactly(Hash.ZERO);
 		assertThat(decoded.getStopHash()).isEqualTo(Hash.ZERO);
-	}
-
-	@Test
-	void similarlyNamedCapabilityCannotEnableLargerHeaderPages() {
-		RemotePeer peer = new RemotePeer(new EmbeddedChannel(), new SimpleMeterRegistry());
-		peer.completeCapabilityNegotiation(List.of("sync-v2"));
-
-		assertThat(peer.negotiatedHeaderPageLimit()).isEqualTo(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT);
 	}
 
 	private BlockHeader header() {

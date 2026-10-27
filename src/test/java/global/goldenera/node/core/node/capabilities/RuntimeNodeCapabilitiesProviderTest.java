@@ -61,7 +61,7 @@ class RuntimeNodeCapabilitiesProviderTest {
 				"mining-economics-v1",
 				P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY);
 		assertThat(snapshot.capabilityIds()).noneMatch(id -> id.startsWith("sandbox-")
-				|| id.startsWith("clock-") || id.startsWith("legacy-peer-"));
+				|| id.startsWith("clock-"));
 	}
 
 	@Test

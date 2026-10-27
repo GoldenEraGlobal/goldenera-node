@@ -42,6 +42,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesRequestedEvent;
 import global.goldenera.node.core.p2p.events.P2PHeadersRequestedEvent;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 import lombok.RequiredArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -77,8 +78,7 @@ public class BlockSyncResponderService {
 			if (startHeight == 0)
 				startHeight = 1;
 
-			int negotiatedLimit = event.getPeer().negotiatedHeaderPageLimit();
-			int limit = batchSize > 0 ? Math.min(batchSize, negotiatedLimit) : 500;
+			int limit = batchSize > 0 ? Math.min(batchSize, P2PSyncProtocol.HEADER_PAGE_LIMIT) : 500;
 			long endHeight = startHeight + limit - 1; // -1 because range is inclusive
 
 			// Use header-only for stopHash check

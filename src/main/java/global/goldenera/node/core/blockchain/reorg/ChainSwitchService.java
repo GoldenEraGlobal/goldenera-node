@@ -33,7 +33,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.rocksdb.WriteBatch;
@@ -53,6 +52,7 @@ import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.state.ValidatedReorgPlan;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
+import global.goldenera.node.core.node.MasterChainLock;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.ExecutionResult;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
@@ -81,7 +81,7 @@ public class ChainSwitchService {
     StateProcessor stateProcessor;
     BlockValidator blockValidationService;
     ApplicationEventPublisher applicationEventPublisher;
-    ReentrantLock masterChainLock;
+    MasterChainLock masterChainLock;
     EntityIndexRepository entityIndexRepository;
     BlockEventExtractor blockEventExtractor;
     CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy;
@@ -94,7 +94,7 @@ public class ChainSwitchService {
             StateProcessor stateProcessor,
             BlockValidator blockValidationService,
             ApplicationEventPublisher applicationEventPublisher,
-            @Qualifier("masterChainLock") ReentrantLock masterChainLock,
+            @Qualifier("masterChainLock") MasterChainLock masterChainLock,
             EntityIndexRepository entityIndexRepository,
             BlockEventExtractor blockEventExtractor,
             CoreSnapshotCheckpointFloorPolicy checkpointFloorPolicy,
@@ -372,10 +372,11 @@ public class ChainSwitchService {
                         newTip.getHeight(),
                         newTip.getHash()));
             }
+            eventsToPublish.forEach(event -> masterChainLock.afterRelease(
+                    () -> applicationEventPublisher.publishEvent(event)));
         } finally {
             masterChainLock.unlock();
         }
-        eventsToPublish.forEach(applicationEventPublisher::publishEvent);
     }
 
     private void stageCandidateBlocks(

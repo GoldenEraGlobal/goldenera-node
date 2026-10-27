@@ -43,16 +43,8 @@ import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 class BlockSyncResponderProtocolLimitTest {
 
 	@Test
-	void legacyPeerCannotRequestMoreThanOneThousandHeaders() {
-		assertResponderRange(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT, 1_010L);
-	}
-
-	@Test
-	void negotiatedV2PeerCannotRequestMoreThanFourThousandNinetySixHeaders() {
-		assertResponderRange(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT, 4_106L);
-	}
-
-	private void assertResponderRange(int negotiatedLimit, long expectedEndHeight) {
+	void peerCannotRequestMoreThanOneHeaderPage() {
+		long expectedEndHeight = 10L + P2PSyncProtocol.HEADER_PAGE_LIMIT;
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		StoredBlock ancestor = mock(StoredBlock.class);
 		when(ancestor.getHeight()).thenReturn(10L);
@@ -61,7 +53,6 @@ class BlockSyncResponderProtocolLimitTest {
 		when(chainQuery.findStoredBlockHeadersByHeightRange(11L, expectedEndHeight)).thenReturn(List.of());
 
 		RemotePeer peer = mock(RemotePeer.class);
-		when(peer.negotiatedHeaderPageLimit()).thenReturn(negotiatedLimit);
 		BlockSyncResponderService responder = new BlockSyncResponderService(chainQuery);
 		responder.handleGetHeaders(new P2PHeadersRequestedEvent(
 				this,

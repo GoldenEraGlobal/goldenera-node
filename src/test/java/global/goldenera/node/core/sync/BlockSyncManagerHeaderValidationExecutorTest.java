@@ -33,6 +33,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -48,7 +49,11 @@ import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.mockito.InOrder;
+import org.slf4j.LoggerFactory;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
@@ -121,6 +126,35 @@ class BlockSyncManagerHeaderValidationExecutorTest {
 		try {
 			assertThatThrownBy(() -> service.validateBatch(headers)).isSameAs(failure);
 		} finally {
+			service.stop();
+		}
+	}
+
+	@Test
+	@Timeout(5)
+	void slowValidationIsReportedButStillCompletesTheBatch() {
+		BlockValidator validator = mock(BlockValidator.class);
+		when(validator.headerValidationConcurrencyLimit(any(Integer.class))).thenReturn(2);
+		List<BlockHeader> headers = headers(4);
+		stubPreparedHeaders(validator, headers, List.of(context(1)));
+		when(validator.validatePreparedHeader(any(PreparedHeaderValidation.class),
+				any(ProofOfWorkVerificationSession.class))).thenAnswer(invocation -> {
+			Thread.sleep(100);
+			return mock(StatelessValidatedHeader.class);
+		});
+		BlockSyncManagerService service = service(validator);
+		service.setSlowHeaderValidationWarningIntervalForTesting(Duration.ofMillis(10));
+		Logger logger = (Logger) LoggerFactory.getLogger(BlockSyncManagerService.class);
+		ListAppender<ILoggingEvent> appender = new ListAppender<>();
+		appender.start();
+		logger.addAppender(appender);
+
+		try {
+			assertThat(service.validateBatch(headers)).hasSize(4);
+			assertThat(appender.list).extracting(ILoggingEvent::getFormattedMessage)
+					.anyMatch(message -> message.startsWith("Header validation still running"));
+		} finally {
+			logger.detachAppender(appender);
 			service.stop();
 		}
 	}

@@ -31,7 +31,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.units.ethereum.Wei;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -46,6 +45,7 @@ import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.Connecte
 import global.goldenera.node.core.blockchain.reorg.ChainSwitchService;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
+import global.goldenera.node.core.node.MasterChainLock;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -70,7 +70,7 @@ public class BlockStateTransitions {
 	ChainQuery chainQueryService;
 	ChainSwitchService chainSwitchService;
 	ApplicationEventPublisher applicationEventPublisher;
-	ReentrantLock masterChainLock;
+	MasterChainLock masterChainLock;
 	EntityIndexRepository entityIndexRepository;
 	BlockEventExtractor blockEventExtractor;
 	LifecycleJournalAppender lifecycleJournalAppender;
@@ -80,7 +80,7 @@ public class BlockStateTransitions {
 			ChainQuery chainQueryService,
 			ChainSwitchService chainSwitchService,
 			ApplicationEventPublisher applicationEventPublisher,
-			@Qualifier("masterChainLock") ReentrantLock masterChainLock,
+			@Qualifier("masterChainLock") MasterChainLock masterChainLock,
 			EntityIndexRepository entityIndexRepository,
 			BlockEventExtractor blockEventExtractor,
 			LifecycleJournalAppender lifecycleJournalAppender) {
@@ -126,7 +126,6 @@ public class BlockStateTransitions {
 			StateProcessor.ExecutionResult executionResult,
 			Address receivedFrom,
 			Instant receivedAt) {
-		BlockConnectedEvent eventToPublish = null;
 		masterChainLock.lock();
 		try {
 			long start = System.currentTimeMillis();
@@ -221,14 +220,8 @@ public class BlockStateTransitions {
 
 					Collections.reverse(forkChain); // Now it's Ancestor -> ... -> NewBlock
 
-					// 2. Execute Switch. The switch revalidates under the same lock and publishes
-					// events only after releasing it, so drop this outer hold first.
-					masterChainLock.unlock();
-					try {
-						chainSwitchService.executeAtomicReorgSwap(new ValidatedReorgPlan(commonAncestor, forkChain));
-					} finally {
-						masterChainLock.lock();
-					}
+					// 2. Execute Switch
+					chainSwitchService.executeAtomicReorgSwap(new ValidatedReorgPlan(commonAncestor, forkChain));
 					return; // Done, reorg service handled everything
 
 				} catch (Exception e) {
@@ -280,7 +273,7 @@ public class BlockStateTransitions {
 				Wei actualRewardPaid = height == 0 ? Wei.ZERO : executionResult.getMinerActualRewardPaid();
 				Map<Hash, Wei> actualBurnAmounts = height == 0 ? Map.of() : executionResult.getActualBurnAmounts();
 
-				eventToPublish = new BlockConnectedEvent(
+				BlockConnectedEvent connectedEvent = new BlockConnectedEvent(
 						this,
 						source,
 						block,
@@ -302,15 +295,13 @@ public class BlockStateTransitions {
 						blockEvents,
 						receivedFrom,
 						receivedAt);
+				masterChainLock.afterRelease(() -> applicationEventPublisher.publishEvent(connectedEvent));
 			} else {
 				log.info("Block {} stored as FORK (TD: {} <= Current Head). No event emitted.",
 						block.getHeight(), cumulativeDifficulty);
 			}
 		} finally {
 			masterChainLock.unlock();
-		}
-		if (eventToPublish != null) {
-			applicationEventPublisher.publishEvent(eventToPublish);
 		}
 	}
 }

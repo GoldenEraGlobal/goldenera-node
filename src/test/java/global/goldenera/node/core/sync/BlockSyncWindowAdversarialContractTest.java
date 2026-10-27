@@ -41,24 +41,7 @@ import global.goldenera.node.shared.exceptions.GEValidationException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.netty.channel.Channel;
 
-/** Independent downgrade and resource-bound contract for negotiated sync windows. */
 class BlockSyncWindowAdversarialContractTest {
-
-	@Test
-	void publishedLegacyPeerCannotBeUpgradedByASecondOrSpoofedCapabilitySnapshot() {
-		RemotePeer legacy = peer();
-		assertThat(legacy.negotiatedHeaderPageLimit()).isEqualTo(1_000);
-		legacy.completeCapabilityNegotiation(List.of());
-
-		assertThatThrownBy(() -> legacy.completeCapabilityNegotiation(
-				List.of(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)))
-				.isInstanceOf(IllegalStateException.class)
-				.hasMessageContaining("already negotiated");
-		assertThatThrownBy(() -> legacy.completeCapabilityNegotiation(List.of("block-sync-v2 ")))
-				.isInstanceOf(IllegalStateException.class);
-		assertThat(legacy.negotiatedHeaderPageLimit())
-				.isEqualTo(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT);
-	}
 
 	@Test
 	void negotiatedV2SnapshotIsIdempotentAndCannotBeDowngraded() {
@@ -70,59 +53,35 @@ class BlockSyncWindowAdversarialContractTest {
 		assertThatThrownBy(() -> peer.completeCapabilityNegotiation(List.of()))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("already negotiated");
-		assertThat(peer.negotiatedHeaderPageLimit())
-				.isEqualTo(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT);
+		assertThat(peer.supportsCapability(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)).isTrue();
 	}
 
 	@Test
-	void onlyExactCapabilityTokenRaisesThePageLimit() {
-		for (String spoof : List.of("sync-v2", "BLOCK-SYNC-V2", "block-sync-v02")) {
-			RemotePeer peer = peer();
-			peer.completeCapabilityNegotiation(List.of(spoof));
-			assertThat(peer.negotiatedHeaderPageLimit())
-					.as("spoof token %s", spoof)
-					.isEqualTo(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT);
-		}
-	}
-
-	@Test
-	void negotiatedHeaderAndLegacyBodyBoundsRemainIndependent() {
+	void headerPageValidationWindowAndBodyBoundsRemainIndependent() {
 		assertThat(P2PSyncProtocol.INTERNAL_VALIDATION_WINDOW_HEADERS).isEqualTo(1_000);
-		assertThat(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT).isEqualTo(1_000);
-		assertThat(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT).isEqualTo(4_096);
-		assertThat(P2PSyncProtocol.MAX_LOCAL_HEADER_WINDOW).isEqualTo(4_096);
+		assertThat(P2PSyncProtocol.HEADER_PAGE_LIMIT).isEqualTo(4_096);
 		assertThat(BlockSyncManagerService.calculateBodyBatchSize()).isBetween(1, 7);
 	}
 
 	@Test
-	void oversizedAndCumulativeHeaderPagesFailBeforeValidationCanReceiveThem() {
-		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(
-				1_001, P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT, 0, 1_000))
+	void oversizedHeaderPagesFailBeforeValidationCanReceiveThem() {
+		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(1_001, 1_000))
 				.isInstanceOf(GEValidationException.class)
 				.hasMessageContaining("header page budget");
 		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(
-				4_097, P2PSyncProtocol.V2_HEADER_PAGE_LIMIT, 0, 4_096))
+				0, P2PSyncProtocol.HEADER_PAGE_LIMIT + 1))
 				.isInstanceOf(GEValidationException.class);
-		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(
-				97, 100, 4_000, 4_096))
-				.isInstanceOf(GEValidationException.class)
-				.hasMessageContaining("header page budget");
-		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(
-				0, 1, 0, 4_097))
-				.isInstanceOf(GEValidationException.class);
-		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(
-				0, 101, 0, 100))
+		assertThatThrownBy(() -> BlockSyncManagerService.requireHeaderPageWithinBudget(0, 0))
 				.isInstanceOf(GEValidationException.class);
 
-		BlockSyncManagerService.requireHeaderPageWithinBudget(96, 100, 4_000, 4_096);
+		BlockSyncManagerService.requireHeaderPageWithinBudget(P2PSyncProtocol.HEADER_PAGE_LIMIT,
+				P2PSyncProtocol.HEADER_PAGE_LIMIT);
 	}
 
 	@Test
-	void negotiatedCapsImplyAConstantFourPageAndSevenBodyRequestCeiling() {
-		assertThat(P2PSyncProtocol.MAX_LOCAL_HEADER_WINDOW
-				/ P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT).isEqualTo(4);
-		assertThat(P2PSyncProtocol.MAX_LOCAL_HEADER_WINDOW
-				/ P2PSyncProtocol.V2_HEADER_PAGE_LIMIT).isEqualTo(1);
+	void onePageHoldsFourFullValidationWindowsAndAtMostSevenBodyRequests() {
+		assertThat(P2PSyncProtocol.HEADER_PAGE_LIMIT
+				/ P2PSyncProtocol.INTERNAL_VALIDATION_WINDOW_HEADERS).isEqualTo(4);
 		assertThat(BlockSyncManagerService.calculateBodyBatchSize()).isLessThanOrEqualTo(7);
 	}
 

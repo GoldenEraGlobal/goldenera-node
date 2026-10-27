@@ -50,8 +50,7 @@ public record SandboxManifest(
 		Consensus consensus,
 		Pow pow,
 		Clock clock,
-		Features features,
-		LegacyPeers legacyPeers) {
+		Features features) {
 
 	public SandboxManifest {
 		chainId = Objects.requireNonNull(chainId, "chainId");
@@ -62,7 +61,6 @@ public record SandboxManifest(
 		pow = Objects.requireNonNull(pow, "pow");
 		clock = Objects.requireNonNull(clock, "clock");
 		features = Objects.requireNonNull(features, "features");
-		legacyPeers = Objects.requireNonNull(legacyPeers, "legacyPeers");
 	}
 
 	private static <K extends Comparable<? super K>, V> SortedMap<K, V> immutableSortedMap(
@@ -185,13 +183,6 @@ public record SandboxManifest(
 	public record Features(
 			boolean sandboxManifest,
 			boolean deterministicClock,
-			boolean legacyPeerCompatibility,
 			boolean controlApi) {
-	}
-
-	public record LegacyPeers(List<String> allowlistedNodeIds) {
-		public LegacyPeers {
-			allowlistedNodeIds = List.copyOf(allowlistedNodeIds);
-		}
 	}
 }

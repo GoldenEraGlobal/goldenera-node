@@ -156,8 +156,6 @@ final class SandboxBlockIngestionAuditController {
 				snapshot.persistenceBatchCurrentBytes(),
 				snapshot.persistenceBatchPeakBytes(),
 				snapshot.maxHeaderPageRequested(),
-				snapshot.legacyHeaderPageRequests(),
-				snapshot.v2HeaderPageRequests(),
 				snapshot.headerPrefetchDepthLimit(),
 				snapshot.bufferedHeaderWindows(),
 				snapshot.bufferedHeaderCount(),

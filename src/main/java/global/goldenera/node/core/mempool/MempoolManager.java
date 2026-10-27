@@ -82,6 +82,7 @@ public class MempoolManager {
 
 	static final long MEMPOOL_PRUNE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 	static final long MEMPOOL_REVALIDATE_INTERVAL_MS = 30 * 1000; // 30 seconds
+	static final long SLOW_REVALIDATION_WARN_MS = 500;
 	static final int MEMPOOL_EVENT_MAX_ATTEMPTS = 3;
 
 	MeterRegistry registry;
@@ -364,14 +365,26 @@ public class MempoolManager {
 	 * due to other transactions being mined, which might be missed by simple event
 	 * processing (especially on non-mining nodes).
 	 */
-	public synchronized void revalidateMempool() {
+	public void revalidateMempool() {
 		if (!recoveryGate.isRecovered()) {
 			return;
 		}
 		if (mempoolStore.getCount() == 0) {
 			return;
 		}
+		// Shares the store mutation lock because the canonical projector calls in while holding it.
+		mempoolStore.executeWithoutConcurrentMutations(() -> {
+			long start = System.currentTimeMillis();
+			revalidateAgainstHead();
+			long tookMs = System.currentTimeMillis() - start;
+			if (tookMs > SLOW_REVALIDATION_WARN_MS) {
+				log.warn("SLOW mempool revalidation: {} txs in {}ms, mempool mutations waited for it",
+						mempoolStore.getCount(), tookMs);
+			}
+		});
+	}
 
+	private void revalidateAgainstHead() {
 		log.debug("Revalidating mempool ({} txs)...", mempoolStore.getCount());
 		List<Hash> toRemove = new ArrayList<>();
 		Map<Address, Long> chainNonces = new HashMap<>();
@@ -481,7 +494,7 @@ public class MempoolManager {
 				"connect", tip, () -> processBlocksConnected(event.getBlockEvents())));
 	}
 
-	private synchronized void processBlocksConnected(List<BlockConnectedEvent> events) {
+	private void processBlocksConnected(List<BlockConnectedEvent> events) {
 		List<Tx> txs = events.stream()
 				.map(BlockConnectedEvent::getBlock)
 				.flatMap(block -> block.getTxs().stream())
@@ -490,7 +503,7 @@ public class MempoolManager {
 		mempoolStore.processNewBlock(txs);
 	}
 
-	private synchronized void processBlockConnected(Block newBlock) {
+	private void processBlockConnected(Block newBlock) {
 		List<Tx> txsInBlock = newBlock.getTxs();
 		log.debug("Mempool: Processing connected block {} evictions/promotions.", newBlock.getHeight());
 		mempoolStore.processNewBlock(txsInBlock);
@@ -532,13 +545,15 @@ public class MempoolManager {
 		revalidateMempool();
 	}
 
-	private synchronized void processBlockDisconnected(Block oldBlock) {
+	private void processBlockDisconnected(Block oldBlock) {
 		List<Tx> txsToReAdd = oldBlock.getTxs();
 		log.debug("Mempool: Processing disconnected block {}. Revalidating {} txs for re-admission.",
 				oldBlock.getHeight(), txsToReAdd.size());
-		for (Tx tx : txsToReAdd) {
-			addTx(tx, null, MempoolTxAddEvent.AddReason.REORG, false);
-		}
+		mempoolStore.executeWithoutConcurrentMutations(() -> {
+			for (Tx tx : txsToReAdd) {
+				addTx(tx, null, MempoolTxAddEvent.AddReason.REORG, false);
+			}
+		});
 	}
 
 	private void processMempoolBlockEvent(String eventType, Block block, Runnable action) {

@@ -356,6 +356,16 @@ public class MempoolStore {
 		return withLifecycleMutationLock(recovery);
 	}
 
+	public void executeWithoutConcurrentMutations(@NonNull Runnable operation) {
+		integrityGuard.requireHealthy();
+		lifecycleMutationLock.lock();
+		try {
+			operation.run();
+		} finally {
+			lifecycleMutationLock.unlock();
+		}
+	}
+
 	private void addTransactionsBackOrdered(List<Tx> txs, Block block) {
 		List<MempoolTxRemoveEvent> removeEvents = new ArrayList<>();
 		Map<Hash, MempoolEntry> added = new LinkedHashMap<>();
@@ -742,7 +752,8 @@ public class MempoolStore {
 
 	/** Full means no free slot remains; insertion evicts only when size exceeds max. */
 	public boolean isFull() {
-		return withReadLock(() -> allTxsByHash.size() >= mempoolProperties.getMaxSize());
+		// Lock-free on purpose: the P2P handshake calls this and must never wait for mempool mutations.
+		return allTxsByHash.size() >= mempoolProperties.getMaxSize();
 	}
 
 	public void removeTransaction(@NonNull Hash txHash) {

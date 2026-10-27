@@ -51,7 +51,7 @@ class SandboxManifestAuthoringServiceTest {
 	private static final String FIXTURE_HASH =
 			"0xcc97ffd200afec82890413f8bb113d9858619f65ea5f58ef6a3bcd9fc7b902df";
 	private static final String FIXTURE_FINGERPRINT =
-			"389180aae949eceb2103cbde98f87b484afdc7e86ddf33c4605dcf9a7e645ce3";
+			"45fd6ee91a826cb43124b9916e0ecfe9b556b35786d14d4c47ee893a7ff3bf88";
 
 	private final SandboxManifestAuthoringService service = new SandboxManifestAuthoringService();
 

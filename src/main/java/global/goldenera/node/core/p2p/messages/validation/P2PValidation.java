@@ -32,7 +32,6 @@ import org.springframework.stereotype.Service;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
-import global.goldenera.node.core.p2p.messages.dtos.common.P2PBlockDto;
 import global.goldenera.node.core.p2p.messages.dtos.common.P2PBlockHeaderDto;
 import global.goldenera.node.core.p2p.messages.dtos.common.P2PTxDto;
 import global.goldenera.node.shared.exceptions.GEValidationException;
@@ -78,18 +77,6 @@ public class P2PValidation {
 			}
 			blockValidator.validateHeader(dto.getBlockHeader(), batchHashes);
 		});
-	}
-
-	/**
-	 * Validates P2P Block DTO.
-	 * Checks merkle root and all transaction signatures.
-	 */
-	public void validateBlockDto(P2PBlockDto blockDto) {
-		if (blockDto == null || blockDto.getBlock() == null) {
-			throw new GEValidationException("Block cannot be null");
-		}
-		// Validate Full Block (Header PoW + Size + Txs + Merkle)
-		blockValidator.validateFullBlock(blockDto.getBlock());
 	}
 
 	/**

@@ -831,6 +831,40 @@ class RandomXManagerTest {
 	}
 
 	@Test
+	void verificationOutsideBulkSyncDoesNotWaitForMiningEpochSwitch() throws Exception {
+		RecordingFactory factory = new RecordingFactory();
+		RandomXVerificationProperties verificationProperties = highMemoryProperties();
+		SimpleMeterRegistry registry = new SimpleMeterRegistry();
+		RandomXManager manager = manager(properties(true, RandomXMiningMemoryMode.FULL), productionContext(), factory);
+		manager.configureSyncVerificationAcceleration(
+				verificationProperties, false, registry, this::highMemory);
+		manager.ensureInitializedForHeight(1L);
+		factory.blockDatasetInitialization = true;
+		RandomXProofOfWorkProvider provider = new RandomXProofOfWorkProvider(
+				manager, verificationProperties, registry);
+
+		try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+			Future<?> miningInitialization = executor.submit(() -> manager.prepareMiningResourcesForHeight(2L));
+			assertThat(factory.datasetInitStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			ProofOfWorkVerificationContext context = provider.verificationContext(2L, ignored -> Optional.empty());
+
+			int cachesBeforeVerification = factory.caches.size();
+			Future<ProofOfWorkVerificationSession> verification =
+					executor.submit(() -> provider.openVerificationSession(context));
+			try (ProofOfWorkVerificationSession session = verification.get(1, TimeUnit.SECONDS)) {
+				assertThat(session.mode()).isEqualTo(ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+				assertThat(session.hash(new byte[] { 6 })).hasSize(32);
+			} finally {
+				factory.releaseDatasetInit.countDown();
+			}
+			RandomXCache fallbackCache = factory.caches.get(cachesBeforeVerification);
+			miningInitialization.get(1, TimeUnit.SECONDS);
+			verify(fallbackCache, times(1)).close();
+		}
+		manager.close();
+	}
+
+	@Test
 	void insufficientHugePagesSkipTheNativeLargePageAttempt() {
 		RecordingFactory factory = new RecordingFactory();
 		ChainQuery chainQuery = mock(ChainQuery.class);

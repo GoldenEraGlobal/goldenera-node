@@ -25,8 +25,6 @@ package global.goldenera.node.core.node;
 
 import static lombok.AccessLevel.PRIVATE;
 
-import java.util.concurrent.locks.ReentrantLock;
-
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -42,8 +40,8 @@ public class MasterChainLockBean {
 	 * (Miner, Downloader, Reorg) MUST acquire this lock first.
 	 */
 	@Bean("masterChainLock")
-	public ReentrantLock masterChainLock() {
-		return new ReentrantLock();
+	public MasterChainLock masterChainLock() {
+		return new MasterChainLock();
 	}
 
 }

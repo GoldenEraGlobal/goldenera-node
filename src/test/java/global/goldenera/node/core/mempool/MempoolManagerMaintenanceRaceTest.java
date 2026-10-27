@@ -40,6 +40,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.tuweni.units.ethereum.Wei;
@@ -108,6 +109,37 @@ class MempoolManagerMaintenanceRaceTest {
 		assertThat(fixture.store().getAllTxs()).extracting(MempoolEntry::getHash)
 				.containsExactlyInAnyOrder(restored.getHash(), descendant.getHash());
 		assertThat(executable(fixture.store())).hasSize(2);
+	}
+
+	@Test
+	void periodicRevalidationDoesNotDeadlockWithCanonicalProjection() throws Exception {
+		RaceFixture fixture = fixture(1);
+		MempoolEntry mined = transfer(1, ALICE, 1, 10);
+		MempoolEntry descendant = transfer(2, ALICE, 2, 20);
+		fixture.store().addTransactions(List.of(mined, descendant), Map.of(ALICE, 0L),
+				MempoolTxAddEvent.AddReason.SYNC);
+		Block block = block(List.of(mined), 11);
+
+		FutureTask<Void> revalidation = new FutureTask<>(fixture.manager()::revalidateMempool, null);
+		Thread.ofPlatform().daemon().start(revalidation);
+		assertThat(fixture.validationStarted().await(5, TimeUnit.SECONDS)).isTrue();
+		FutureTask<Void> projection = new FutureTask<>(() -> fixture.store()
+				.executePersistenceBatch(() -> fixture.manager().applyCanonicalConnect(block)), null);
+		awaitParked(Thread.ofPlatform().daemon().start(projection));
+		fixture.releaseValidation().countDown();
+
+		revalidation.get(5, TimeUnit.SECONDS);
+		projection.get(5, TimeUnit.SECONDS);
+		assertThat(fixture.store().getTxByHash(mined.getHash())).isEmpty();
+		assertThat(executable(fixture.store())).containsExactly(descendant);
+	}
+
+	private void awaitParked(Thread thread) throws InterruptedException {
+		long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+		while (thread.getState() != Thread.State.WAITING && thread.getState() != Thread.State.BLOCKED) {
+			assertThat(System.nanoTime()).isLessThan(deadline);
+			Thread.sleep(5);
+		}
 	}
 
 	private RaceFixture fixture(long headNonce) throws InterruptedException {

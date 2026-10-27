@@ -23,8 +23,10 @@
  */
 package global.goldenera.node.core.blockchain.reorg;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -34,7 +36,6 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -43,9 +44,11 @@ import org.springframework.context.ApplicationEventPublisher;
 import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Hash;
+import global.goldenera.node.core.blockchain.events.BlockReorgEvent;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
+import global.goldenera.node.core.node.MasterChainLock;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -122,22 +125,50 @@ class ChainSwitchServiceCumulativeDifficultyTest {
 		verify(fixture.blockRepository, never()).executeAtomicBatch(any());
 	}
 
+	@Test
+	void reorgEventsArePublishedOnlyAfterTheOutermostCallerReleasesTheChainLock() throws Exception {
+		Fixture reorg = fixture();
+		StoredBlock reorgAncestor = storedBlock(10, 100, hash(50), null, 0);
+		StoredBlock currentTip = storedBlock(11, 105, hash(51), hash(50), 5);
+		StoredBlock winningTip = storedBlock(11, 106, hash(52), hash(50), 6);
+		reorg.canonical(reorgAncestor);
+		when(reorg.chainQuery.getLatestStoredBlockOrThrow()).thenReturn(currentTip);
+		when(reorg.chainQuery.findChainFrom(hash(50), hash(51)))
+				.thenReturn(new ArrayList<>(List.of(currentTip)));
+		List<Boolean> lockedWhenPublished = new ArrayList<>();
+		doAnswer(invocation -> lockedWhenPublished.add(reorg.lock.isLocked()))
+				.when(reorg.publisher).publishEvent(any(Object.class));
+
+		reorg.lock.lock();
+		try {
+			reorg.service.executeAtomicSyncSwap(reorgAncestor, List.of(winningTip));
+			verify(reorg.publisher, never()).publishEvent(any(Object.class));
+		} finally {
+			reorg.lock.unlock();
+		}
+
+		verify(reorg.publisher).publishEvent((Object) any(BlockReorgEvent.class));
+		assertThat(lockedWhenPublished).containsOnly(false);
+	}
+
 	private Fixture fixture() {
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		BlockRepository blockRepository = mock(BlockRepository.class);
+		ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+		MasterChainLock lock = new MasterChainLock();
 		ChainSwitchService service = new ChainSwitchService(
 				chainQuery,
 				blockRepository,
 				mock(WorldStateFactory.class),
 				mock(StateProcessor.class),
 				mock(BlockValidator.class),
-				mock(ApplicationEventPublisher.class),
-				new ReentrantLock(),
+				publisher,
+				lock,
 				mock(EntityIndexRepository.class),
 				mock(BlockEventExtractor.class),
 				CoreSnapshotCheckpointFloorPolicy.withoutFloor(),
 				mock(LifecycleJournalAppender.class));
-		return new Fixture(service, chainQuery, blockRepository);
+		return new Fixture(service, chainQuery, blockRepository, publisher, lock);
 	}
 
 	private StoredBlock storedBlock(long height, long cumulativeDifficulty, Hash hash,
@@ -161,7 +192,7 @@ class ChainSwitchServiceCumulativeDifficultyTest {
 	}
 
 	private record Fixture(ChainSwitchService service, ChainQuery chainQuery,
-			BlockRepository blockRepository) {
+			BlockRepository blockRepository, ApplicationEventPublisher publisher, MasterChainLock lock) {
 		void canonical(StoredBlock ancestor) {
 			when(chainQuery.getCanonicalStoredBlockByHash(ancestor.getHash())).thenReturn(Optional.of(ancestor));
 		}

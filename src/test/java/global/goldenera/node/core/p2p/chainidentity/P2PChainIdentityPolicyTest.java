@@ -34,6 +34,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,8 +54,8 @@ import global.goldenera.node.core.node.capabilities.NodeCapabilitiesProvider;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesSnapshot;
 import global.goldenera.node.core.node.capabilities.ProofOfWorkRuntimeMode;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
-import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Mode;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifestLoader;
 import global.goldenera.node.core.sandbox.runtime.ExecutionDomain;
@@ -64,87 +65,68 @@ import global.goldenera.node.core.storage.blockchain.domain.StoredBlock;
 
 class P2PChainIdentityPolicyTest {
 
-	private static final Address ALLOWLISTED =
-			Address.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-	private static final Address NOT_ALLOWLISTED =
-			Address.fromHexString("0xcccccccccccccccccccccccccccccccccccccccc");
+	private static final Address PEER = Address.fromHexString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 
 	@TempDir
 	Path temporaryDirectory;
 
 	@Test
-	void newSandboxPeersRequireAndAcceptTheExactAuthoritativeIdentity() throws Exception {
+	void sandboxPeersRequireAndAcceptTheExactAuthoritativeIdentity() throws Exception {
 		Fixture fixture = sandboxFixture();
-		P2PStatusDto exact = status(ALLOWLISTED, fixture.policy.localCapabilities());
+		List<String> exact = withBlockSync(fixture.policy.localCapabilities());
 
-		assertThat(fixture.policy.validate(exact).mode()).isEqualTo(Mode.EXPLICIT);
+		assertThat(fixture.policy.validate(status(PEER, exact)))
+				.isEqualTo(P2PChainCapability.from(fixture.identity));
 
 		P2PChainCapability mismatch = new P2PChainCapability(
 				Network.TESTNET.getCode(),
 				fixture.identity.chainId() + "-other",
 				fixture.identity.genesisHash(),
 				fixture.identity.manifestFingerprint());
-		assertThatThrownBy(() -> fixture.policy.validate(status(
-				ALLOWLISTED,
-				List.of(new P2PChainCapabilityCodec().encode(mismatch)))))
+		assertThatThrownBy(() -> fixture.policy.validate(status(PEER, withBlockSync(List.of(encode(mismatch))))))
 				.isInstanceOf(RuntimeException.class)
 				.hasMessageContaining("does not match");
 	}
 
 	@Test
-	void sandboxAllowsCompletelyAbsentCapabilityOnlyForExactAllowlistedLegacyIdentity() throws Exception {
+	void peerWithoutAWellFormedChainIdentityCapabilityIsRejected() throws Exception {
 		Fixture fixture = sandboxFixture();
 
-		assertThat(fixture.policy.validate(status(ALLOWLISTED, List.of())).mode())
-				.isEqualTo(Mode.ALLOWLISTED_SANDBOX_LEGACY);
-		assertThatThrownBy(() -> fixture.policy.validate(status(NOT_ALLOWLISTED, List.of())))
+		assertThatThrownBy(() -> fixture.policy.validate(status(PEER, withBlockSync(List.of()))))
 				.isInstanceOf(RuntimeException.class)
-				.hasMessageContaining("allowlisted");
-		assertThatThrownBy(() -> fixture.policy.validate(status(ALLOWLISTED, List.of("ge.chain.v1:"))))
+				.hasMessageContaining("chain identity capability");
+		assertThatThrownBy(() -> fixture.policy.validate(status(PEER, withBlockSync(List.of("ge.chain.v1:")))))
 				.isInstanceOf(RuntimeException.class)
 				.hasMessageContaining("Malformed");
 	}
 
 	@Test
-	void sandboxLegacyRequiresTheCurrentAuthoritativeManifestFingerprint() throws Exception {
-		SandboxManifestContext context = manifest();
-		StoredChainIdentity stale = new StoredChainIdentity(
-				StoredChainIdentity.CURRENT_FORMAT_VERSION,
-				Network.TESTNET.getCode(),
-				context.manifest().chainId(),
-				context.manifest().genesis().expectedGenesisHash(),
-				"0".repeat(64));
-		P2PChainIdentityPolicy policy = policy(
-				new SandboxRuntimeContext(ExecutionDomain.SANDBOX, Network.TESTNET, Optional.of(context)),
-				stale);
-
-		assertThatThrownBy(() -> policy.validate(status(ALLOWLISTED, List.of())))
-				.isInstanceOf(RuntimeException.class)
-				.hasMessageContaining("authoritative manifest");
-	}
-
-	@Test
-	void productionToleratesAbsentProtocolV1ButRejectsExplicitMismatch() {
-		StoredChainIdentity identity = new StoredChainIdentity(
-				StoredChainIdentity.CURRENT_FORMAT_VERSION,
-				Network.TESTNET.getCode(),
-				"testnet-production",
-				"0x" + "1".repeat(64),
-				null);
+	void peerWithoutBlockSyncV2IsRejected() {
+		StoredChainIdentity identity = productionIdentity(Network.TESTNET);
 		P2PChainIdentityPolicy policy = policy(
 				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty()),
 				identity);
 
-		assertThat(policy.validate(status(NOT_ALLOWLISTED, List.of())).mode())
-				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
+		assertThatThrownBy(() -> policy.validate(status(PEER, List.of(encode(P2PChainCapability.from(identity))))))
+				.isInstanceOf(RuntimeException.class)
+				.hasMessageContaining(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY);
+	}
+
+	@Test
+	void productionRejectsExplicitIdentityMismatch() {
+		StoredChainIdentity identity = productionIdentity(Network.TESTNET);
+		P2PChainIdentityPolicy policy = policy(
+				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty()),
+				identity);
 		P2PChainCapability mismatch = new P2PChainCapability(
 				Network.TESTNET.getCode(),
 				identity.chainId(),
 				"0x" + "2".repeat(64),
 				null);
-		assertThatThrownBy(() -> policy.validate(status(
-				NOT_ALLOWLISTED,
-				List.of(new P2PChainCapabilityCodec().encode(mismatch)))))
+
+		assertThat(policy.validate(status(PEER, capabilitiesFor(identity))))
+				.isEqualTo(P2PChainCapability.from(identity));
+		assertThatThrownBy(() -> policy.validate(status(PEER, withBlockSync(List.of(encode(mismatch))))))
 				.isInstanceOf(RuntimeException.class)
 				.hasMessageContaining("does not match");
 	}
@@ -154,34 +136,24 @@ class P2PChainIdentityPolicyTest {
 	void productionRequiresMiningEconomicsCapabilityExactlyAtEachNetworkActivation(
 			Network network, long activationHeight) {
 		initializeProductionNetwork(network);
-		StoredChainIdentity identity = new StoredChainIdentity(
-				StoredChainIdentity.CURRENT_FORMAT_VERSION,
-				network.getCode(),
-				network.name().toLowerCase() + "-production",
-				"0x" + "1".repeat(64),
-				null);
+		StoredChainIdentity identity = productionIdentity(network);
 		P2PChainIdentityPolicy policy = policy(
 				new SandboxRuntimeContext(ExecutionDomain.PRODUCTION, network, Optional.empty()),
 				identity);
 
-		assertThat(policy.validate(status(network, NOT_ALLOWLISTED, List.of(), activationHeight - 1)).mode())
-				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
-		assertThatThrownBy(() -> policy.validate(status(network, NOT_ALLOWLISTED, List.of(), activationHeight)))
+		assertThat(policy.validate(status(network, PEER, capabilitiesFor(identity), activationHeight - 1)))
+				.isEqualTo(P2PChainCapability.from(identity));
+		assertThatThrownBy(() -> policy.validate(status(network, PEER, capabilitiesFor(identity), activationHeight)))
 				.isInstanceOf(RuntimeException.class)
 				.hasMessageContaining("mining-economics-v1");
 		assertThat(policy.validate(status(
-				network, NOT_ALLOWLISTED, List.of("mining-economics-v1"), activationHeight)).mode())
-				.isEqualTo(Mode.PROTOCOL_V1_ABSENT);
+				network, PEER, capabilitiesFor(identity, "mining-economics-v1"), activationHeight)))
+				.isEqualTo(P2PChainCapability.from(identity));
 	}
 
 	@Test
-	void activatedLocalNodeRejectsLegacyPeerStillReportingPreForkHead() {
-		StoredChainIdentity identity = new StoredChainIdentity(
-				StoredChainIdentity.CURRENT_FORMAT_VERSION,
-				Network.TESTNET.getCode(),
-				"testnet-production",
-				"0x" + "1".repeat(64),
-				null);
+	void activatedLocalNodeRejectsPeerWithoutMiningEconomicsStillReportingPreForkHead() {
+		StoredChainIdentity identity = productionIdentity(Network.TESTNET);
 		SandboxRuntimeContext runtime = new SandboxRuntimeContext(
 				ExecutionDomain.PRODUCTION, Network.TESTNET, Optional.empty());
 		ChainQuery chainQuery = mock(ChainQuery.class);
@@ -190,8 +162,33 @@ class P2PChainIdentityPolicyTest {
 		when(chainQuery.getLatestStoredBlockOrThrow()).thenReturn(localHead);
 
 		assertThatThrownBy(() -> policy(runtime, identity, chainQuery)
-				.validate(status(NOT_ALLOWLISTED, List.of(), 753_995)))
+				.validate(status(PEER, capabilitiesFor(identity), 753_995)))
 				.hasMessageContaining("mining-economics-v1");
+	}
+
+	private StoredChainIdentity productionIdentity(Network network) {
+		return new StoredChainIdentity(
+				StoredChainIdentity.CURRENT_FORMAT_VERSION,
+				network.getCode(),
+				network.name().toLowerCase() + "-production",
+				"0x" + "1".repeat(64),
+				null);
+	}
+
+	private List<String> capabilitiesFor(StoredChainIdentity identity, String... extra) {
+		List<String> capabilities = new ArrayList<>(List.of(extra));
+		capabilities.add(encode(P2PChainCapability.from(identity)));
+		return withBlockSync(capabilities);
+	}
+
+	private List<String> withBlockSync(List<String> capabilities) {
+		List<String> result = new ArrayList<>(capabilities);
+		result.add(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY);
+		return result;
+	}
+
+	private String encode(P2PChainCapability capability) {
+		return new P2PChainCapabilityCodec().encode(capability);
 	}
 
 	private Fixture sandboxFixture() throws Exception {

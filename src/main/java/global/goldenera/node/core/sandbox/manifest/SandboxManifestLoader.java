@@ -64,7 +64,6 @@ import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Deterministic
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Features;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Genesis;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.LegacyCarrier;
-import global.goldenera.node.core.sandbox.manifest.SandboxManifest.LegacyPeers;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.NativeToken;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.Pow;
 import global.goldenera.node.core.sandbox.manifest.SandboxManifest.PowAlgorithm;
@@ -189,7 +188,7 @@ public final class SandboxManifestLoader {
 	private SandboxManifest parseManifest(JsonNode root, boolean authoringDraft) {
 		ObjectNode object = exactObject(root, "$", Set.of(
 				"schemaVersion", "chainId", "disposable", "legacyCarrier", "genesis", "forks", "consensus", "pow",
-				"clock", "features", "legacyPeers"));
+				"clock", "features"));
 		int schemaVersion = exactInt(object, "schemaVersion", 1, 1, "$" );
 		String chainId = matchingString(object, "chainId", CHAIN_ID, "$", "high-entropy sandbox chain id");
 		boolean disposable = exactBoolean(object, "disposable", "$");
@@ -201,14 +200,13 @@ public final class SandboxManifestLoader {
 		Pow pow = parsePow(required(object, "pow", "$"));
 		Clock clock = parseClock(required(object, "clock", "$"));
 		Features features = parseFeatures(required(object, "features", "$"));
-		LegacyPeers legacyPeers = parseLegacyPeers(required(object, "legacyPeers", "$"));
 
 		if (consensus.maxTransactionSizeBytes() > consensus.maxBlockSizeBytes()) {
 			throw invalid("$.consensus", "maxTransactionSizeBytes must not exceed maxBlockSizeBytes");
 		}
-		validateFeatureSemantics(disposable, features, clock, legacyPeers);
+		validateFeatureSemantics(disposable, features, clock);
 		return new SandboxManifest(schemaVersion, chainId, disposable, legacyCarrier, genesis, forks, consensus, pow, clock,
-				features, legacyPeers);
+				features);
 	}
 
 	private LegacyCarrier parseLegacyCarrier(JsonNode node) {
@@ -238,9 +236,9 @@ public final class SandboxManifestLoader {
 					"must be the all-zero placeholder in authoring mode");
 		}
 		List<String> authorities = parseUniqueStrings(required(object, "authorities", path), path + ".authorities",
-				ADDRESS, false).stream().sorted().toList();
+				ADDRESS).stream().sorted().toList();
 		List<String> validators = parseUniqueStrings(required(object, "validators", path), path + ".validators",
-				ADDRESS, false).stream().sorted().toList();
+				ADDRESS).stream().sorted().toList();
 		SortedMap<String, BigInteger> balances = parseBalances(required(object, "initialBalances", path));
 		String rewardPool = matchingString(object, "blockRewardPoolAddress", ADDRESS, path,
 				"a canonical lowercase address");
@@ -274,7 +272,7 @@ public final class SandboxManifestLoader {
 	private SortedMap<String, BigInteger> parseBalances(JsonNode node) {
 		String path = "$.genesis.initialBalances";
 		ObjectNode object = object(node, path);
-		checkCollectionSize(object.size(), path, false);
+		checkCollectionSize(object.size(), path);
 		SortedMap<String, BigInteger> balances = new TreeMap<>();
 		for (Map.Entry<String, JsonNode> field : object.properties()) {
 			if (!ADDRESS.matcher(field.getKey()).matches()) {
@@ -355,19 +353,17 @@ public final class SandboxManifestLoader {
 	private Features parseFeatures(JsonNode node) {
 		String path = "$.features";
 		ObjectNode object = exactObject(node, path, Set.of(
-				"sandboxManifest", "deterministicClock", "legacyPeerCompatibility", "controlApi"));
+				"sandboxManifest", "deterministicClock", "controlApi"));
 		return new Features(
 				exactBoolean(object, "sandboxManifest", path),
 				exactBoolean(object, "deterministicClock", path),
-				exactBoolean(object, "legacyPeerCompatibility", path),
 				exactBoolean(object, "controlApi", path));
 	}
 
 	private void validateFeatureSemantics(
 			boolean disposable,
 			Features features,
-			Clock clock,
-			LegacyPeers legacyPeers) {
+			Clock clock) {
 		if (!features.sandboxManifest()) {
 			throw invalid("$.features.sandboxManifest", "must be true for a sandbox manifest");
 		}
@@ -375,29 +371,16 @@ public final class SandboxManifestLoader {
 		if (features.deterministicClock() != deterministicClock) {
 			throw invalid("$.features.deterministicClock", "must match whether clock.mode is DETERMINISTIC");
 		}
-		boolean legacyCompatibility = !legacyPeers.allowlistedNodeIds().isEmpty();
-		if (features.legacyPeerCompatibility() != legacyCompatibility) {
-			throw invalid("$.features.legacyPeerCompatibility",
-					"must match whether the legacy peer allowlist is non-empty");
-		}
 		if (features.controlApi() && !disposable) {
 			throw invalid("$.features.controlApi", "requires disposable=true");
 		}
 	}
 
-	private LegacyPeers parseLegacyPeers(JsonNode node) {
-		String path = "$.legacyPeers";
-		ObjectNode object = exactObject(node, path, Set.of("allowlistedNodeIds"));
-		List<String> nodeIds = parseUniqueStrings(required(object, "allowlistedNodeIds", path),
-				path + ".allowlistedNodeIds", ADDRESS, true);
-		return new LegacyPeers(nodeIds.stream().sorted().toList());
-	}
-
-	private List<String> parseUniqueStrings(JsonNode node, String path, Pattern pattern, boolean mayBeEmpty) {
+	private List<String> parseUniqueStrings(JsonNode node, String path, Pattern pattern) {
 		if (!node.isArray()) {
 			throw invalid(path, "must be an array");
 		}
-		checkCollectionSize(node.size(), path, mayBeEmpty);
+		checkCollectionSize(node.size(), path);
 		List<String> values = new ArrayList<>(node.size());
 		Set<String> seen = new HashSet<>();
 		for (int index = 0; index < node.size(); index++) {
@@ -481,11 +464,7 @@ public final class SandboxManifestLoader {
 		ObjectNode features = root.putObject("features");
 		features.put("sandboxManifest", manifest.features().sandboxManifest());
 		features.put("deterministicClock", manifest.features().deterministicClock());
-		features.put("legacyPeerCompatibility", manifest.features().legacyPeerCompatibility());
 		features.put("controlApi", manifest.features().controlApi());
-
-		ObjectNode legacyPeers = root.putObject("legacyPeers");
-		putStrings(legacyPeers.putArray("allowlistedNodeIds"), manifest.legacyPeers().allowlistedNodeIds());
 
 		try {
 			return CANONICAL_WRITER.writeValueAsBytes(root);
@@ -588,10 +567,9 @@ public final class SandboxManifestLoader {
 		}
 	}
 
-	private void checkCollectionSize(int size, String path, boolean mayBeEmpty) {
-		if ((!mayBeEmpty && size == 0) || size > MAX_COLLECTION_ENTRIES) {
-			throw invalid(path, "must contain " + (mayBeEmpty ? "at most " : "between 1 and ")
-					+ MAX_COLLECTION_ENTRIES + " entries");
+	private void checkCollectionSize(int size, String path) {
+		if (size == 0 || size > MAX_COLLECTION_ENTRIES) {
+			throw invalid(path, "must contain between 1 and " + MAX_COLLECTION_ENTRIES + " entries");
 		}
 	}
 

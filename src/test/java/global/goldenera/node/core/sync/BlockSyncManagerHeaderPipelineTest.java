@@ -57,7 +57,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.pow.ProofOfWorkVerificationContext;
@@ -82,37 +81,13 @@ class BlockSyncManagerHeaderPipelineTest {
 
 	@Test
 	@Timeout(5)
-	void legacyPagesComposeLocallyIntoTwoIndependentValidationWindows() {
-		Fixture fixture = fixture(2);
-		RemotePeer peer = fixture.peer(P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT, 2_000);
+	void onePageSplitsIntoFourFullValidationWindowsAndARemainder() {
+		Fixture fixture = fixture();
+		RemotePeer peer = fixture.peer(4_096);
 
 		try {
 			List<BlockSyncManagerService.HeaderWindow> windows =
-					fixture.service.downloadHeaderWindowsForTesting(peer, fixture.localBest, 2);
-
-			assertThat(windows).hasSize(2);
-			assertThat(windows).allSatisfy(window ->
-					assertThat(window.headers()).hasSize(P2PSyncProtocol.INTERNAL_VALIDATION_WINDOW_HEADERS));
-			assertThat(fixture.requestedPages).containsExactly(1_000, 1_000);
-			var telemetry = fixture.service.runtimeSnapshot();
-			assertThat(telemetry.maxHeaderPageRequested()).isEqualTo(1_000);
-			assertThat(telemetry.legacyHeaderPageRequests()).isEqualTo(2);
-			assertThat(telemetry.v2HeaderPageRequests()).isZero();
-			assertThat(telemetry.peakBufferedHeaderCount()).isBetween(1_000, 2_000);
-		} finally {
-			fixture.service.stop();
-		}
-	}
-
-	@Test
-	@Timeout(5)
-	void negotiatedV2PageSplitsIntoFourIndependentValidationWindows() {
-		Fixture fixture = fixture(4);
-		RemotePeer peer = fixture.peer(P2PSyncProtocol.V2_HEADER_PAGE_LIMIT, 4_096);
-
-		try {
-			List<BlockSyncManagerService.HeaderWindow> windows =
-					fixture.service.downloadHeaderWindowsForTesting(peer, fixture.localBest, 4);
+					fixture.service.downloadHeaderWindowsForTesting(peer, 4);
 
 			assertThat(windows).hasSize(5);
 			assertThat(windows.subList(0, 4)).allSatisfy(window ->
@@ -121,9 +96,38 @@ class BlockSyncManagerHeaderPipelineTest {
 			assertThat(fixture.requestedPages).containsExactly(4_096);
 			var telemetry = fixture.service.runtimeSnapshot();
 			assertThat(telemetry.maxHeaderPageRequested()).isEqualTo(4_096);
-			assertThat(telemetry.legacyHeaderPageRequests()).isZero();
-			assertThat(telemetry.v2HeaderPageRequests()).isOne();
 			assertThat(telemetry.peakBufferedHeaderCount()).isBetween(1_000, 4_096);
+		} finally {
+			fixture.service.stop();
+		}
+	}
+
+	@Test
+	@Timeout(5)
+	void shorterPageThanRequestedEndsWithAPartialValidationWindow() {
+		Fixture fixture = fixture();
+		RemotePeer peer = fixture.peer(1_500);
+
+		try {
+			List<BlockSyncManagerService.HeaderWindow> windows =
+					fixture.service.downloadHeaderWindowsForTesting(peer, 2);
+
+			assertThat(fixture.requestedPages).containsExactly(2_000);
+			assertThat(windows).extracting(window -> window.headers().size()).containsExactly(1_000, 500);
+		} finally {
+			fixture.service.stop();
+		}
+	}
+
+	@Test
+	@Timeout(5)
+	void emptyPageProducesNoValidationWindows() {
+		Fixture fixture = fixture();
+		RemotePeer peer = fixture.peer(0);
+
+		try {
+			assertThat(fixture.service.downloadHeaderWindowsForTesting(peer, 1)).isEmpty();
+			assertThat(fixture.requestedPages).containsExactly(1_000);
 		} finally {
 			fixture.service.stop();
 		}
@@ -327,16 +331,14 @@ class BlockSyncManagerHeaderPipelineTest {
 		}
 	}
 
-	private Fixture fixture(int depth) {
+	private Fixture fixture() {
 		ChainQuery chainQuery = mock(ChainQuery.class);
 		Hash parentHash = Hash.hash(Bytes.of(1));
 		when(chainQuery.getLocatorHashes()).thenReturn(new LinkedHashSet<>(List.of(parentHash)));
 		when(chainQuery.hasBlockData(parentHash)).thenReturn(true);
 		when(chainQuery.getLatestBlockHeight()).thenReturn(Optional.of(0L));
-		Block localBest = mock(Block.class);
-		when(localBest.getHeight()).thenReturn(0L);
 		BlockSyncManagerService service = service(mock(BlockValidator.class), chainQuery);
-		return new Fixture(service, localBest, parentHash);
+		return new Fixture(service, parentHash);
 	}
 
 	private BlockSyncManagerService service(BlockValidator validator, ChainQuery chainQuery) {
@@ -371,26 +373,20 @@ class BlockSyncManagerHeaderPipelineTest {
 
 	private final class Fixture {
 		private final BlockSyncManagerService service;
-		private final Block localBest;
 		private final Hash parentHash;
 		private final List<Integer> requestedPages = new ArrayList<>();
 
-		private Fixture(
-				BlockSyncManagerService service,
-				Block localBest,
-				Hash parentHash) {
+		private Fixture(BlockSyncManagerService service, Hash parentHash) {
 			this.service = service;
-			this.localBest = localBest;
 			this.parentHash = parentHash;
 		}
 
-		private RemotePeer peer(int negotiatedPage, int totalHeaders) {
+		private RemotePeer peer(int totalHeaders) {
 			RemotePeer peer = mock(RemotePeer.class);
-			when(peer.negotiatedHeaderPageLimit()).thenReturn(negotiatedPage);
 			AtomicInteger requestIds = new AtomicInteger();
 			when(peer.reserveRequestId()).thenAnswer(ignored -> (long) requestIds.incrementAndGet());
 			List<BlockHeader> headers = linkedHeaders(parentHash, 1, totalHeaders);
-			Hash headHash = headers.getLast().getHash();
+			Hash headHash = headers.isEmpty() ? parentHash : headers.getLast().getHash();
 			when(peer.getHeadHash()).thenReturn(headHash);
 			AtomicInteger next = new AtomicInteger();
 			doAnswer(invocation -> {

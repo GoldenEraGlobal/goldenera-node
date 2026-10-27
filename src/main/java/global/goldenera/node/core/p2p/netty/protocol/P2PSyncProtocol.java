@@ -25,14 +25,11 @@ package global.goldenera.node.core.p2p.netty.protocol;
 
 import lombok.experimental.UtilityClass;
 
-/** Wire-compatible limits negotiated for block synchronization. */
+/** Block synchronization limits: the header page every peer serves and requests, and the local validation window. */
 @UtilityClass
 public class P2PSyncProtocol {
 
 	public static final String BLOCK_SYNC_V2_CAPABILITY = "block-sync-v2";
-	public static final int LEGACY_HEADER_PAGE_LIMIT = 1_000;
-	public static final int V2_HEADER_PAGE_LIMIT = 4_096;
-	public static final int INTERNAL_VALIDATION_WINDOW_HEADERS = LEGACY_HEADER_PAGE_LIMIT;
-	public static final int MAX_NEGOTIATED_HEADER_PAGE = V2_HEADER_PAGE_LIMIT;
-	public static final int MAX_LOCAL_HEADER_WINDOW = V2_HEADER_PAGE_LIMIT;
+	public static final int HEADER_PAGE_LIMIT = 4_096;
+	public static final int INTERNAL_VALIDATION_WINDOW_HEADERS = 1_000;
 }

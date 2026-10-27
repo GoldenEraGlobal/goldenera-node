@@ -31,7 +31,6 @@ import static org.mockito.Mockito.when;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.List;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
@@ -52,6 +51,7 @@ import global.goldenera.node.core.blockchain.reorg.ChainSwitchService;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.state.BlockStateTransitions;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.node.MasterChainLock;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
 import global.goldenera.node.core.state.WorldState;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -75,7 +75,7 @@ class VerifiedGenesisPlanTest {
 				mock(ChainQuery.class),
 				mock(ChainSwitchService.class),
 				mock(ApplicationEventPublisher.class),
-				new ReentrantLock(),
+				new MasterChainLock(),
 				mock(EntityIndexRepository.class),
 				mock(BlockEventExtractor.class),
 				mock(LifecycleJournalAppender.class));

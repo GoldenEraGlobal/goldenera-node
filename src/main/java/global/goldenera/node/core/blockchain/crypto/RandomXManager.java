@@ -331,6 +331,7 @@ public class RandomXManager {
 			lifecycleLock.readLock().unlock();
 		}
 
+		byte[] publishedSeed;
 		lifecycleLock.writeLock().lock();
 		try {
 			assertRunning();
@@ -338,10 +339,11 @@ public class RandomXManager {
 				return;
 			}
 			log.info("RandomX epoch switch detected at height {}. Initializing replacement resources...", height);
-			replaceCurrentResources(height, requiredSeed, miningRequested);
+			publishedSeed = replaceCurrentResources(height, requiredSeed, miningRequested);
 		} finally {
 			lifecycleLock.writeLock().unlock();
 		}
+		retireEpochCacheDuplicateOf(publishedSeed);
 	}
 
 	/** Opens a dataset-backed FULL miner or a cache-only LIGHT miner. */
@@ -397,14 +399,16 @@ public class RandomXManager {
 		synchronized (syncDatasetLock) {
 			expectedHashes = expectedSyncHashes.getOrDefault(seedKey, 0L);
 		}
-		boolean matchingMiningDataset = currentHasMatchingDataset(requiredSeed);
-		if (syncBulkActive) {
+		boolean bulk = syncBulkActive;
+		// Only bulk sync may wait for an epoch switch (to reuse its FULL dataset); other verification does not.
+		boolean matchingMiningDataset = bulk && currentHasMatchingDataset(requiredSeed);
+		if (bulk) {
 			RandomXVerificationVmLease existingSyncDataset = acquireExistingSyncDataset(seedKey);
 			if (existingSyncDataset != null) {
 				return existingSyncDataset;
 			}
 		}
-		RandomXSyncMemoryPolicy.Decision decision = syncBulkActive
+		RandomXSyncMemoryPolicy.Decision decision = bulk
 				? syncMemoryPolicy.decide(expectedHashes, explorerEnabled,
 						Boolean.TRUE.equals(miningProperties.getEnable()), matchingMiningDataset)
 				: new RandomXSyncMemoryPolicy.Decision(RandomXSyncMemoryPolicy.Outcome.LIGHT, "not in BULK mode");
@@ -487,22 +491,20 @@ public class RandomXManager {
 	}
 
 	private RandomXVerificationVmLease acquireLightVerification(Bytes seedKey, byte[] requiredSeed) {
-		lifecycleLock.readLock().lock();
-		try {
-			assertRunning();
-			if (isCurrentSeed(requiredSeed)) {
-				return new RandomXVerificationVmLease(
-						requireCurrentResources().acquireLight(resourceFactory, activeVMs),
-						ProofOfWorkVerificationMode.RANDOMX_LIGHT);
-			}
-		} finally {
-			lifecycleLock.readLock().unlock();
+		RandomXVerificationVmLease current = tryAcquireCurrentLightVerification(requiredSeed);
+		if (current != null) {
+			return current;
 		}
 
 		synchronized (epochCacheLock) {
 			assertRunning();
 			EpochResources resources = epochResources.get(seedKey);
 			if (resources == null) {
+				// The epoch switch may have finished while this thread waited for the cache lock.
+				current = tryAcquireCurrentLightVerification(requiredSeed);
+				if (current != null) {
+					return current;
+				}
 				log.info("Initializing cache-only RandomX resources for verification epoch");
 				resources = allocateCacheOnly(requiredSeed);
 				epochResources.put(Bytes.wrap(requiredSeed.clone()), resources);
@@ -693,7 +695,7 @@ public class RandomXManager {
 		}
 	}
 
-	private void replaceCurrentResources(long height, byte[] requiredSeed, boolean miningRequested) {
+	private byte[] replaceCurrentResources(long height, byte[] requiredSeed, boolean miningRequested) {
 		initializationInProgress.set(true);
 		try {
 			long startedAt = System.currentTimeMillis();
@@ -713,8 +715,38 @@ public class RandomXManager {
 			}
 			log.info("RandomX {} memory update finished in {} ms", miningProperties.getMemoryMode(),
 					System.currentTimeMillis() - startedAt);
+			return requiredSeed;
 		} finally {
 			initializationInProgress.set(false);
+		}
+	}
+
+	// Never waits: returns null while an epoch switch holds the write lock or when the seed is not current.
+	private RandomXVerificationVmLease tryAcquireCurrentLightVerification(byte[] requiredSeed) {
+		if (!lifecycleLock.readLock().tryLock()) {
+			return null;
+		}
+		try {
+			assertRunning();
+			if (!isCurrentSeed(requiredSeed)) {
+				return null;
+			}
+			return new RandomXVerificationVmLease(
+					requireCurrentResources().acquireLight(resourceFactory, activeVMs),
+					ProofOfWorkVerificationMode.RANDOMX_LIGHT);
+		} finally {
+			lifecycleLock.readLock().unlock();
+		}
+	}
+
+	// Verification during the switch may have cached the new current seed; current resources now serve it.
+	// Runs after the write lock is released, so a verifier that gets the cache lock later uses current resources.
+	private void retireEpochCacheDuplicateOf(byte[] currentSeed) {
+		synchronized (epochCacheLock) {
+			EpochResources duplicate = epochResources.remove(Bytes.wrap(currentSeed));
+			if (duplicate != null) {
+				duplicate.retire();
+			}
 		}
 	}
 

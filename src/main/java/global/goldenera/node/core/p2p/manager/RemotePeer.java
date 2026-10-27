@@ -54,7 +54,6 @@ import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolHashesDto;
 import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsDto;
 import global.goldenera.node.core.p2p.messages.dtos.sync.P2PMempoolTxsReqDto;
 import global.goldenera.node.core.p2p.netty.protocol.P2PMessageType;
-import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.netty.channel.Channel;
 import lombok.Getter;
@@ -133,13 +132,6 @@ public class RemotePeer {
 
 	public boolean supportsCapability(String capability) {
 		return capability != null && capabilities.contains(capability);
-	}
-
-	/** Returns the header page bound fixed by the immutable STATUS snapshot. */
-	public int negotiatedHeaderPageLimit() {
-		return supportsCapability(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)
-				? P2PSyncProtocol.V2_HEADER_PAGE_LIMIT
-				: P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT;
 	}
 
 	/**

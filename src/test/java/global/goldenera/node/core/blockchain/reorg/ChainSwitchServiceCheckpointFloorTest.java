@@ -34,7 +34,6 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.bytes.Bytes;
 import org.junit.jupiter.api.Test;
@@ -46,6 +45,7 @@ import global.goldenera.cryptoj.datatypes.Hash;
 import global.goldenera.node.core.blockchain.state.BlockEventExtractor;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
+import global.goldenera.node.core.node.MasterChainLock;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.state.WorldStateFactory;
 import global.goldenera.node.core.storage.blockchain.BlockRepository;
@@ -139,7 +139,7 @@ class ChainSwitchServiceCheckpointFloorTest {
 				mock(StateProcessor.class),
 				mock(BlockValidator.class),
 				mock(ApplicationEventPublisher.class),
-				new ReentrantLock(),
+				new MasterChainLock(),
 				mock(EntityIndexRepository.class),
 				mock(BlockEventExtractor.class),
 				policy,

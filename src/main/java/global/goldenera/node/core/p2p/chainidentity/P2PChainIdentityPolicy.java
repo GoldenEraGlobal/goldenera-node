@@ -24,7 +24,6 @@
 package global.goldenera.node.core.p2p.chainidentity;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeSet;
 
@@ -32,8 +31,6 @@ import org.springframework.stereotype.Component;
 
 import org.springframework.beans.factory.annotation.Autowired;
 
-import global.goldenera.cryptoj.datatypes.Address;
-import global.goldenera.cryptoj.enums.Network;
 import global.goldenera.node.Constants;
 import global.goldenera.node.Constants.ForkName;
 import global.goldenera.node.core.node.capabilities.NodeCapabilitiesProvider;
@@ -41,9 +38,8 @@ import global.goldenera.node.core.node.capabilities.NodeCapabilitiesSnapshot;
 import global.goldenera.node.core.node.capabilities.RuntimeNodeCapabilitiesProvider;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.p2p.messages.dtos.handshake.P2PStatusDto;
-import global.goldenera.node.core.sandbox.manifest.SandboxManifestContext;
+import global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol;
 import global.goldenera.node.core.sandbox.runtime.SandboxRuntimeContext;
-import global.goldenera.node.core.storage.chainidentity.StoredChainIdentity;
 import global.goldenera.node.shared.exceptions.GEFailedException;
 
 @Component
@@ -80,36 +76,34 @@ public final class P2PChainIdentityPolicy {
 		return result;
 	}
 
-	public Validation validate(P2PStatusDto status) {
-		if (status == null || status.getNetwork() == null || status.getNodeIdentity() == null) {
+	public P2PChainCapability validate(P2PStatusDto status) {
+		if (status == null || status.getNetwork() == null) {
 			throw rejected("Peer status is missing chain identity prerequisites");
 		}
-		StoredChainIdentity authoritative = currentSnapshot().chainIdentity();
+		if (status.getCapabilities() == null) {
+			throw rejected("Peer status is missing capabilities");
+		}
 		validateMiningEconomicsCompatibility(status);
+		if (!status.getCapabilities().contains(P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY)) {
+			throw rejected("Peer omitted the required " + P2PSyncProtocol.BLOCK_SYNC_V2_CAPABILITY + " capability");
+		}
 		Optional<P2PChainCapability> claimed;
 		try {
 			claimed = codec.find(status.getCapabilities());
 		} catch (IllegalArgumentException e) {
 			throw rejected("Malformed peer chain capability");
 		}
-		if (claimed.isPresent()) {
-			P2PChainCapability expected = P2PChainCapability.from(authoritative);
-			if (status.getNetwork().getCode() != claimed.get().carrierNetworkCode()
-					|| !expected.equals(claimed.get())) {
-				throw rejected("Peer chain identity does not match the authoritative local identity");
-			}
-			return new Validation(Mode.EXPLICIT, claimed.get());
+		if (claimed.isEmpty()) {
+			throw rejected("Peer omitted the required chain identity capability");
 		}
-		if (!runtimeContext.isSandbox()) {
-			return new Validation(Mode.PROTOCOL_V1_ABSENT, null);
+		P2PChainCapability expected = P2PChainCapability.from(currentSnapshot().chainIdentity());
+		if (status.getNetwork().getCode() != claimed.get().carrierNetworkCode() || !expected.equals(claimed.get())) {
+			throw rejected("Peer chain identity does not match the authoritative local identity");
 		}
-		return validateSandboxLegacy(status, authoritative);
+		return claimed.get();
 	}
 
 	private void validateMiningEconomicsCompatibility(P2PStatusDto status) {
-		if (status.getCapabilities() == null) {
-			throw rejected("Peer status is missing capabilities");
-		}
 		long peerHeight = status.getBestBlockHeader() == null ? -1 : status.getBestBlockHeader().getHeight();
 		long localHeight = chainQuery == null ? -1 : chainQuery.getLatestStoredBlockOrThrow().getHeight();
 		long observedHeight = Math.max(peerHeight, localHeight);
@@ -117,26 +111,6 @@ public final class P2PChainIdentityPolicy {
 				&& !status.getCapabilities().contains(RuntimeNodeCapabilitiesProvider.MINING_ECONOMICS_V1)) {
 			throw rejected("Peer omitted the required mining-economics-v1 capability after activation");
 		}
-	}
-
-	private Validation validateSandboxLegacy(P2PStatusDto status, StoredChainIdentity authoritative) {
-		SandboxManifestContext manifestContext = runtimeContext.manifestContext().orElseThrow(() ->
-				rejected("Sandbox chain identity manifest is unavailable"));
-		if (!manifestContext.manifest().features().legacyPeerCompatibility()) {
-			throw rejected("Sandbox peer omitted the required chain capability");
-		}
-		if (status.getNetwork() != Network.TESTNET
-				|| authoritative.carrierNetworkCode() != Network.TESTNET.getCode()) {
-			throw rejected("Legacy sandbox peers require the TESTNET wire carrier");
-		}
-		if (!Objects.equals(authoritative.manifestFingerprint(), manifestContext.fingerprint())) {
-			throw rejected("Legacy sandbox compatibility is not bound to the authoritative manifest");
-		}
-		String peerIdentity = canonicalAddress(status.getNodeIdentity());
-		if (!manifestContext.manifest().legacyPeers().allowlistedNodeIds().contains(peerIdentity)) {
-			throw rejected("Legacy sandbox peer identity is not allowlisted");
-		}
-		return new Validation(Mode.ALLOWLISTED_SANDBOX_LEGACY, null);
 	}
 
 	private NodeCapabilitiesSnapshot currentSnapshot() {
@@ -147,26 +121,7 @@ public final class P2PChainIdentityPolicy {
 		return snapshot;
 	}
 
-	private String canonicalAddress(Address address) {
-		return address.toHexString();
-	}
-
 	private GEFailedException rejected(String message) {
 		return new GEFailedException(message);
-	}
-
-	public enum Mode {
-		EXPLICIT,
-		PROTOCOL_V1_ABSENT,
-		ALLOWLISTED_SANDBOX_LEGACY
-	}
-
-	public record Validation(Mode mode, P2PChainCapability capability) {
-		public Validation {
-			Objects.requireNonNull(mode, "mode");
-			if ((mode == Mode.EXPLICIT) != (capability != null)) {
-				throw new IllegalArgumentException("Explicit validation requires exactly one chain capability");
-			}
-		}
 	}
 }

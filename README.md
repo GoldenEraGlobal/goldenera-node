@@ -214,11 +214,9 @@ Protocol-v1 `STATUS` claims are unsigned and do not authenticate a peer.
 Chain capabilities prevent accidental cross-chain peering; rejected, unbound
 claims must not cause persistent bans for the claimed address.
 
-Sandbox nodes should advertise and require `ge.chain.v1`. The legacy peer
-allowlist is only for temporary compatibility with exact known old-node addresses
-in isolated, disposable sandboxes: disable directory discovery, keep P2P off
-public interfaces, and remove the allowlist after the bounded migration window.
-It is not an authentication or authorization mechanism.
+Every node advertises and requires the `ge.chain.v1` chain capability and
+`block-sync-v2`, plus `mining-economics-v1` once `MINING_ECONOMICS` is active.
+Peers without them are rejected, in sandboxes as well.
 
 ## Development
 

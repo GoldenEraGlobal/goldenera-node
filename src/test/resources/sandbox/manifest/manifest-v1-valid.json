@@ -2,7 +2,6 @@
   "features": {
     "sandboxManifest": true,
     "deterministicClock": true,
-    "legacyPeerCompatibility": true,
     "controlApi": false
   },
   "clock": {
@@ -71,12 +70,6 @@
   "legacyCarrier": {
     "code": 1,
     "network": "TESTNET"
-  },
-  "legacyPeers": {
-    "allowlistedNodeIds": [
-      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    ]
   },
   "chainId": "sandbox-00112233445566778899aabbccddeeff",
   "disposable": true,

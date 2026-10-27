@@ -52,6 +52,7 @@ public class CoreAsyncConfig {
 	public static final String CORE_TASK_EXECUTOR = "coreTaskExecutor";
 	public static final String CORE_MILESTONE_EXECUTOR = "coreMilestoneExecutor";
 	public static final String MEMPOOL_EVENT_EXECUTOR = "mempoolEventExecutor";
+	public static final String MEMPOOL_INGEST_EXECUTOR = "mempoolIngestExecutor";
 	public static final String WEBHOOK_EVENT_EXECUTOR = "webhookEventExecutor";
 	public static final String CORE_SCHEDULER = "coreTaskScheduler";
 	public static final String BLOCK_MINING_EXECUTOR = "blockMiningExecutor";
@@ -101,6 +102,21 @@ public class CoreAsyncConfig {
 		executor.setThreadNamePrefix("Core-Worker-");
 		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
 		executor.initialize();
+		return executor;
+	}
+
+	// Separate from coreTaskExecutor so transaction gossip waiting on mempool locks cannot starve block ingestion.
+	@Bean(name = MEMPOOL_INGEST_EXECUTOR)
+	public Executor mempoolIngestExecutor(MeterRegistry registry) {
+		ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+		executor.setCorePoolSize(1);
+		executor.setMaxPoolSize(1);
+		// One queued MEMPOOL_TRANSACTIONS batch can hold a full P2P frame, so the queue stays small.
+		executor.setQueueCapacity(256);
+		executor.setThreadNamePrefix("Mempool-Ingest-");
+		executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
+		executor.initialize();
+		registerExecutorMetrics("mempool.ingest.executor", executor, registry);
 		return executor;
 	}
 

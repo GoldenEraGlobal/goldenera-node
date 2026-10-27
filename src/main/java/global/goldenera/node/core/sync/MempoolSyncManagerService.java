@@ -23,7 +23,7 @@
  */
 package global.goldenera.node.core.sync;
 
-import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_TASK_EXECUTOR;
+import static global.goldenera.node.core.config.CoreAsyncConfig.MEMPOOL_INGEST_EXECUTOR;
 import static global.goldenera.node.core.config.CoreAsyncConfig.P2P_SEND_EXECUTOR;
 import static lombok.AccessLevel.PRIVATE;
 
@@ -68,13 +68,18 @@ public class MempoolSyncManagerService {
      * Initiates the sync by asking for their mempool hashes.
      */
     @EventListener
-    @Async(P2P_SEND_EXECUTOR)
     public void onPeerConnected(P2PHandshakeCompletedEvent event) {
-        if (mempoolManager.isFull()) {
-            log.debug("Mempool is full, skipping outgoing sync initiation with {}", event.getPeer().getIdentity());
-            return;
+        // The handshake publishes this event: an exception or an @Async rejection here would close the peer.
+        try {
+            if (mempoolManager.isFull()) {
+                log.debug("Mempool is full, skipping outgoing sync initiation with {}",
+                        event.getPeer().getIdentity());
+                return;
+            }
+            event.getPeer().sendGetMempoolHashes();
+        } catch (RuntimeException e) {
+            log.warn("Skipping mempool sync initiation with {}", event.getPeer().getIdentity(), e);
         }
-        event.getPeer().sendGetMempoolHashes();
     }
 
     /**
@@ -150,7 +155,7 @@ public class MempoolSyncManagerService {
      * REQUESTER: Received the actual transactions we requested.
      */
     @EventListener
-    @Async(CORE_TASK_EXECUTOR)
+    @Async(MEMPOOL_INGEST_EXECUTOR)
     public void onMempoolTxsReceived(P2PMempoolTxsReceivedEvent event) {
         List<Tx> txs = event.getTxs();
         log.debug("Received {} txs from peer {}", txs.size(), event.getPeer().getIdentity());
@@ -165,6 +170,7 @@ public class MempoolSyncManagerService {
     }
 
     @EventListener
+    @Async(MEMPOOL_INGEST_EXECUTOR)
     public void onMempoolTxReceived(P2PMempoolTxReceivedEvent event) {
         mempoolManager.addTx(event.getTx(), event.getPeer().getIdentity(), MempoolTxAddEvent.AddReason.NEW, true);
     }

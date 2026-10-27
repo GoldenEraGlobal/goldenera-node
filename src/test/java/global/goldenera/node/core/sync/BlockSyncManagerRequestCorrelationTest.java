@@ -39,9 +39,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
-import global.goldenera.cryptoj.common.Block;
 import global.goldenera.cryptoj.common.BlockHeader;
 import global.goldenera.cryptoj.common.Tx;
 import global.goldenera.cryptoj.datatypes.Hash;
@@ -63,13 +61,11 @@ class BlockSyncManagerRequestCorrelationTest {
 	void synchronousHeaderSendFailureRemovesPendingRequestImmediately() {
 		Fixture fixture = fixture();
 		RemotePeer peer = mock(RemotePeer.class);
-		Block localBest = mock(Block.class);
 		when(peer.reserveRequestId()).thenReturn(41L);
 		doThrow(new IllegalStateException("channel closed"))
 				.when(peer).sendGetBlockHeaders(anyList(), any(), anyInt(), eq(41L));
 
-		assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(
-				fixture.service, "downloadHeaders", peer, localBest))
+		assertThatThrownBy(() -> fixture.service.downloadHeaderWindowsForTesting(peer, 1))
 				.isInstanceOf(IllegalStateException.class)
 				.hasMessageContaining("channel closed");
 		assertThat(fixture.service.runtimeSnapshot().pendingHeaderRequests()).isZero();

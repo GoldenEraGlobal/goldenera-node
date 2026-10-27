@@ -45,7 +45,7 @@ class SandboxManifestLoaderTest {
 	private static final String VALID_RESOURCE = "sandbox/manifest/manifest-v1-valid.json";
 	private static final String CANONICAL_RESOURCE = "sandbox/manifest/manifest-v1-canonical.json";
 	private static final String GOLDEN_FINGERPRINT =
-			"b7a4965f2cf6157dcdd6985f1fa07a541205d55f0cd6884a999db330b841841d";
+			"049758d44c325a79da87d2f9cc01f8287a74a54a01dd3cdba99edc9570dc18ab";
 
 	private final SandboxManifestLoader loader = new SandboxManifestLoader();
 
@@ -65,12 +65,7 @@ class SandboxManifestLoaderTest {
 		assertThat(manifest.clock().mode()).isEqualTo(ClockMode.DETERMINISTIC);
 		assertThat(manifest.features().sandboxManifest()).isTrue();
 		assertThat(manifest.features().deterministicClock()).isTrue();
-		assertThat(manifest.features().legacyPeerCompatibility()).isTrue();
 		assertThat(manifest.features().controlApi()).isFalse();
-		assertThat(manifest.legacyPeers().allowlistedNodeIds())
-				.containsExactly(
-						"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-						"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 		assertThat(context.canonicalJsonUtf8()).isEqualTo(resource(CANONICAL_RESOURCE).stripTrailing());
 		assertThat(context.fingerprint()).isEqualTo(GOLDEN_FINGERPRINT);
 	}
@@ -117,9 +112,6 @@ class SandboxManifestLoaderTest {
 				.isInstanceOf(UnsupportedOperationException.class);
 		assertThatThrownBy(() -> context.manifest().genesis().initialBalances()
 				.put("0x3333333333333333333333333333333333333333", BigInteger.ONE))
-				.isInstanceOf(UnsupportedOperationException.class);
-		assertThatThrownBy(() -> context.manifest().legacyPeers().allowlistedNodeIds()
-				.add("0xcccccccccccccccccccccccccccccccccccccccc"))
 				.isInstanceOf(UnsupportedOperationException.class);
 	}
 
@@ -173,8 +165,6 @@ class SandboxManifestLoaderTest {
 				"must be true");
 		assertInvalid(valid.replace("\"deterministicClock\": true", "\"deterministicClock\": false"),
 				"must match whether clock.mode is DETERMINISTIC");
-		assertInvalid(valid.replace("\"legacyPeerCompatibility\": true",
-				"\"legacyPeerCompatibility\": false"), "must match whether the legacy peer allowlist is non-empty");
 		assertInvalid(valid.replace("\"disposable\": true", "\"disposable\": false")
 				.replace("\"controlApi\": false", "\"controlApi\": true"),
 				"requires disposable=true");
@@ -230,18 +220,13 @@ class SandboxManifestLoaderTest {
 	}
 
 	@Test
-	void legacyPeerAllowlistAcceptsOnlyCanonicalLowercaseTwentyByteAddresses() throws Exception {
+	void manifestWithRemovedLegacyPeerFieldsIsRejected() throws Exception {
 		String valid = resource(VALID_RESOURCE);
 
-		assertInvalid(valid.replace(
-				"\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
-				"\"legacy-node-a\""), "invalid string value");
-		assertInvalid(valid.replace(
-				"\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
-				"\"0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\""), "invalid string value");
-		assertInvalid(valid.replace(
-				"\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
-				"\"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""), "invalid string value");
+		assertInvalid(valid.replace("\"controlApi\": false",
+				"\"controlApi\": false,\n    \"legacyPeerCompatibility\": false"), "legacyPeerCompatibility");
+		assertInvalid(valid.replace("\"schemaVersion\": 1",
+				"\"schemaVersion\": 1,\n  \"legacyPeers\": {\"allowlistedNodeIds\": []}"), "legacyPeers");
 	}
 
 	@Test

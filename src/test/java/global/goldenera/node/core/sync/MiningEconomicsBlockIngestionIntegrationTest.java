@@ -40,7 +40,6 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.tuweni.bytes.Bytes32;
 import org.apache.tuweni.units.ethereum.Wei;
@@ -97,6 +96,7 @@ import global.goldenera.node.core.blockchain.storage.ChainQuery;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
 import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
 import global.goldenera.node.core.blockchain.validation.TxValidator;
+import global.goldenera.node.core.node.MasterChainLock;
 import global.goldenera.node.core.processing.MiningEconomicsActivationService;
 import global.goldenera.node.core.processing.StateProcessor;
 import global.goldenera.node.core.processing.StateProcessor.SimpleBlock;
@@ -663,7 +663,7 @@ class MiningEconomicsBlockIngestionIntegrationTest {
 					policyService);
 			events = mock(ApplicationEventPublisher.class);
 			EntityIndexRepository entityIndex = mock(EntityIndexRepository.class);
-			ReentrantLock lock = new ReentrantLock();
+			MasterChainLock lock = new MasterChainLock();
 			BlockEventExtractor eventExtractor = new BlockEventExtractor();
 			chainSwitchService = new ChainSwitchService(
 					chainQuery,

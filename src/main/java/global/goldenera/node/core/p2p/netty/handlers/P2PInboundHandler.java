@@ -34,6 +34,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -41,8 +42,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 
+import global.goldenera.node.core.p2p.chainidentity.P2PChainCapability;
 import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy;
-import global.goldenera.node.core.p2p.chainidentity.P2PChainIdentityPolicy.Validation;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesReceivedEvent;
 import global.goldenera.node.core.p2p.events.P2PBlockBodiesRequestedEvent;
 import global.goldenera.node.core.p2p.events.P2PBlockReceivedEvent;
@@ -100,6 +101,9 @@ import lombok.extern.slf4j.Slf4j;
 public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> {
 
 	private static final long MIN_SUPPORTED_PROTOCOL_VERSION = 1;
+	private static final long OVERLOAD_WARNING_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(10);
+	private static final AtomicLong lastOverloadWarningNanos =
+			new AtomicLong(System.nanoTime() - OVERLOAD_WARNING_INTERVAL_NANOS);
 
 	final MeterRegistry registry;
 	final Executor p2pReceiveExecutor;
@@ -114,7 +118,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	final Bucket rateLimitBucket;
 	RemotePeer peer;
 	volatile HandshakeState handshakeState = HandshakeState.AWAITING_STATUS;
-	volatile Validation acceptedChainIdentity;
+	volatile P2PChainCapability acceptedChainIdentity;
 	volatile long acceptedProtocolVersion;
 	volatile ScheduledFuture<?> handshakeTimeout;
 	final Queue<Runnable> orderedInboundTasks = new ArrayDeque<>();
@@ -305,16 +309,10 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 					break;
 				case NEW_BLOCK:
 					P2PBlockDto blockDto = (P2PBlockDto) envelope.getPayload();
-					try {
-						p2pValidation.validateBlockDto(blockDto);
-					} catch (GEValidationException e) {
-						if (e.getMessage() != null && e.getMessage().contains("Seed block at height")) {
-							log.warn("Ignoring future block {} from {}: {}", blockDto.getBlock().getHash(),
-									getPeerLogInfo(), e.getMessage());
-							return;
-						}
-						throw e;
+					if (blockDto == null || blockDto.getBlock() == null) {
+						throw new GEValidationException("Block cannot be null");
 					}
+					// Full validation runs once, off the P2P receive threads, before block ingestion.
 					applicationEventPublisher
 							.publishEvent(new P2PBlockReceivedEvent(this, envelope.getRequestId(), peer,
 									blockDto.getBlock()));
@@ -388,6 +386,16 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		} catch (ClassCastException cce) {
 			log.error("Payload type mismatch for message {}: {}", envelope.getMessageType(), cce.getMessage());
 			rejectProtocol(ctx, "Payload type mismatch for " + envelope.getMessageType());
+		} catch (RejectedExecutionException overloaded) {
+			// Our own executors are full; the peer is not at fault.
+			registry.counter("p2p.messages.in.dropped", "reason", "overloaded",
+					"type", envelope.getMessageType().name()).increment();
+			if (shouldWarnAboutOverload()) {
+				log.warn("Node overloaded: dropping {} from {}; further drops within 10s are logged at debug",
+						envelope.getMessageType(), getPeerLogInfo());
+			} else {
+				log.debug("Node overloaded: dropping {} from {}", envelope.getMessageType(), getPeerLogInfo());
+			}
 		} catch (Exception e) {
 			String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
 			boolean logAsError = peer.getIdentity() == null
@@ -443,7 +451,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 		if (reputationService.isBanned(status.getNodeIdentity())) {
 			throw new GEFailedException("Peer is BANNED locally");
 		}
-		Validation validatedChainIdentity = chainIdentityPolicy.validate(status);
+		P2PChainCapability validatedChainIdentity = chainIdentityPolicy.validate(status);
 		acceptedChainIdentity = validatedChainIdentity;
 		acceptedProtocolVersion = status.getProtocolVersion();
 		log.info("Handshake Success with {}: Identity={}", peer.getChannel().remoteAddress(), status.getNodeIdentity());
@@ -468,6 +476,12 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 				.publishEvent(new P2PHandshakeCompletedEvent(this, requestId, peer, status));
 	}
 
+	private static boolean shouldWarnAboutOverload() {
+		long now = System.nanoTime();
+		long last = lastOverloadWarningNanos.get();
+		return now - last >= OVERLOAD_WARNING_INTERVAL_NANOS && lastOverloadWarningNanos.compareAndSet(last, now);
+	}
+
 	private long messageCost(P2PEnvelope envelope) {
 		long typeCost = switch (envelope.getMessageType()) {
 			case BLOCK_BODIES, MEMPOOL_TRANSACTIONS -> 100;
@@ -488,7 +502,7 @@ public class P2PInboundHandler extends SimpleChannelInboundHandler<P2PEnvelope> 
 	}
 
 	private void handlePongStatusUpdate(P2PStatusDto status) {
-		Validation pongChainIdentity = chainIdentityPolicy.validate(status);
+		P2PChainCapability pongChainIdentity = chainIdentityPolicy.validate(status);
 		if (status.getNetwork() != generalProperties.getNetwork()
 				|| status.getProtocolVersion() != acceptedProtocolVersion
 				|| peer.getIdentity() == null

@@ -97,6 +97,10 @@ class BlockConnectedEventOrderingIntegrationTest {
 		List<String> order = Collections.synchronizedList(new ArrayList<>());
 		CountDownLatch processed = new CountDownLatch(2);
 		MempoolStore store = mock(MempoolStore.class);
+		doAnswer(invocation -> {
+			invocation.<Runnable>getArgument(0).run();
+			return null;
+		}).when(store).executeWithoutConcurrentMutations(any());
 		MempoolValidator validator = mock(MempoolValidator.class);
 		doAnswer(invocation -> {
 			order.add("disconnect");

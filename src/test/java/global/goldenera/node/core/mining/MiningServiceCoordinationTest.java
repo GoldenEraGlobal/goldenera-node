@@ -24,6 +24,8 @@
 package global.goldenera.node.core.mining;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -237,6 +239,27 @@ class MiningServiceCoordinationTest {
 	}
 
 	@Test
+	void lateEventForTheAttemptsOwnParentDoesNotCancelIt() throws Exception {
+		CountDownLatch hashingStarted = new CountDownLatch(1);
+		try (Fixture fixture = fixture(false, input -> {
+			hashingStarted.countDown();
+			byte[] hash = new byte[ProofOfWorkHasher.HASH_LENGTH_BYTES];
+			Arrays.fill(hash, (byte) 0xff);
+			return hash;
+		})) {
+			var result = fixture.service.mineExactlyOne(new ExactOneMiningRequest(
+					Optional.empty(), Duration.ofSeconds(2)));
+			assertThat(hashingStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			BlockConnectedEvent connected = mock(BlockConnectedEvent.class);
+			when(connected.getBlock()).thenReturn(fixture.parentBlock);
+
+			fixture.service.onNewBlockConnected(connected);
+
+			assertThat(result.get(5, TimeUnit.SECONDS).code()).isEqualTo(ExactOneMiningOutcome.Code.TIMED_OUT);
+		}
+	}
+
+	@Test
 	void exactAttemptStopsAtItsBoundedDeadlineWithoutSubmission() throws Exception {
 		try (Fixture fixture = fixture(false, input -> {
 			byte[] hash = new byte[ProofOfWorkHasher.HASH_LENGTH_BYTES];
@@ -430,6 +453,37 @@ class MiningServiceCoordinationTest {
 			releaseInitialization.countDown();
 			assertThat(fixture.service.pauseAutonomousMining(Duration.ofSeconds(2))).isTrue();
 			assertThat(interrupted).isFalse();
+		}
+	}
+
+	@Test
+	void syncPauseDoesNotWaitForNativeInitializationAndTheCancelledAttemptNeverHashes() throws Exception {
+		CountDownLatch initializationStarted = new CountDownLatch(1);
+		CountDownLatch releaseInitialization = new CountDownLatch(1);
+		AtomicBoolean initializationInProgress = new AtomicBoolean();
+		try (Fixture fixture = fixture(true)) {
+			when(fixture.pow.isInitializationInProgress()).thenAnswer(ignored -> initializationInProgress.get());
+			doAnswer(ignored -> {
+				initializationInProgress.set(true);
+				initializationStarted.countDown();
+				try {
+					releaseInitialization.await(2, TimeUnit.SECONDS);
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				} finally {
+					initializationInProgress.set(false);
+				}
+				return null;
+			}).when(fixture.pow).prepareForMining(anyLong());
+
+			fixture.service.startMining();
+			assertThat(initializationStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			assertTimeoutPreemptively(Duration.ofSeconds(1), fixture.service::pauseMining);
+
+			releaseInitialization.countDown();
+			await().atMost(Duration.ofSeconds(2))
+					.until(() -> fixture.service.getAutonomousMiningState().quiescent());
+			verify(fixture.pow, never()).openMiningHasher();
 		}
 	}
 

@@ -25,11 +25,11 @@ package global.goldenera.node.core.sync;
 
 import static global.goldenera.node.core.config.CoreAsyncConfig.CORE_TASK_EXECUTOR;
 import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.INTERNAL_VALIDATION_WINDOW_HEADERS;
-import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.LEGACY_HEADER_PAGE_LIMIT;
-import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.MAX_LOCAL_HEADER_WINDOW;
+import static global.goldenera.node.core.p2p.netty.protocol.P2PSyncProtocol.HEADER_PAGE_LIMIT;
 import static lombok.AccessLevel.PRIVATE;
 
 import java.math.BigInteger;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -81,6 +81,7 @@ import global.goldenera.node.Constants;
 import global.goldenera.node.core.blockchain.events.BlockConnectedEvent.ConnectedSource;
 import global.goldenera.node.core.blockchain.reorg.BlockReorgs;
 import global.goldenera.node.core.blockchain.storage.ChainQuery;
+import global.goldenera.node.core.blockchain.validation.BlockValidationException;
 import global.goldenera.node.core.blockchain.validation.BlockValidator;
 import global.goldenera.node.core.blockchain.validation.BlockValidator.PreparedHeaderValidation;
 import global.goldenera.node.core.blockchain.validation.StatelessValidatedBlock;
@@ -125,6 +126,7 @@ public class BlockSyncManagerService {
 	static final int EMPTY_HEADER_INCOMPATIBILITY_THRESHOLD = 3;
 	static final int MAX_PENDING_BROADCAST_DOWNLOADS = 8;
 	static final long MAX_BROADCAST_REORG_DEPTH = 10;
+	static final int BROADCAST_BLOCK_QUEUE_CAPACITY = 64;
 
 	/**
 	 * Calculate max bodies per request based on frame size and max block size.
@@ -251,6 +253,12 @@ public class BlockSyncManagerService {
 	}
 
 	final ExecutorService syncExecutor = Executors.newSingleThreadExecutor(r -> new Thread(r, "Sync-Manager"));
+	// Broadcast ingestion waits for the master chain lock, so it must not occupy the shared P2P receive threads.
+	final ThreadPoolExecutor broadcastBlockExecutor = new ThreadPoolExecutor(
+			1, 1, 0L, TimeUnit.MILLISECONDS,
+			new ArrayBlockingQueue<>(BROADCAST_BLOCK_QUEUE_CAPACITY),
+			runnable -> daemonThread(runnable, "Broadcast-Block-Ingest"),
+			new ThreadPoolExecutor.AbortPolicy());
 	final AtomicBoolean isRunning = new AtomicBoolean(false);
 	private final AtomicBoolean activeSyncCycle = new AtomicBoolean(false);
 	private final AtomicBoolean acceleratedCatchUpActive = new AtomicBoolean(false);
@@ -271,6 +279,7 @@ public class BlockSyncManagerService {
 	private final BodyPipelineTelemetry bodyPipelineTelemetry = new BodyPipelineTelemetry();
 	private final SyncProgressEstimator syncProgressEstimator = new SyncProgressEstimator();
 	private LongSupplier nanoTicker = System::nanoTime;
+	private Duration slowHeaderValidationWarningInterval = Duration.ofMinutes(5);
 	private volatile int lastHeaderValidationWorkers;
 	private volatile int lastHeaderValidationChunks;
 	private volatile int lastHeaderValidationEpochGroups;
@@ -285,8 +294,6 @@ public class BlockSyncManagerService {
 	private volatile ProofOfWorkVerificationMode lastHeaderValidationMode;
 	private int consecutiveFullValidationWindows;
 	private RemotePeer lastHeaderSyncPeer;
-	private final AtomicLong legacyHeaderPageRequests = new AtomicLong();
-	private final AtomicLong v2HeaderPageRequests = new AtomicLong();
 	private final AtomicInteger maxHeaderPageRequested = new AtomicInteger();
 	private final AtomicLong discardedPrefetchHeaders = new AtomicLong();
 	private volatile long currentPersistBatchBytes;
@@ -321,13 +328,9 @@ public class BlockSyncManagerService {
 	public SyncRuntimeSnapshot runtimeSnapshot() {
 		SyncRequestTelemetry.Snapshot requestTelemetry;
 		int observedMaxHeaderPage;
-		long observedLegacyHeaderRequests;
-		long observedV2HeaderRequests;
 		synchronized (syncRequestTelemetry) {
 			requestTelemetry = syncRequestTelemetry.snapshot();
 			observedMaxHeaderPage = maxHeaderPageRequested.get();
-			observedLegacyHeaderRequests = legacyHeaderPageRequests.get();
-			observedV2HeaderRequests = v2HeaderPageRequests.get();
 		}
 		BodyPipelineTelemetry.Snapshot bodyTelemetry = bodyPipelineTelemetry.snapshot();
 		int observedBufferedWindows = bufferedHeaderWindows;
@@ -359,8 +362,6 @@ public class BlockSyncManagerService {
 				currentPersistBatchBytes,
 				peakPersistBatchBytes,
 				observedMaxHeaderPage,
-				observedLegacyHeaderRequests,
-				observedV2HeaderRequests,
 				lastHeaderPrefetchDepth,
 				observedBufferedWindows,
 				observedBufferedCount,
@@ -398,8 +399,6 @@ public class BlockSyncManagerService {
 			long persistenceBatchCurrentBytes,
 			long persistenceBatchPeakBytes,
 			int maxHeaderPageRequested,
-			long legacyHeaderPageRequests,
-			long v2HeaderPageRequests,
 			int headerPrefetchDepthLimit,
 			int bufferedHeaderWindows,
 			int bufferedHeaderCount,
@@ -471,6 +470,7 @@ public class BlockSyncManagerService {
 			log.info("Sync Manager stopped");
 		}
 		syncExecutor.shutdownNow();
+		broadcastBlockExecutor.shutdownNow();
 		headerFetchExecutor.shutdownNow();
 		headerStageExecutor.shutdownNow();
 		headerValidationExecutor.shutdownNow();
@@ -563,7 +563,7 @@ public class BlockSyncManagerService {
 			int prefetchDepth = calculateAdaptiveHeaderPrefetchDepth(
 					localBestStored.getHeight(), targetHeight);
 			lastHeaderPrefetchDepth = prefetchDepth;
-			HeaderFetchPipeline headerPipeline = startHeaderPipeline(peer, localBest, prefetchDepth);
+			HeaderFetchPipeline headerPipeline = startHeaderPipeline(peer, prefetchDepth);
 			long headerStart = nanoTime();
 			HeaderWindow currentWindow = headerPipeline.nextWindow();
 			long headerNanos = elapsedNanos(headerStart);
@@ -672,10 +672,9 @@ public class BlockSyncManagerService {
 					SyncProgressEstimator.formatEta(progress), totalBlocksProcessed,
 					nanosToMillis(totalNanos), nanosToMillis(headerNanos),
 					nanosToMillis(validationNanos), nanosToMillis(bodyNanos));
-			log.info("Sync pipeline summary: maxHeaderPageRequested={} legacyHeaderPageRequests={} "
-					+ "v2HeaderPageRequests={} maxBodyRequestSize={} internalWindowLimit={} "
-					+ "peakPrefetchHeaders={} peakPrefetchBytes={} discardedPrefetchHeaders={}",
-					maxHeaderPageRequested.get(), legacyHeaderPageRequests.get(), v2HeaderPageRequests.get(),
+			log.info("Sync pipeline summary: maxHeaderPageRequested={} maxBodyRequestSize={} "
+					+ "internalWindowLimit={} peakPrefetchHeaders={} peakPrefetchBytes={} discardedPrefetchHeaders={}",
+					maxHeaderPageRequested.get(),
 					calculateBodyBatchSize(), INTERNAL_VALIDATION_WINDOW_HEADERS,
 					peakBufferedHeaderCount, peakBufferedHeaderBytes, discardedPrefetchHeaders.get());
 
@@ -799,6 +798,10 @@ public class BlockSyncManagerService {
 	private void recordStageDuration(String stage, long startNanos) {
 		registry.timer("blockchain.sync.stage", "stage", stage)
 				.record(elapsedNanos(startNanos), TimeUnit.NANOSECONDS);
+	}
+
+	void setSlowHeaderValidationWarningIntervalForTesting(Duration interval) {
+		this.slowHeaderValidationWarningInterval = Objects.requireNonNull(interval);
 	}
 
 	void setNanoTickerForTesting(LongSupplier nanoTicker) {
@@ -1234,14 +1237,13 @@ public class BlockSyncManagerService {
 				localHeight, targetHeight, lastHeaderValidationMode, consecutiveFullValidationWindows);
 	}
 
-	private HeaderFetchPipeline startHeaderPipeline(
-			RemotePeer peer, Block localBest, int depthLimit) {
-		int maxHeaders = depthLimit >= 4 ? MAX_LOCAL_HEADER_WINDOW
-				: Math.multiplyExact(depthLimit, INTERNAL_VALIDATION_WINDOW_HEADERS);
+	private HeaderFetchPipeline startHeaderPipeline(RemotePeer peer, int depthLimit) {
+		int maxHeaders = depthLimit >= 4 ? HEADER_PAGE_LIMIT
+				: Math.min(HEADER_PAGE_LIMIT, Math.multiplyExact(depthLimit, INTERNAL_VALIDATION_WINDOW_HEADERS));
 		HeaderFetchPipeline pipeline = new HeaderFetchPipeline(depthLimit);
 		Future<?> fetchTask = headerFetchExecutor.submit(() -> {
 			try {
-				fetchHeaderWindows(peer, localBest, maxHeaders, pipeline);
+				fetchHeaderWindows(peer, maxHeaders, pipeline);
 				pipeline.complete();
 			} catch (Throwable failure) {
 				pipeline.fail(failure);
@@ -1251,124 +1253,79 @@ public class BlockSyncManagerService {
 		return pipeline;
 	}
 
-	private void fetchHeaderWindows(
-			RemotePeer peer,
-			Block localBest,
-			int maxHeaders,
-			HeaderFetchPipeline pipeline) throws Exception {
+	private void fetchHeaderWindows(RemotePeer peer, int maxHeaders, HeaderFetchPipeline pipeline) throws Exception {
+		if (pipeline.cancelled()) {
+			return;
+		}
+		// startHeaderPipeline caps maxHeaders at one header page, so a single request fetches the whole prefetch.
 		Hash stopHash = peer.getHeadHash();
-		List<Hash> currentLocators = new ArrayList<>(chainQueryService.getLocatorHashes());
+		List<Hash> locators = new ArrayList<>(chainQueryService.getLocatorHashes());
+		CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
+		long requestId = peer.reserveRequestId();
+		PeerRequestKey requestKey = new PeerRequestKey(peer, requestId);
+		registerHeaderRequest(requestKey, future);
+		recordHeaderRequest(maxHeaders);
+		long requestStarted = nanoTime();
+		List<BlockHeader> page;
+		try {
+			peer.sendGetBlockHeaders(locators, stopHash, maxHeaders, requestId);
+			page = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (Exception failure) {
+			pendingHeaderRequests.remove(requestKey);
+			throw failure;
+		} finally {
+			registry.timer("blockchain.sync.header_window.fetch")
+					.record(elapsedNanos(requestStarted), TimeUnit.NANOSECONDS);
+		}
+		if (page == null) {
+			throw new GEValidationException("Peer returned a null header page");
+		}
+		requireHeaderPageWithinBudget(page.size(), maxHeaders);
+
 		Hash expectedPrevious = null;
 		Long expectedPreviousHeight = null;
-		boolean firstHeader = true;
-		int totalHeaders = 0;
-		long totalBytes = 0L;
-		long totalAllowedBytes = 0L;
 		List<BlockHeader> currentWindow = new ArrayList<>(INTERNAL_VALIDATION_WINDOW_HEADERS);
 		long currentWindowBytes = 0L;
-
-		while (!pipeline.cancelled() && totalHeaders < maxHeaders) {
-			int negotiatedLimit = negotiatedHeaderPageLimit(peer);
-			int requested = Math.min(negotiatedLimit, maxHeaders - totalHeaders);
-			CompletableFuture<List<BlockHeader>> future = new CompletableFuture<>();
-			long requestId = peer.reserveRequestId();
-			PeerRequestKey requestKey = new PeerRequestKey(peer, requestId);
-			registerHeaderRequest(requestKey, future);
-			recordHeaderRequest(negotiatedLimit, requested);
-			long requestStarted = nanoTime();
-			List<BlockHeader> page;
-			try {
-				peer.sendGetBlockHeaders(currentLocators, stopHash, requested, requestId);
-				page = future.get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-			} catch (Exception failure) {
-				pendingHeaderRequests.remove(requestKey);
-				throw failure;
-			} finally {
-				registry.timer("blockchain.sync.header_window.fetch")
-						.record(elapsedNanos(requestStarted), TimeUnit.NANOSECONDS);
+		for (BlockHeader header : page) {
+			if (header == null) {
+				throw new GEValidationException("Peer returned a null header");
 			}
-			if (page == null) {
-				throw new GEValidationException("Peer returned a null header page");
-			}
-			requireHeaderPageWithinBudget(page.size(), requested, totalHeaders, maxHeaders);
-			if (page.isEmpty()) {
-				break;
-			}
-
-			for (BlockHeader header : page) {
-				if (header == null) {
-					throw new GEValidationException("Peer returned a null header");
-				}
-				if (firstHeader) {
-					Hash firstParent = header.getPreviousHash();
-					if (!chainQueryService.hasBlockData(firstParent)) {
-						long localHeight = chainQueryService.getLatestBlockHeight().orElse(-1L);
-						if (localHeight >= 0) {
-							throw new IncompatibleChainException(
-									"Peer chain does not connect to local storage at " + firstParent);
-						}
-						throw new GEValidationException("Peer header parent is missing from local storage");
+			if (expectedPrevious == null) {
+				Hash firstParent = header.getPreviousHash();
+				if (!chainQueryService.hasBlockData(firstParent)) {
+					long localHeight = chainQueryService.getLatestBlockHeight().orElse(-1L);
+					if (localHeight >= 0) {
+						throw new IncompatibleChainException(
+								"Peer chain does not connect to local storage at " + firstParent);
 					}
-					firstHeader = false;
-				} else {
-					if (!header.getPreviousHash().equals(expectedPrevious)) {
-						throw new GEValidationException("Broken prefetched header linkage");
-					}
-					if (expectedPreviousHeight != null
-							&& header.getHeight() != expectedPreviousHeight + 1L) {
-						throw new GEValidationException("Broken prefetched header height sequence");
-					}
+					throw new GEValidationException("Peer header parent is missing from local storage");
 				}
-
-				long headerBytes = header.getSize();
-				long allowedBytes = Constants.getSettings().getMaxHeaderSizeInBytes(header.getHeight());
-				if (headerBytes < 1 || headerBytes > allowedBytes) {
-					throw new GEValidationException("Header size exceeded during prefetch at height "
-							+ header.getHeight());
+			} else {
+				if (!header.getPreviousHash().equals(expectedPrevious)) {
+					throw new GEValidationException("Broken prefetched header linkage");
 				}
-				totalHeaders = Math.addExact(totalHeaders, 1);
-				totalBytes = Math.addExact(totalBytes, headerBytes);
-				totalAllowedBytes = Math.addExact(totalAllowedBytes, allowedBytes);
-				if (totalHeaders > maxHeaders || totalBytes > totalAllowedBytes) {
-					throw new GEValidationException("Local header super-window budget exceeded");
-				}
-				currentWindow.add(header);
-				currentWindowBytes = Math.addExact(currentWindowBytes, headerBytes);
-				expectedPrevious = header.getHash();
-				expectedPreviousHeight = header.getHeight();
-				if (currentWindow.size() == INTERNAL_VALIDATION_WINDOW_HEADERS) {
-					pipeline.publish(new HeaderWindow(
-							List.copyOf(currentWindow), currentWindowBytes, peer));
-					currentWindow.clear();
-					currentWindowBytes = 0L;
+				if (header.getHeight() != expectedPreviousHeight + 1L) {
+					throw new GEValidationException("Broken prefetched header height sequence");
 				}
 			}
 
-			if (expectedPrevious != null && expectedPrevious.equals(stopHash)) {
-				break;
+			long headerBytes = header.getSize();
+			if (headerBytes < 1 || headerBytes > Constants.getSettings().getMaxHeaderSizeInBytes(header.getHeight())) {
+				throw new GEValidationException("Header size exceeded during prefetch at height "
+						+ header.getHeight());
 			}
-			if (page.size() < requested) {
-				break;
+			currentWindow.add(header);
+			currentWindowBytes = Math.addExact(currentWindowBytes, headerBytes);
+			expectedPrevious = header.getHash();
+			expectedPreviousHeight = header.getHeight();
+			if (currentWindow.size() == INTERNAL_VALIDATION_WINDOW_HEADERS) {
+				pipeline.publish(new HeaderWindow(List.copyOf(currentWindow), currentWindowBytes, peer));
+				currentWindow.clear();
+				currentWindowBytes = 0L;
 			}
-			currentLocators = List.of(expectedPrevious);
 		}
 		if (!currentWindow.isEmpty()) {
 			pipeline.publish(new HeaderWindow(List.copyOf(currentWindow), currentWindowBytes, peer));
-		}
-	}
-
-	private int negotiatedHeaderPageLimit(RemotePeer peer) {
-		int negotiated = peer.negotiatedHeaderPageLimit();
-		return negotiated == LEGACY_HEADER_PAGE_LIMIT || negotiated == MAX_LOCAL_HEADER_WINDOW
-				? negotiated : LEGACY_HEADER_PAGE_LIMIT;
-	}
-
-	private void recordHeaderPageRequest(int negotiatedLimit, int requested) {
-		maxHeaderPageRequested.accumulateAndGet(requested, Math::max);
-		if (negotiatedLimit == LEGACY_HEADER_PAGE_LIMIT) {
-			legacyHeaderPageRequests.incrementAndGet();
-		} else {
-			v2HeaderPageRequests.incrementAndGet();
 		}
 	}
 
@@ -1378,16 +1335,10 @@ public class BlockSyncManagerService {
 		registry.counter("blockchain.sync.header_window.discarded", "reason", reason).increment(bounded);
 	}
 
-	static void requireHeaderPageWithinBudget(
-			int received, int requested, int accumulated, int maxHeaders) {
-		if (maxHeaders < 1 || maxHeaders > MAX_LOCAL_HEADER_WINDOW
-				|| requested < 1 || requested > maxHeaders
-				|| received < 0 || received > requested
-				|| accumulated < 0 || accumulated > maxHeaders
-				|| received > maxHeaders - accumulated) {
-			throw new GEValidationException("Peer exceeded negotiated/local header page budget: requested "
-					+ requested + ", received " + received + ", accumulated " + accumulated
-					+ ", maximum " + maxHeaders);
+	static void requireHeaderPageWithinBudget(int received, int requested) {
+		if (requested < 1 || requested > HEADER_PAGE_LIMIT || received < 0 || received > requested) {
+			throw new GEValidationException("Peer exceeded the header page budget: requested "
+					+ requested + ", received " + received);
 		}
 	}
 
@@ -1492,23 +1443,8 @@ public class BlockSyncManagerService {
 		}
 	}
 
-	private List<BlockHeader> downloadHeaders(RemotePeer peer, Block localBest) throws Exception {
-		HeaderFetchPipeline pipeline = startHeaderPipeline(peer, localBest, 1);
-		List<BlockHeader> headers = new ArrayList<>(INTERNAL_VALIDATION_WINDOW_HEADERS);
-		try {
-			for (HeaderWindow window; (window = pipeline.nextWindow()) != null;) {
-				headers.addAll(window.headers());
-			}
-			pipeline.awaitCompletion();
-			return List.copyOf(headers);
-		} finally {
-			pipeline.cancel();
-		}
-	}
-
-	List<HeaderWindow> downloadHeaderWindowsForTesting(
-			RemotePeer peer, Block localBest, int depthLimit) {
-		HeaderFetchPipeline pipeline = startHeaderPipeline(peer, localBest, depthLimit);
+	List<HeaderWindow> downloadHeaderWindowsForTesting(RemotePeer peer, int depthLimit) {
+		HeaderFetchPipeline pipeline = startHeaderPipeline(peer, depthLimit);
 		List<HeaderWindow> windows = new ArrayList<>(depthLimit);
 		try {
 			for (HeaderWindow window; (window = pipeline.nextWindow()) != null;) {
@@ -1521,9 +1457,9 @@ public class BlockSyncManagerService {
 		}
 	}
 
-	private void recordHeaderRequest(int negotiatedLimit, int requested) {
+	private void recordHeaderRequest(int requested) {
 		synchronized (syncRequestTelemetry) {
-			recordHeaderPageRequest(negotiatedLimit, requested);
+			maxHeaderPageRequested.accumulateAndGet(requested, Math::max);
 			syncRequestTelemetry.recordHeaderRequest();
 		}
 	}
@@ -1794,8 +1730,9 @@ public class BlockSyncManagerService {
 				futures.add(headerValidationExecutor.submit(task));
 			}
 			List<T> results = new ArrayList<>(tasks.size());
+			long started = nanoTime();
 			for (Future<T> future : futures) {
-				results.add(future.get());
+				results.add(awaitHeaderValidation(future, started));
 			}
 			return results;
 		} catch (InterruptedException e) {
@@ -1815,6 +1752,20 @@ public class BlockSyncManagerService {
 		} catch (RuntimeException | Error e) {
 			cancelHeaderValidation(futures);
 			throw e;
+		}
+	}
+
+	// Native validation cannot be interrupted and may legitimately wait for a FULL RandomX dataset build,
+	// so a long run is only reported, never aborted.
+	private <T> T awaitHeaderValidation(Future<T> future, long started)
+			throws InterruptedException, ExecutionException {
+		while (true) {
+			try {
+				return future.get(slowHeaderValidationWarningInterval.toNanos(), TimeUnit.NANOSECONDS);
+			} catch (TimeoutException stillRunning) {
+				log.warn("Header validation still running after {}s",
+						TimeUnit.NANOSECONDS.toSeconds(nanoTime() - started));
+			}
 		}
 	}
 
@@ -2348,14 +2299,43 @@ public class BlockSyncManagerService {
 
 	@EventListener
 	public void onNewBlock(P2PBlockReceivedEvent event) {
-		BlockIngestionOutcome outcome = blockIngestionService.processBlock(
-				event.getBlock(), ConnectedSource.BROADCAST, event.getPeer().getIdentity(), Instant.now());
+		Instant receivedAt = Instant.now();
+		broadcastBlockExecutor.execute(() -> {
+			try {
+				ingestBroadcastBlock(event, receivedAt);
+			} catch (RuntimeException failure) {
+				log.error("Failed to ingest broadcast block from {}", event.getPeer().getIdentity(), failure);
+			}
+		});
+	}
+
+	private void ingestBroadcastBlock(P2PBlockReceivedEvent event, Instant receivedAt) {
+		RemotePeer peer = event.getPeer();
+		if (!peer.getChannel().isActive()) {
+			return;
+		}
+		long tipHeight = chainQueryService.getLatestStoredBlockOrThrow().getHeight();
+		if (event.getBlock().getHeight() < tipHeight - MAX_BROADCAST_REORG_DEPTH) {
+			log.debug("Ignoring old broadcast block #{} (local tip: {})", event.getBlock().getHeight(), tipHeight);
+			return;
+		}
+		// Proof of work is verified before, not under, the master chain lock.
+		StatelessValidatedBlock validatedBlock;
+		try {
+			validatedBlock = blockValidationService.validateFullBlock(event.getBlock());
+		} catch (BlockValidationException invalid) {
+			peerReputationService.recordFailure(peer.getIdentity());
+			peer.disconnect("Invalid broadcast block");
+			return;
+		}
+		BlockIngestionOutcome outcome = blockIngestionService.processValidatedBlock(
+				validatedBlock, ConnectedSource.BROADCAST, peer.getIdentity(), receivedAt);
 
 		if (outcome.code() == BlockIngestionOutcome.Code.GAP_DETECTED) {
 			log.debug("Gap detected from broadcast, triggering sync");
 			signalQueue.offer(new Object());
 		} else if (isPeerFaultRejection(outcome)) {
-			peerReputationService.recordFailure(event.getPeer().getIdentity());
+			peerReputationService.recordFailure(peer.getIdentity());
 		}
 	}
 
